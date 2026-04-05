@@ -1,0 +1,187 @@
+@page "/"
+@using AgentSquad.Core.Agents
+@using AgentSquad.Dashboard.Services
+@implements IDisposable
+@inject DashboardDataService DataService
+@inject NavigationManager Navigation
+
+<PageTitle>AgentSquad — Overview</PageTitle>
+
+<div class="dashboard-header">
+    <h1>Agent Overview</h1>
+    <div class="header-badges">
+        <span class="header-badge @HealthClass">
+            @if (_hasDeadlock) { <span>⚠</span> } else { <span>●</span> }
+            @HealthLabel
+        </span>
+        <span class="header-badge">
+            🤖 @_agents.Count Agents
+        </span>
+    </div>
+</div>
+
+@if (_hasDeadlock)
+{
+    <div class="deadlock-banner">
+        <span class="deadlock-icon">🔒</span>
+        <span>Deadlock detected among agents: @(string.Join(" → ", _deadlockCycle ?? []))</span>
+    </div>
+}
+
+<div class="stats-row">
+    <div class="stat-card">
+        <div class="stat-label">Total Agents</div>
+        <div class="stat-value">@_agents.Count</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Online</div>
+        <div class="stat-value green">@CountByStatus(AgentStatus.Online)</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Working</div>
+        <div class="stat-value cyan">@CountByStatus(AgentStatus.Working)</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Blocked</div>
+        <div class="stat-value red">@CountByStatus(AgentStatus.Blocked)</div>
+    </div>
+</div>
+
+@if (_agents.Count == 0)
+{
+    <div class="empty-state">
+        <div class="empty-icon">🤖</div>
+        <div class="empty-text">No agents registered</div>
+        <div class="empty-sub">Agents will appear here once they connect to the orchestrator</div>
+    </div>
+}
+else
+{
+    <div class="agent-grid">
+        @foreach (var agent in _agents)
+        {
+            var statusClass = $"status-{agent.Status.ToString().ToLowerInvariant()}";
+            var roleClass = $"role-{agent.Role.ToString().ToLowerInvariant()}";
+            var selectedClass = _selectedAgentId == agent.Id ? "selected" : "";
+
+            <div class="agent-card @statusClass @selectedClass" @onclick="() => NavigateToAgent(agent.Id)">
+                <div class="agent-card-header">
+                    <div class="agent-avatar @roleClass">
+                        @GetRoleInitials(agent.Role)
+                    </div>
+                    <div class="agent-info">
+                        <div class="agent-name" title="@agent.DisplayName">@agent.DisplayName</div>
+                        <div class="agent-role">@FormatRole(agent.Role)</div>
+                    </div>
+                    <span class="status-badge @statusClass">
+                        <span class="status-dot"></span>
+                        @agent.Status
+                    </span>
+                </div>
+                <div class="agent-card-body">
+                    <div class="agent-detail">
+                        <span class="detail-label">Task</span>
+                        @if (agent.AssignedPullRequest is not null)
+                        {
+                            <span class="detail-value task-active">@agent.AssignedPullRequest</span>
+                        }
+                        else
+                        {
+                            <span class="detail-value task-idle">Idle</span>
+                        }
+                    </div>
+                    <div class="agent-detail">
+                        <span class="detail-label">Model</span>
+                        <span class="detail-value">@agent.ModelTier</span>
+                    </div>
+                    @if (agent.Status == AgentStatus.Working)
+                    {
+                        <div class="agent-detail">
+                            <span class="detail-label">Duration</span>
+                            <span class="detail-value task-active">@FormatDuration(DateTime.UtcNow - agent.LastStatusChange)</span>
+                        </div>
+                    }
+                </div>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    private List<AgentSnapshot> _agents = [];
+    private string? _selectedAgentId;
+    private bool _hasDeadlock;
+    private List<string>? _deadlockCycle;
+
+    protected override void OnInitialized()
+    {
+        RefreshData();
+        DataService.OnChange += OnDataChanged;
+    }
+
+    private void RefreshData()
+    {
+        _agents = DataService.GetAllAgentSnapshots().ToList();
+        _hasDeadlock = DataService.HasDeadlock(out _deadlockCycle);
+    }
+
+    private async void OnDataChanged()
+    {
+        RefreshData();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private void SelectAgent(string agentId)
+    {
+        _selectedAgentId = _selectedAgentId == agentId ? null : agentId;
+    }
+
+    private void NavigateToAgent(string agentId)
+    {
+        Navigation.NavigateTo($"/agent/{agentId}");
+    }
+
+    private int CountByStatus(AgentStatus status) =>
+        _agents.Count(a => a.Status == status);
+
+    private string HealthClass => _hasDeadlock ? "danger" :
+        _agents.Any(a => a.Status == AgentStatus.Blocked) ? "warning" : "healthy";
+
+    private string HealthLabel => _hasDeadlock ? "Deadlock" :
+        _agents.Any(a => a.Status == AgentStatus.Blocked) ? "Degraded" : "Healthy";
+
+    private static string GetRoleInitials(AgentRole role) => role switch
+    {
+        AgentRole.ProgramManager => "PM",
+        AgentRole.Researcher => "RS",
+        AgentRole.Architect => "AR",
+        AgentRole.PrincipalEngineer => "PE",
+        AgentRole.SeniorEngineer => "SE",
+        AgentRole.JuniorEngineer => "JE",
+        AgentRole.TestEngineer => "TE",
+        _ => "??"
+    };
+
+    private static string FormatRole(AgentRole role) => role switch
+    {
+        AgentRole.ProgramManager => "Program Manager",
+        AgentRole.Researcher => "Researcher",
+        AgentRole.Architect => "Architect",
+        AgentRole.PrincipalEngineer => "Principal Engineer",
+        AgentRole.SeniorEngineer => "Senior Engineer",
+        AgentRole.JuniorEngineer => "Junior Engineer",
+        AgentRole.TestEngineer => "Test Engineer",
+        _ => role.ToString()
+    };
+
+    private static string FormatDuration(TimeSpan ts) => ts.TotalHours >= 1
+        ? $"{ts.Hours}h {ts.Minutes}m"
+        : ts.TotalMinutes >= 1
+            ? $"{ts.Minutes}m {ts.Seconds}s"
+            : $"{ts.Seconds}s";
+
+    public void Dispose()
+    {
+        DataService.OnChange -= OnDataChanged;
+    }
+}

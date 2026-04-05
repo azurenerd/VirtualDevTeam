@@ -1,0 +1,250 @@
+@page "/team"
+@using AgentSquad.Core.Agents
+@using AgentSquad.Dashboard.Services
+@implements IDisposable
+@inject DashboardDataService DataService
+
+<PageTitle>AgentSquad — Team View</PageTitle>
+
+<div class="dashboard-header">
+    <h1>Team Visualization</h1>
+    <div class="header-badges">
+        <span class="header-badge healthy">
+            🤖 @_agents.Count Agents
+        </span>
+    </div>
+</div>
+
+@if (_agents.Count == 0)
+{
+    <div class="empty-state">
+        <div class="empty-icon">👥</div>
+        <div class="empty-text">No agents in the team</div>
+        <div class="empty-sub">Agents will appear here once they connect to the orchestrator</div>
+    </div>
+}
+else
+{
+    <div class="team-office">
+        @* Connection lines drawn via CSS pseudo-elements *@
+        <svg class="team-connections" viewBox="0 0 100 100" preserveAspectRatio="none">
+            @foreach (var conn in _connections)
+            {
+                <line x1="@conn.X1" y1="@conn.Y1" x2="@conn.X2" y2="@conn.Y2"
+                      class="connection-line @conn.CssClass" />
+            }
+        </svg>
+
+        <div class="team-grid">
+            @foreach (var agent in _agents)
+            {
+                var statusClass = $"desk-{agent.Status.ToString().ToLowerInvariant()}";
+                var roleClass = $"desk-role-{agent.Role.ToString().ToLowerInvariant()}";
+
+                <div class="team-desk @statusClass @roleClass">
+                    <div class="desk-avatar @($"avatar-{agent.Role.ToString().ToLowerInvariant()}")">
+                        @GetRoleInitials(agent.Role)
+                        <span class="desk-status-dot @statusClass"></span>
+                    </div>
+                    <div class="desk-name">@agent.DisplayName</div>
+                    <div class="desk-role-label">@FormatRole(agent.Role)</div>
+                    @if (agent.Status == AgentStatus.Working && agent.AssignedPullRequest is not null)
+                    {
+                        <div class="desk-bubble">
+                            <span class="bubble-text">@TruncateTask(agent.AssignedPullRequest)</span>
+                        </div>
+                    }
+                    else if (agent.Status == AgentStatus.Blocked)
+                    {
+                        <div class="desk-bubble bubble-blocked">
+                            <span class="bubble-text">Blocked!</span>
+                        </div>
+                    }
+                    else if (agent.Status == AgentStatus.Online)
+                    {
+                        <div class="desk-bubble bubble-idle">
+                            <span class="bubble-text">Idle</span>
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    </div>
+
+    <div class="team-legend">
+        <div class="legend-title">Status Legend</div>
+        <div class="legend-items">
+            <div class="legend-item">
+                <span class="legend-dot desk-working"></span>
+                <span>Working</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-dot desk-online"></span>
+                <span>Idle</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-dot desk-blocked"></span>
+                <span>Blocked</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-dot desk-offline"></span>
+                <span>Offline</span>
+            </div>
+        </div>
+        <div class="legend-title" style="margin-top: 0.75rem;">Connections</div>
+        <div class="legend-items">
+            <div class="legend-item">
+                <span class="legend-line connection-pm"></span>
+                <span>PM ↔ All</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-line connection-pe"></span>
+                <span>Principal ↔ Engineers</span>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private List<AgentSnapshot> _agents = [];
+    private List<ConnectionLine> _connections = [];
+
+    protected override void OnInitialized()
+    {
+        RefreshData();
+        DataService.OnChange += OnDataChanged;
+    }
+
+    private void RefreshData()
+    {
+        _agents = DataService.GetAllAgentSnapshots()
+            .OrderBy(a => GetRoleSortOrder(a.Role))
+            .ThenBy(a => a.DisplayName)
+            .ToList();
+        BuildConnections();
+    }
+
+    private void BuildConnections()
+    {
+        _connections = new List<ConnectionLine>();
+
+        if (_agents.Count < 2) return;
+
+        // Compute grid positions (percentage-based) for connections
+        var positions = new Dictionary<string, (double X, double Y)>();
+        int cols = Math.Min(_agents.Count, 4);
+
+        for (int i = 0; i < _agents.Count; i++)
+        {
+            int row = i / cols;
+            int col = i % cols;
+            double x = (col + 0.5) * (100.0 / cols);
+            double y = (row + 0.5) * (100.0 / Math.Max(1, (_agents.Count + cols - 1) / cols));
+            positions[_agents[i].Id] = (x, y);
+        }
+
+        var pm = _agents.FirstOrDefault(a => a.Role == AgentRole.ProgramManager);
+        var pe = _agents.FirstOrDefault(a => a.Role == AgentRole.PrincipalEngineer);
+        var engineers = _agents.Where(a =>
+            a.Role is AgentRole.SeniorEngineer or AgentRole.JuniorEngineer or AgentRole.TestEngineer).ToList();
+
+        // PM connects to all agents
+        if (pm is not null && positions.ContainsKey(pm.Id))
+        {
+            var pmPos = positions[pm.Id];
+            foreach (var agent in _agents.Where(a => a.Id != pm.Id))
+            {
+                if (positions.TryGetValue(agent.Id, out var agentPos))
+                {
+                    _connections.Add(new ConnectionLine
+                    {
+                        X1 = $"{pmPos.X:F1}%", Y1 = $"{pmPos.Y:F1}%",
+                        X2 = $"{agentPos.X:F1}%", Y2 = $"{agentPos.Y:F1}%",
+                        CssClass = "connection-pm"
+                    });
+                }
+            }
+        }
+
+        // Principal Engineer connects to all engineers
+        if (pe is not null && positions.ContainsKey(pe.Id))
+        {
+            var pePos = positions[pe.Id];
+            foreach (var eng in engineers)
+            {
+                if (positions.TryGetValue(eng.Id, out var engPos))
+                {
+                    _connections.Add(new ConnectionLine
+                    {
+                        X1 = $"{pePos.X:F1}%", Y1 = $"{pePos.Y:F1}%",
+                        X2 = $"{engPos.X:F1}%", Y2 = $"{engPos.Y:F1}%",
+                        CssClass = "connection-pe"
+                    });
+                }
+            }
+        }
+    }
+
+    private async void OnDataChanged()
+    {
+        RefreshData();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private static int GetRoleSortOrder(AgentRole role) => role switch
+    {
+        AgentRole.ProgramManager => 0,
+        AgentRole.Architect => 1,
+        AgentRole.PrincipalEngineer => 2,
+        AgentRole.Researcher => 3,
+        AgentRole.SeniorEngineer => 4,
+        AgentRole.JuniorEngineer => 5,
+        AgentRole.TestEngineer => 6,
+        _ => 99
+    };
+
+    private static string GetRoleInitials(AgentRole role) => role switch
+    {
+        AgentRole.ProgramManager => "PM",
+        AgentRole.Researcher => "RS",
+        AgentRole.Architect => "AR",
+        AgentRole.PrincipalEngineer => "PE",
+        AgentRole.SeniorEngineer => "SE",
+        AgentRole.JuniorEngineer => "JE",
+        AgentRole.TestEngineer => "TE",
+        _ => "??"
+    };
+
+    private static string FormatRole(AgentRole role) => role switch
+    {
+        AgentRole.ProgramManager => "Program Manager",
+        AgentRole.Researcher => "Researcher",
+        AgentRole.Architect => "Architect",
+        AgentRole.PrincipalEngineer => "Principal Engineer",
+        AgentRole.SeniorEngineer => "Senior Engineer",
+        AgentRole.JuniorEngineer => "Junior Engineer",
+        AgentRole.TestEngineer => "Test Engineer",
+        _ => role.ToString()
+    };
+
+    private static string TruncateTask(string task)
+    {
+        const int maxLen = 30;
+        if (task.Length <= maxLen) return task;
+        return task[..(maxLen - 1)] + "…";
+    }
+
+    public void Dispose()
+    {
+        DataService.OnChange -= OnDataChanged;
+    }
+
+    private class ConnectionLine
+    {
+        public string X1 { get; init; } = "0";
+        public string Y1 { get; init; } = "0";
+        public string X2 { get; init; } = "0";
+        public string Y2 { get; init; } = "0";
+        public string CssClass { get; init; } = "";
+    }
+}

@@ -1,0 +1,66 @@
+## Build artifacts
+bin/
+obj/
+publish/
+out/
+
+## Visual Studio
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.csproj.user
+
+## User secrets
+secrets.json
+
+## NuGet
+*.nupkg
+*.snupkg
+**/packages/
+project.lock.json
+project.fragment.lock.json
+
+## SQLite databases
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+## IDE / Editor
+.idea/
+*.swp
+*.swo
+*~
+.vscode/
+*.code-workspace
+
+## OS files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+
+## Logs
+*.log
+logs/
+
+## .NET tool artifacts
+.dotnet/
+BenchmarkDotNet.Artifacts/
+
+## Test results
+TestResults/
+coverage/
+*.trx
+*.coverage
+*.coveragexml
+
+## Rider
+.idea/
+*.sln.iml
+
+## JetBrains
+_ReSharper.Caches/

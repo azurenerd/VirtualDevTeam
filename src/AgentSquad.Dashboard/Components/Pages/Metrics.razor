@@ -1,0 +1,150 @@
+@page "/metrics"
+@using AgentSquad.Core.Agents
+@using AgentSquad.Dashboard.Services
+@using AgentSquad.Orchestrator
+@implements IDisposable
+@inject DashboardDataService DataService
+
+<PageTitle>AgentSquad — Metrics</PageTitle>
+
+<div class="dashboard-header">
+    <h1>Metrics</h1>
+</div>
+
+<div class="stats-row">
+    <div class="stat-card">
+        <div class="stat-label">Total Agents</div>
+        <div class="stat-value">@_snapshot.TotalAgents</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Online</div>
+        <div class="stat-value green">@GetStatusCount(AgentStatus.Online)</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Working</div>
+        <div class="stat-value cyan">@GetStatusCount(AgentStatus.Working)</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Blocked</div>
+        <div class="stat-value red">@GetStatusCount(AgentStatus.Blocked)</div>
+    </div>
+</div>
+
+<div class="metrics-section">
+    <h2>Agent Count by Status</h2>
+    <div class="bar-chart">
+        @foreach (var status in _allStatuses)
+        {
+            var count = GetStatusCount(status);
+            var pct = _snapshot.TotalAgents > 0 ? (count * 100.0 / _snapshot.TotalAgents) : 0;
+            var statusClass = $"status-{status.ToString().ToLowerInvariant()}";
+
+            <div class="bar-row">
+                <span class="bar-label">@status</span>
+                <div class="bar-track">
+                    <div class="bar-fill @statusClass" style="width: @($"{pct:F1}")%"></div>
+                </div>
+                <span class="bar-count">@count</span>
+            </div>
+        }
+    </div>
+</div>
+
+<div class="metrics-section">
+    <h2>Active Utilization</h2>
+    <div class="utilization-container">
+        <div class="utilization-ring">
+            <svg width="120" height="120" viewBox="0 0 120 120">
+                <circle class="ring-bg" cx="60" cy="60" r="50" />
+                <circle class="ring-fill" cx="60" cy="60" r="50"
+                        stroke-dasharray="@($"{314.16:F2}")"
+                        stroke-dashoffset="@($"{314.16 - (314.16 * UtilizationPct / 100):F2}")" />
+            </svg>
+            <div class="utilization-pct">@($"{UtilizationPct:F0}")%</div>
+        </div>
+        <div class="utilization-info">
+            <div>
+                <div class="info-label">Working Agents</div>
+                <div class="info-value">@GetStatusCount(AgentStatus.Working) / @_snapshot.TotalAgents</div>
+            </div>
+            <div>
+                <div class="info-label">Idle Agents</div>
+                <div class="info-value">@GetStatusCount(AgentStatus.Online)</div>
+            </div>
+            <div>
+                <div class="info-label">Blocked Agents</div>
+                <div class="info-value">@GetStatusCount(AgentStatus.Blocked)</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="metrics-section">
+    <h2>Longest Running Task</h2>
+    @if (_snapshot.LongestRunningTask.HasValue)
+    {
+        <div class="longest-task">
+            <span class="task-icon">⏱️</span>
+            <div class="task-info">
+                <div class="task-duration">@FormatDuration(_snapshot.LongestRunningTask.Value)</div>
+                <div class="task-agent">Agent: @(_snapshot.LongestRunningAgentId ?? "Unknown")</div>
+            </div>
+        </div>
+    }
+    else
+    {
+        <div class="longest-task">
+            <span class="task-icon">✅</span>
+            <div class="task-info">
+                <div class="task-duration" style="color: var(--accent-green);">No active tasks</div>
+                <div class="task-agent">All agents are idle</div>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private AgentHealthSnapshot _snapshot = new()
+    {
+        StatusCounts = new Dictionary<AgentStatus, int>(),
+        TotalAgents = 0
+    };
+
+    private static readonly AgentStatus[] _allStatuses = Enum.GetValues<AgentStatus>();
+
+    protected override void OnInitialized()
+    {
+        RefreshData();
+        DataService.OnChange += OnDataChanged;
+    }
+
+    private void RefreshData()
+    {
+        _snapshot = DataService.GetCurrentHealthSnapshot();
+    }
+
+    private async void OnDataChanged()
+    {
+        RefreshData();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private int GetStatusCount(AgentStatus status) =>
+        _snapshot.StatusCounts.GetValueOrDefault(status, 0);
+
+    private double UtilizationPct =>
+        _snapshot.TotalAgents > 0
+            ? GetStatusCount(AgentStatus.Working) * 100.0 / _snapshot.TotalAgents
+            : 0;
+
+    private static string FormatDuration(TimeSpan ts) => ts.TotalHours >= 1
+        ? $"{(int)ts.TotalHours}h {ts.Minutes}m {ts.Seconds}s"
+        : ts.TotalMinutes >= 1
+            ? $"{ts.Minutes}m {ts.Seconds}s"
+            : $"{ts.Seconds}s";
+
+    public void Dispose()
+    {
+        DataService.OnChange -= OnDataChanged;
+    }
+}

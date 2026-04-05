@@ -1,0 +1,35 @@
+﻿<div class="sidebar-brand">
+    <div class="brand-title">AgentSquad</div>
+    <div class="brand-subtitle">Monitoring Dashboard</div>
+</div>
+
+<input type="checkbox" title="Navigation menu" class="navbar-toggler" />
+
+<div class="nav-scrollable" onclick="document.querySelector('.navbar-toggler').click()">
+    <nav class="flex-column">
+        <div class="nav-item">
+            <NavLink class="nav-link" href="" Match="NavLinkMatch.All">
+                <span class="nav-icon">🏠</span> Overview
+            </NavLink>
+        </div>
+
+        <div class="nav-item">
+            <NavLink class="nav-link" href="metrics">
+                <span class="nav-icon">📊</span> Metrics
+            </NavLink>
+        </div>
+
+        <div class="nav-item">
+            <NavLink class="nav-link" href="github">
+                <span class="nav-icon">🔗</span> GitHub Feed
+            </NavLink>
+        </div>
+
+        <div class="nav-item">
+            <NavLink class="nav-link" href="team">
+                <span class="nav-icon">👥</span> Team View
+            </NavLink>
+        </div>
+    </nav>
+</div>
+

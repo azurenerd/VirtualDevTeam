@@ -1,0 +1,219 @@
+@page "/github"
+@using AgentSquad.Core.Agents
+@using AgentSquad.Dashboard.Services
+@implements IDisposable
+@inject DashboardDataService DataService
+
+<PageTitle>AgentSquad — GitHub Feed</PageTitle>
+
+<div class="dashboard-header">
+    <h1>GitHub Feed</h1>
+    <div class="header-badges">
+        <span class="header-badge">
+            📋 @_issues.Count Issues
+        </span>
+        <span class="header-badge">
+            🔀 @_pullRequests.Count PRs
+        </span>
+        <span class="header-badge">
+            💬 @_comments.Count Comments
+        </span>
+    </div>
+</div>
+
+<div class="feed-filters">
+    <button class="feed-filter-btn @(_activeFilter == "all" ? "active" : "")" @onclick='() => SetFilter("all")'>All</button>
+    <button class="feed-filter-btn @(_activeFilter == "issues" ? "active" : "")" @onclick='() => SetFilter("issues")'>Issues</button>
+    <button class="feed-filter-btn @(_activeFilter == "prs" ? "active" : "")" @onclick='() => SetFilter("prs")'>Pull Requests</button>
+    <button class="feed-filter-btn @(_activeFilter == "comments" ? "active" : "")" @onclick='() => SetFilter("comments")'>Comments</button>
+</div>
+
+@if (_feedItems.Count == 0)
+{
+    <div class="empty-state">
+        <div class="empty-icon">🔗</div>
+        <div class="empty-text">No GitHub activity yet</div>
+        <div class="empty-sub">Issues, PRs, and comments will appear here as agents work</div>
+    </div>
+}
+else
+{
+    <div class="feed-timeline">
+        @foreach (var item in _feedItems)
+        {
+            <div class="feed-card @item.TypeClass">
+                <div class="feed-card-icon">@item.Icon</div>
+                <div class="feed-card-content">
+                    <div class="feed-card-header">
+                        <span class="feed-card-title">@item.Title</span>
+                        <span class="feed-status-badge @item.StatusClass">@item.Status</span>
+                    </div>
+                    <div class="feed-card-meta">
+                        @if (item.AgentName is not null)
+                        {
+                            <span class="feed-agent">🤖 @item.AgentName</span>
+                        }
+                        <span class="feed-timestamp">@FormatTimeAgo(item.Timestamp)</span>
+                        <span class="feed-number">#@item.Number</span>
+                    </div>
+                    @if (item.Labels.Count > 0)
+                    {
+                        <div class="feed-card-labels">
+                            @foreach (var label in item.Labels)
+                            {
+                                <span class="feed-label" style="@GetLabelStyle(label)">@label</span>
+                            }
+                        </div>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(item.Preview))
+                    {
+                        <div class="feed-card-preview">@item.Preview</div>
+                    }
+                </div>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    private string _activeFilter = "all";
+
+    private List<FeedItem> _issues = [];
+    private List<FeedItem> _pullRequests = [];
+    private List<FeedItem> _comments = [];
+    private List<FeedItem> _feedItems = [];
+
+    protected override void OnInitialized()
+    {
+        RefreshData();
+        DataService.OnChange += OnDataChanged;
+    }
+
+    private void RefreshData()
+    {
+        var agents = DataService.GetAllAgentSnapshots();
+
+        // Build mock feed from agent state — in production these would come from IGitHubService
+        _issues = agents
+            .Where(a => a.Status == AgentStatus.Blocked)
+            .Select((a, i) => new FeedItem
+            {
+                Type = "issue",
+                TypeClass = "feed-type-issue",
+                Icon = "📋",
+                Title = $"Blocker: {a.DisplayName} is stuck",
+                Number = 100 + i,
+                AgentName = a.DisplayName,
+                Status = "Open",
+                StatusClass = "feed-status-open",
+                Timestamp = a.LastStatusChange,
+                Labels = new List<string> { "blocker", "agent-stuck" },
+                Preview = "Agent is blocked and cannot make further progress."
+            }).ToList();
+
+        _pullRequests = agents
+            .Where(a => a.AssignedPullRequest is not null)
+            .Select((a, i) => new FeedItem
+            {
+                Type = "pr",
+                TypeClass = "feed-type-pr",
+                Icon = "🔀",
+                Title = a.AssignedPullRequest!,
+                Number = 200 + i,
+                AgentName = a.DisplayName,
+                Status = a.Status == AgentStatus.Working ? "In Review" : "Open",
+                StatusClass = a.Status == AgentStatus.Working ? "feed-status-review" : "feed-status-open",
+                Timestamp = a.LastStatusChange,
+                Labels = new List<string> { "in-progress" },
+                Preview = null
+            }).ToList();
+
+        _comments = agents
+            .Where(a => a.Status == AgentStatus.Working)
+            .Select((a, i) => new FeedItem
+            {
+                Type = "comment",
+                TypeClass = "feed-type-comment",
+                Icon = "💬",
+                Title = $"Status update from {a.DisplayName}",
+                Number = 300 + i,
+                AgentName = a.DisplayName,
+                Status = "Comment",
+                StatusClass = "feed-status-comment",
+                Timestamp = a.LastStatusChange,
+                Labels = new List<string>(),
+                Preview = $"Currently working on assigned task."
+            }).ToList();
+
+        ApplyFilter();
+    }
+
+    private void SetFilter(string filter)
+    {
+        _activeFilter = filter;
+        ApplyFilter();
+    }
+
+    private void ApplyFilter()
+    {
+        _feedItems = _activeFilter switch
+        {
+            "issues" => _issues,
+            "prs" => _pullRequests,
+            "comments" => _comments,
+            _ => _issues.Concat(_pullRequests).Concat(_comments)
+                .OrderByDescending(f => f.Timestamp)
+                .ToList()
+        };
+    }
+
+    private async void OnDataChanged()
+    {
+        RefreshData();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private static string FormatTimeAgo(DateTime utcTime)
+    {
+        var elapsed = DateTime.UtcNow - utcTime;
+        if (elapsed.TotalSeconds < 60) return "just now";
+        if (elapsed.TotalMinutes < 60) return $"{(int)elapsed.TotalMinutes}m ago";
+        if (elapsed.TotalHours < 24) return $"{(int)elapsed.TotalHours}h ago";
+        return $"{(int)elapsed.TotalDays}d ago";
+    }
+
+    private static string GetLabelStyle(string label)
+    {
+        var color = label.ToLowerInvariant() switch
+        {
+            "blocker" or "bug" => "#f85149",
+            "agent-stuck" or "escalation" => "#d29922",
+            "in-progress" => "#00d4ff",
+            "ready-for-review" => "#3fb950",
+            "approved" or "merged" => "#a371f7",
+            "merge-conflict" or "needs-attention" => "#f0883e",
+            _ => "#8b949e"
+        };
+        return $"background: {color}22; color: {color}; border-color: {color}44;";
+    }
+
+    public void Dispose()
+    {
+        DataService.OnChange -= OnDataChanged;
+    }
+
+    private class FeedItem
+    {
+        public string Type { get; init; } = "";
+        public string TypeClass { get; init; } = "";
+        public string Icon { get; init; } = "";
+        public string Title { get; init; } = "";
+        public int Number { get; init; }
+        public string? AgentName { get; init; }
+        public string Status { get; init; } = "";
+        public string StatusClass { get; init; } = "";
+        public DateTime Timestamp { get; init; }
+        public List<string> Labels { get; init; } = new();
+        public string? Preview { get; init; }
+    }
+}

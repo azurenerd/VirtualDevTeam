@@ -1,0 +1,315 @@
+@page "/agent/{AgentId}"
+@using AgentSquad.Core.Agents
+@using AgentSquad.Dashboard.Services
+@using AgentSquad.Orchestrator
+@implements IDisposable
+@inject DashboardDataService DataService
+@inject AgentSpawnManager SpawnManager
+@inject NavigationManager Navigation
+
+<PageTitle>AgentSquad — @(_agent?.DisplayName ?? "Agent Detail")</PageTitle>
+
+<div class="detail-toolbar">
+    <button class="detail-back-btn" @onclick="GoBack">
+        <span class="back-arrow">←</span> Back to Overview
+    </button>
+</div>
+
+@if (_agent is null)
+{
+    <div class="empty-state">
+        <div class="empty-icon">🔍</div>
+        <div class="empty-text">Agent not found</div>
+        <div class="empty-sub">Agent "@AgentId" does not exist or has been terminated</div>
+    </div>
+}
+else
+{
+    var statusClass = $"status-{_agent.Status.ToString().ToLowerInvariant()}";
+    var roleClass = $"role-{_agent.Role.ToString().ToLowerInvariant()}";
+
+    <div class="detail-page">
+        <!-- Hero Section -->
+        <div class="detail-hero">
+            <div class="detail-avatar-wrapper">
+                <div class="detail-avatar @roleClass">
+                    @GetRoleInitials(_agent.Role)
+                </div>
+                <div class="detail-status-ring @statusClass"></div>
+            </div>
+            <div class="detail-hero-info">
+                <h1 class="detail-agent-name">@_agent.DisplayName</h1>
+                <div class="detail-meta-row">
+                    <span class="detail-role-badge">@FormatRole(_agent.Role)</span>
+                    <span class="detail-model-badge">@_agent.ModelTier</span>
+                    <span class="status-badge @statusClass">
+                        <span class="status-dot"></span>
+                        @_agent.Status
+                    </span>
+                </div>
+                <div class="detail-status-time">
+                    Status since @_agent.LastStatusChange.ToString("HH:mm:ss UTC") · @FormatDuration(DateTime.UtcNow - _agent.LastStatusChange) ago
+                </div>
+            </div>
+            <div class="detail-hero-actions">
+                @if (_agent.Status is AgentStatus.Working or AgentStatus.Online)
+                {
+                    <button class="detail-btn btn-pause" @onclick="PauseAgent" disabled="@_actionInProgress">
+                        ⏸ Pause
+                    </button>
+                }
+                @if (_agent.Status == AgentStatus.Paused)
+                {
+                    <button class="detail-btn btn-resume" @onclick="ResumeAgent" disabled="@_actionInProgress">
+                        ▶ Resume
+                    </button>
+                }
+                @if (_agent.Status is not (AgentStatus.Terminated or AgentStatus.Offline))
+                {
+                    <button class="detail-btn btn-terminate" @onclick="TerminateAgent" disabled="@_actionInProgress">
+                        ⏹ Terminate
+                    </button>
+                }
+            </div>
+        </div>
+
+        <!-- Info Grid -->
+        <div class="detail-grid">
+            <!-- Current Task Card -->
+            <div class="detail-card">
+                <div class="detail-card-title">Current Task</div>
+                <div class="detail-card-body">
+                    @if (_agent.Status == AgentStatus.Working && _agent.AssignedPullRequest is not null)
+                    {
+                        <div class="detail-task-active">
+                            <span class="detail-field-label">Pull Request</span>
+                            <a class="detail-pr-link" href="@_agent.AssignedPullRequest" target="_blank" rel="noopener noreferrer">
+                                @_agent.AssignedPullRequest
+                                <span class="external-icon">↗</span>
+                            </a>
+                        </div>
+                        <div class="detail-task-duration">
+                            <span class="detail-field-label">Time on Task</span>
+                            <span class="detail-duration-value task-active">@FormatDuration(DateTime.UtcNow - _agent.LastStatusChange)</span>
+                        </div>
+                    }
+                    else if (_agent.AssignedPullRequest is not null)
+                    {
+                        <div class="detail-task-active">
+                            <span class="detail-field-label">Assigned PR</span>
+                            <a class="detail-pr-link" href="@_agent.AssignedPullRequest" target="_blank" rel="noopener noreferrer">
+                                @_agent.AssignedPullRequest
+                                <span class="external-icon">↗</span>
+                            </a>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="detail-idle-message">No task assigned — agent is idle</div>
+                    }
+                </div>
+            </div>
+
+            <!-- Token Usage / Cost Card -->
+            <div class="detail-card">
+                <div class="detail-card-title">Token Usage & Cost</div>
+                <div class="detail-card-body">
+                    <div class="detail-metric-row">
+                        <span class="detail-field-label">Prompt Tokens</span>
+                        <span class="detail-metric-value">—</span>
+                    </div>
+                    <div class="detail-metric-row">
+                        <span class="detail-field-label">Completion Tokens</span>
+                        <span class="detail-metric-value">—</span>
+                    </div>
+                    <div class="detail-metric-row">
+                        <span class="detail-field-label">Estimated Cost</span>
+                        <span class="detail-metric-value">—</span>
+                    </div>
+                    <div class="detail-placeholder-note">Token tracking coming soon</div>
+                </div>
+            </div>
+
+            <!-- Agent Info Card -->
+            <div class="detail-card">
+                <div class="detail-card-title">Agent Info</div>
+                <div class="detail-card-body">
+                    <div class="detail-metric-row">
+                        <span class="detail-field-label">Agent ID</span>
+                        <span class="detail-metric-value mono">@_agent.Id</span>
+                    </div>
+                    <div class="detail-metric-row">
+                        <span class="detail-field-label">Created</span>
+                        <span class="detail-metric-value">@_agent.CreatedAt.ToString("yyyy-MM-dd HH:mm:ss UTC")</span>
+                    </div>
+                    <div class="detail-metric-row">
+                        <span class="detail-field-label">Model Tier</span>
+                        <span class="detail-metric-value">@_agent.ModelTier</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Activity Log -->
+        <div class="detail-card detail-log-card">
+            <div class="detail-card-title">Activity Log</div>
+            <div class="detail-card-body">
+                <div class="detail-log-list">
+                    @foreach (var entry in _activityLog)
+                    {
+                        <div class="detail-log-entry">
+                            <span class="log-timestamp">@entry.Timestamp.ToString("HH:mm:ss")</span>
+                            <span class="log-badge @entry.BadgeClass">@entry.EventType</span>
+                            <span class="log-message">@entry.Details</span>
+                        </div>
+                    }
+                    @if (_activityLog.Count == 0)
+                    {
+                        <div class="detail-idle-message">No activity recorded yet</div>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public string AgentId { get; set; } = "";
+
+    private AgentSnapshot? _agent;
+    private bool _actionInProgress;
+    private List<MockActivityEntry> _activityLog = [];
+    private System.Threading.Timer? _refreshTimer;
+
+    protected override void OnInitialized()
+    {
+        RefreshData();
+        DataService.OnChange += OnDataChanged;
+
+        // Live-updating timer for duration display
+        _refreshTimer = new System.Threading.Timer(_ =>
+        {
+            _ = InvokeAsync(StateHasChanged);
+        }, null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+    }
+
+    protected override void OnParametersSet()
+    {
+        RefreshData();
+    }
+
+    private void RefreshData()
+    {
+        _agent = DataService.GetAgentSnapshot(AgentId);
+        _activityLog = GenerateMockActivityLog();
+    }
+
+    private async void OnDataChanged()
+    {
+        RefreshData();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private void GoBack() => Navigation.NavigateTo("/");
+
+    private async Task PauseAgent()
+    {
+        _actionInProgress = true;
+        try
+        {
+            await SpawnManager.PauseAgentAsync(AgentId);
+        }
+        finally
+        {
+            _actionInProgress = false;
+        }
+    }
+
+    private async Task ResumeAgent()
+    {
+        _actionInProgress = true;
+        try
+        {
+            await SpawnManager.ResumeAgentAsync(AgentId);
+        }
+        finally
+        {
+            _actionInProgress = false;
+        }
+    }
+
+    private async Task TerminateAgent()
+    {
+        _actionInProgress = true;
+        try
+        {
+            await SpawnManager.TerminateAgentAsync(AgentId);
+        }
+        finally
+        {
+            _actionInProgress = false;
+        }
+    }
+
+    private List<MockActivityEntry> GenerateMockActivityLog()
+    {
+        if (_agent is null) return [];
+
+        var now = DateTime.UtcNow;
+        var entries = new List<MockActivityEntry>
+        {
+            new(now.AddMinutes(-2), "status", "log-badge-status", $"Status changed to {_agent.Status}"),
+            new(now.AddMinutes(-5), "message", "log-badge-message", "Received task assignment from orchestrator"),
+            new(now.AddMinutes(-8), "status", "log-badge-status", "Status changed to Online"),
+            new(now.AddMinutes(-12), "system", "log-badge-system", "Agent initialized successfully"),
+            new(now.AddMinutes(-15), "message", "log-badge-message", "Sent capabilities report to Program Manager"),
+            new(now.AddMinutes(-20), "status", "log-badge-status", "Status changed to Initializing"),
+            new(now.AddMinutes(-22), "system", "log-badge-system", "Agent registered with orchestrator"),
+        };
+
+        if (_agent.AssignedPullRequest is not null)
+        {
+            entries.Insert(1, new(now.AddMinutes(-3), "task", "log-badge-task", $"Assigned to PR: {_agent.AssignedPullRequest}"));
+        }
+
+        return entries;
+    }
+
+    private static string GetRoleInitials(AgentRole role) => role switch
+    {
+        AgentRole.ProgramManager => "PM",
+        AgentRole.Researcher => "RS",
+        AgentRole.Architect => "AR",
+        AgentRole.PrincipalEngineer => "PE",
+        AgentRole.SeniorEngineer => "SE",
+        AgentRole.JuniorEngineer => "JE",
+        AgentRole.TestEngineer => "TE",
+        _ => "??"
+    };
+
+    private static string FormatRole(AgentRole role) => role switch
+    {
+        AgentRole.ProgramManager => "Program Manager",
+        AgentRole.Researcher => "Researcher",
+        AgentRole.Architect => "Architect",
+        AgentRole.PrincipalEngineer => "Principal Engineer",
+        AgentRole.SeniorEngineer => "Senior Engineer",
+        AgentRole.JuniorEngineer => "Junior Engineer",
+        AgentRole.TestEngineer => "Test Engineer",
+        _ => role.ToString()
+    };
+
+    private static string FormatDuration(TimeSpan ts) => ts.TotalHours >= 1
+        ? $"{ts.Hours}h {ts.Minutes}m"
+        : ts.TotalMinutes >= 1
+            ? $"{ts.Minutes}m {ts.Seconds}s"
+            : $"{ts.Seconds}s";
+
+    public void Dispose()
+    {
+        DataService.OnChange -= OnDataChanged;
+        _refreshTimer?.Dispose();
+    }
+
+    private record MockActivityEntry(DateTime Timestamp, string EventType, string BadgeClass, string Details);
+}
