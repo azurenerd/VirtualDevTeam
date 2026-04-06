@@ -470,14 +470,15 @@ public class PrincipalEngineerAgent : AgentBase
 
             var architectureDoc = await _projectFiles.GetArchitectureDocAsync(ct);
             var pmSpecDoc = await _projectFiles.GetPMSpecAsync(ct);
+            var techStack = _config.Project.TechStack;
 
             var history = new ChatHistory();
             history.AddSystemMessage(
-                "You are a Principal Engineer implementing a high-complexity engineering task. " +
+                $"You are a Principal Engineer implementing a high-complexity engineering task. " +
+                $"The project uses {techStack} as its technology stack. " +
                 "The PM Specification defines the business requirements, and the Architecture " +
                 "document defines the technical design. " +
-                "Produce detailed, production-quality code and design. " +
-                "Include file paths, class structures, key algorithms, and tests. " +
+                "Produce detailed, production-quality code. " +
                 "Ensure the implementation fulfills the business goals from the PM spec. " +
                 "Be thorough — this is the most critical part of the system.");
 
@@ -486,24 +487,42 @@ public class PrincipalEngineerAgent : AgentBase
                 $"## Architecture\n{architectureDoc}\n\n" +
                 $"## Task: {task.Name}\n{task.Description}\n\n" +
                 "Produce a complete implementation for this task. " +
-                "Include all necessary code files, their content, and a summary of what was implemented.");
+                "Output each file using this exact format:\n\n" +
+                "FILE: path/to/file.ext\n```language\n<file content>\n```\n\n" +
+                $"Use the {techStack} technology stack. " +
+                "Include all source code files, configuration, and tests. " +
+                "Every file MUST use the FILE: marker format so it can be parsed and committed.");
 
             var response = await chat.GetChatMessageContentAsync(
                 history, cancellationToken: ct);
             var implementation = response.Content?.Trim() ?? "";
 
-            // Commit the implementation to the PR branch
-            var finalBody = $"## Implementation: {task.Name}\n\n" +
-                            $"**Task ID:** {task.Id}\n" +
-                            $"**Complexity:** {task.Complexity}\n\n" +
-                            $"## Details\n{implementation}";
+            // Parse and commit code files
+            var codeFiles = AgentSquad.Core.AI.CodeFileParser.ParseFiles(implementation);
 
-            await _prWorkflow.CommitFixesToPRAsync(
-                pr.Number,
-                $"docs/{task.Id}-implementation.md",
-                finalBody,
-                $"Add implementation for {task.Name}",
-                ct);
+            if (codeFiles.Count > 0)
+            {
+                Logger.LogInformation(
+                    "Principal Engineer parsed {Count} code files for task {TaskId}",
+                    codeFiles.Count, task.Id);
+
+                await _prWorkflow.CommitCodeFilesToPRAsync(
+                    pr.Number, codeFiles, $"Implement {task.Name}", ct);
+            }
+            else
+            {
+                // Fallback: commit raw output
+                Logger.LogWarning(
+                    "Principal Engineer could not parse structured files for task {TaskId}, committing raw",
+                    task.Id);
+
+                await _prWorkflow.CommitFixesToPRAsync(
+                    pr.Number,
+                    $"src/{task.Id}-implementation.md",
+                    $"## Implementation: {task.Name}\n\n{implementation}",
+                    $"Add implementation for {task.Name}",
+                    ct);
+            }
 
             // Mark ready for review
             await _prWorkflow.MarkReadyForReviewAsync(pr.Number, Identity.DisplayName, ct);
@@ -643,10 +662,12 @@ public class PrincipalEngineerAgent : AgentBase
                 var architectureDoc = await _projectFiles.GetArchitectureDocAsync(ct);
                 var pmSpecDoc = await _projectFiles.GetPMSpecAsync(ct);
                 var planDoc = await _projectFiles.GetEngineeringPlanAsync(ct);
+                var techStack = _config.Project.TechStack;
 
                 var history = new ChatHistory();
                 history.AddSystemMessage(
-                    "You are a Principal Engineer addressing review feedback on your pull request. " +
+                    $"You are a Principal Engineer addressing review feedback on your pull request. " +
+                    $"The project uses {techStack}. " +
                     "You have access to the full architecture, PM spec, and engineering plan. " +
                     "Carefully read the feedback, understand what needs to be fixed, and produce " +
                     "an updated implementation that addresses ALL the feedback points. " +
@@ -659,23 +680,34 @@ public class PrincipalEngineerAgent : AgentBase
                     $"## PM Specification\n{pmSpecDoc}\n\n" +
                     $"## Engineering Plan\n{planDoc}\n\n" +
                     $"## Review Feedback from {rework.Reviewer}\n{rework.Feedback}\n\n" +
-                    "Please provide an updated implementation that addresses all the feedback. " +
-                    "Include complete file contents for any changed files.");
+                    "Please provide the corrected files that address all the feedback. " +
+                    "Output each file using this exact format:\n\n" +
+                    "FILE: path/to/file.ext\n```language\n<file content>\n```\n\n" +
+                    "Include the COMPLETE content of each changed file.");
 
                 var response = await chat.GetChatMessageContentAsync(history, cancellationToken: ct);
                 var updatedImpl = response.Content?.Trim() ?? "";
 
                 if (!string.IsNullOrWhiteSpace(updatedImpl))
                 {
-                    var taskTitle = PullRequestWorkflow.ParseTaskTitleFromTitle(pr.Title);
-                    await _prWorkflow.CommitFixesToPRAsync(
-                        pr.Number,
-                        $"docs/{taskTitle}-rework.md",
-                        $"## Rework: Addressing Review Feedback\n\n" +
-                        $"**Reviewer:** {rework.Reviewer}\n\n" +
-                        $"### Changes Made\n{updatedImpl}",
-                        $"Address review feedback from {rework.Reviewer}",
-                        ct);
+                    var codeFiles = AgentSquad.Core.AI.CodeFileParser.ParseFiles(updatedImpl);
+                    if (codeFiles.Count > 0)
+                    {
+                        await _prWorkflow.CommitCodeFilesToPRAsync(
+                            pr.Number, codeFiles, "Address review feedback", ct);
+                    }
+                    else
+                    {
+                        var taskTitle = PullRequestWorkflow.ParseTaskTitleFromTitle(pr.Title);
+                        await _prWorkflow.CommitFixesToPRAsync(
+                            pr.Number,
+                            $"src/{taskTitle}-rework.md",
+                            $"## Rework: Addressing Review Feedback\n\n" +
+                            $"**Reviewer:** {rework.Reviewer}\n\n" +
+                            $"### Changes Made\n{updatedImpl}",
+                            $"Address review feedback from {rework.Reviewer}",
+                            ct);
+                    }
 
                     await _prWorkflow.MarkReadyForReviewAsync(pr.Number, Identity.DisplayName, ct);
 

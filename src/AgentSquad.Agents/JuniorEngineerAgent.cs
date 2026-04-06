@@ -137,6 +137,7 @@ public class JuniorEngineerAgent : AgentBase
             var architectureDoc = await _projectFiles.GetArchitectureDocAsync(ct);
             var pmSpecDoc = await _projectFiles.GetPMSpecAsync(ct);
             var taskTitle = PullRequestWorkflow.ParseTaskTitleFromTitle(pr.Title) ?? pr.Title;
+            var techStack = _config.Project.TechStack;
 
             var kernel = _modelRegistry.GetKernel(Identity.ModelTier, Identity.Id);
             var chat = kernel.GetRequiredService<IChatCompletionService>();
@@ -144,7 +145,8 @@ public class JuniorEngineerAgent : AgentBase
             // Step 1: Break down the task into smaller steps
             var history = new ChatHistory();
             history.AddSystemMessage(
-                "You are a Junior Engineer working on a low-complexity task. " +
+                $"You are a Junior Engineer working on a low-complexity task. " +
+                $"The project uses {techStack} as its technology stack. " +
                 "Focus on producing correct, simple, and readable code. " +
                 "Follow the established patterns in the project architecture " +
                 "and ensure your work aligns with the business requirements. " +
@@ -176,10 +178,14 @@ public class JuniorEngineerAgent : AgentBase
             Logger.LogDebug("Junior Engineer {Name} created plan for PR #{Number}",
                 Identity.DisplayName, pr.Number);
 
-            // Step 2: Implement step by step
+            // Step 2: Implement with structured file output
             history.AddUserMessage(
                 "Now implement the task following your plan. " +
+                "Output each file using this exact format:\n\n" +
+                "FILE: path/to/file.ext\n```language\n<file content>\n```\n\n" +
+                $"Use the {techStack} technology stack. " +
                 "Produce complete code for each file. " +
+                "Every file MUST use the FILE: marker format so it can be parsed and committed. " +
                 "Keep it simple and correct.");
 
             var implResponse = await chat.GetChatMessageContentAsync(
@@ -210,7 +216,8 @@ public class JuniorEngineerAgent : AgentBase
                     // Iterate: ask model to fix its own issues
                     history.AddUserMessage(
                         $"Self-review found issues:\n{feedback}\n\n" +
-                        "Please fix these issues and provide the corrected implementation.");
+                        "Please fix these issues and provide the corrected implementation. " +
+                        "Use the FILE: marker format for all files.");
 
                     var fixResponse = await chat.GetChatMessageContentAsync(
                         history, cancellationToken: ct);
@@ -227,11 +234,42 @@ public class JuniorEngineerAgent : AgentBase
                     Identity.DisplayName, pr.Number, MaxSelfReviewRetries);
             }
 
-            // Step 4: Post implementation as PR comment
-            var comment = $"## Implementation Summary\n\n" +
+            // Step 4: Parse and commit code files
+            var codeFiles = AgentSquad.Core.AI.CodeFileParser.ParseFiles(implementation);
+
+            if (codeFiles.Count > 0)
+            {
+                Logger.LogInformation(
+                    "Junior Engineer {Name} parsed {Count} code files from AI output for PR #{Number}",
+                    Identity.DisplayName, codeFiles.Count, pr.Number);
+
+                await _prWorkflow.CommitCodeFilesToPRAsync(
+                    pr.Number, codeFiles, "Implement task", ct);
+            }
+            else
+            {
+                Logger.LogWarning(
+                    "Junior Engineer {Name} could not parse structured files for PR #{Number}, " +
+                    "committing raw output",
+                    Identity.DisplayName, pr.Number);
+
+                await _prWorkflow.CommitFixesToPRAsync(
+                    pr.Number,
+                    $"src/{taskTitle}-implementation.md",
+                    $"## Implementation\n\n{implementation}",
+                    "Add implementation",
+                    ct);
+            }
+
+            // Post summary as PR comment
+            var fileSummary = codeFiles.Count > 0
+                ? $"**Files committed:** {codeFiles.Count}\n" + string.Join("\n", codeFiles.Select(f => $"- `{f.Path}`"))
+                : "Raw implementation committed (could not parse structured files)";
+
+            var comment = $"## Implementation Complete\n\n" +
                           $"**Junior Engineer:** {Identity.DisplayName}\n" +
                           $"**Self-Validation:** {(isValid ? "✅ Passed" : "⚠️ Best effort (review carefully)")}\n\n" +
-                          $"{implementation}";
+                          $"{fileSummary}";
 
             await _github.AddPullRequestCommentAsync(pr.Number, comment, ct);
 
@@ -477,10 +515,12 @@ public class JuniorEngineerAgent : AgentBase
 
             var architectureDoc = await _projectFiles.GetArchitectureDocAsync(ct);
             var pmSpecDoc = await _projectFiles.GetPMSpecAsync(ct);
+            var techStack = _config.Project.TechStack;
 
             var history = new ChatHistory();
             history.AddSystemMessage(
-                "You are a Junior Software Engineer addressing review feedback on a pull request. " +
+                $"You are a Junior Software Engineer addressing review feedback on a pull request. " +
+                $"The project uses {techStack}. " +
                 "The reviewer has requested changes. Carefully read the feedback, understand what needs " +
                 "to be fixed, and produce an updated implementation that addresses ALL the feedback points. " +
                 "Be thorough — every feedback item must be resolved. Ask for help if truly stuck.");
@@ -491,23 +531,34 @@ public class JuniorEngineerAgent : AgentBase
                 $"## Architecture (Summary)\n{TruncateForContext(architectureDoc)}\n\n" +
                 $"## PM Specification (Summary)\n{TruncateForContext(pmSpecDoc)}\n\n" +
                 $"## Review Feedback from {rework.Reviewer}\n{rework.Feedback}\n\n" +
-                "Please provide an updated implementation that addresses all the feedback. " +
-                "Include complete file contents for any changed files.");
+                "Please provide the corrected files that address all the feedback. " +
+                "Output each file using this exact format:\n\n" +
+                "FILE: path/to/file.ext\n```language\n<file content>\n```\n\n" +
+                "Include the COMPLETE content of each changed file.");
 
             var response = await chat.GetChatMessageContentAsync(history, cancellationToken: ct);
             var updatedImpl = response.Content?.Trim() ?? "";
 
             if (!string.IsNullOrWhiteSpace(updatedImpl))
             {
-                var taskTitle = PullRequestWorkflow.ParseTaskTitleFromTitle(pr.Title);
-                await _prWorkflow.CommitFixesToPRAsync(
-                    pr.Number,
-                    $"docs/{taskTitle}-rework.md",
-                    $"## Rework: Addressing Review Feedback\n\n" +
-                    $"**Reviewer:** {rework.Reviewer}\n\n" +
-                    $"### Changes Made\n{updatedImpl}",
-                    $"Address review feedback from {rework.Reviewer}",
-                    ct);
+                var codeFiles = AgentSquad.Core.AI.CodeFileParser.ParseFiles(updatedImpl);
+                if (codeFiles.Count > 0)
+                {
+                    await _prWorkflow.CommitCodeFilesToPRAsync(
+                        pr.Number, codeFiles, "Address review feedback", ct);
+                }
+                else
+                {
+                    var taskTitle = PullRequestWorkflow.ParseTaskTitleFromTitle(pr.Title);
+                    await _prWorkflow.CommitFixesToPRAsync(
+                        pr.Number,
+                        $"src/{taskTitle}-rework.md",
+                        $"## Rework: Addressing Review Feedback\n\n" +
+                        $"**Reviewer:** {rework.Reviewer}\n\n" +
+                        $"### Changes Made\n{updatedImpl}",
+                        $"Address review feedback from {rework.Reviewer}",
+                        ct);
+                }
 
                 await _prWorkflow.MarkReadyForReviewAsync(pr.Number, Identity.DisplayName, ct);
 

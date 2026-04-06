@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using AgentSquad.Core.AI;
 using AgentSquad.Core.GitHub.Models;
 using Microsoft.Extensions.Logging;
 
@@ -570,6 +571,42 @@ public partial class PullRequestWorkflow
             prNumber, pr.HeadBranch, filePath);
 
         await _github.CreateOrUpdateFileAsync(filePath, content, commitMessage, pr.HeadBranch, ct);
+    }
+
+    /// <summary>
+    /// Commit multiple source code files to a PR's branch in sequence.
+    /// Used by engineering agents to commit parsed code files from AI output.
+    /// </summary>
+    public async Task CommitCodeFilesToPRAsync(
+        int prNumber,
+        IReadOnlyList<AI.CodeFileParser.CodeFile> files,
+        string commitMessagePrefix,
+        CancellationToken ct = default)
+    {
+        var pr = await _github.GetPullRequestAsync(prNumber, ct);
+        if (pr is null)
+            throw new InvalidOperationException($"PR #{prNumber} not found");
+
+        _logger.LogInformation(
+            "Committing {Count} code files to PR #{Number} branch {Branch}",
+            files.Count, prNumber, pr.HeadBranch);
+
+        foreach (var file in files)
+        {
+            try
+            {
+                await _github.CreateOrUpdateFileAsync(
+                    file.Path, file.Content,
+                    $"{commitMessagePrefix}: {file.Path}",
+                    pr.HeadBranch, ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "Failed to commit file {Path} to PR #{Number}, continuing with remaining files",
+                    file.Path, prNumber);
+            }
+        }
     }
 
     /// <summary>
