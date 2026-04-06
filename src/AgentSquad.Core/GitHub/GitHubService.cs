@@ -398,6 +398,34 @@ public class GitHubService : IGitHubService
         }
     }
 
+    public async Task DeleteFileAsync(
+        string path, string commitMessage, string? branch = null, CancellationToken ct = default)
+    {
+        try
+        {
+            var existing = branch is not null
+                ? await _client.Repository.Content.GetAllContentsByRef(_owner, _repo, path, branch)
+                : await _client.Repository.Content.GetAllContents(_owner, _repo, path);
+
+            var sha = existing.FirstOrDefault()?.Sha;
+            if (sha is null) return;
+
+            var delete = new DeleteFileRequest(commitMessage, sha);
+            if (branch is not null) delete.Branch = branch;
+            await _client.Repository.Content.DeleteFile(_owner, _repo, path, delete);
+            _logger.LogDebug("Deleted file: {Path}", path);
+        }
+        catch (NotFoundException)
+        {
+            // File doesn't exist — nothing to delete
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to delete file: {Path}", path);
+            throw;
+        }
+    }
+
     // Branches
 
     public async Task CreateBranchAsync(string branchName, string fromBranch = "main", CancellationToken ct = default)

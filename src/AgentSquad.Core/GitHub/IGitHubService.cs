@@ -26,6 +26,7 @@ public interface IGitHubService
     // File Management
     Task<string?> GetFileContentAsync(string path, string? branch = null, CancellationToken ct = default);
     Task CreateOrUpdateFileAsync(string path, string content, string commitMessage, string? branch = null, CancellationToken ct = default);
+    Task DeleteFileAsync(string path, string commitMessage, string? branch = null, CancellationToken ct = default);
 
     // Branches
     Task CreateBranchAsync(string branchName, string fromBranch = "main", CancellationToken ct = default);
