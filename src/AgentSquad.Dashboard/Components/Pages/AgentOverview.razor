@@ -96,9 +96,24 @@ else
                             <span class="detail-value task-idle">Idle</span>
                         }
                     </div>
-                    <div class="agent-detail">
+                    <div class="agent-detail" @onclick:stopPropagation="true">
                         <span class="detail-label">Model</span>
-                        <span class="detail-value">@agent.ModelTier</span>
+                        @if (_editingModelAgentId == agent.Id)
+                        {
+                            <select class="model-select" value="@agent.ActiveModel"
+                                    @onchange="(e) => OnModelSelected(agent.Id, e)">
+                                @foreach (var model in _availableModels)
+                                {
+                                    <option value="@model" selected="@(model == agent.ActiveModel)">@model</option>
+                                }
+                            </select>
+                            <button class="model-edit-btn" @onclick="() => _editingModelAgentId = null" title="Cancel">✕</button>
+                        }
+                        else
+                        {
+                            <span class="detail-value">@agent.ActiveModel</span>
+                            <button class="model-edit-btn" @onclick="() => _editingModelAgentId = agent.Id" title="Change model">✏️</button>
+                        }
                     </div>
                     @if (agent.Status == AgentStatus.Working)
                     {
@@ -172,9 +187,14 @@ else
     private string? _errorModalAgentName;
     private List<AgentLogEntry> _errorEntries = [];
 
+    // Model editing state
+    private string? _editingModelAgentId;
+    private IReadOnlyList<string> _availableModels = [];
+
     protected override void OnInitialized()
     {
         RefreshData();
+        _availableModels = DataService.GetAvailableModels();
         DataService.OnChange += OnDataChanged;
     }
 
@@ -241,6 +261,16 @@ else
 
     private static string TruncateTask(string text) =>
         text.Length <= 40 ? text : string.Concat(text.AsSpan(0, 37), "...");
+
+    private void OnModelSelected(string agentId, ChangeEventArgs e)
+    {
+        var newModel = e.Value?.ToString();
+        if (!string.IsNullOrEmpty(newModel))
+        {
+            DataService.SetAgentModel(agentId, newModel);
+            _editingModelAgentId = null;
+        }
+    }
 
     private void ShowErrors(string agentId)
     {

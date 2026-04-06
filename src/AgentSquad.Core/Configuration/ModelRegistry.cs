@@ -13,10 +13,29 @@ public class ModelRegistry
 {
     private readonly Dictionary<string, ModelConfig> _modelConfigs;
     private readonly Dictionary<string, Kernel> _kernelCache = new();
+    private readonly Dictionary<string, string> _agentModelOverrides = new();
     private readonly ILoggerFactory _loggerFactory;
     private readonly CopilotCliConfig _cliConfig;
     private readonly CopilotCliProcessManager? _processManager;
     private readonly HashSet<string> _cliFallbackTiers = new();
+    private readonly object _overrideLock = new();
+
+    /// <summary>Well-known models available via Copilot CLI.</summary>
+    public static readonly IReadOnlyList<string> AvailableCopilotModels =
+    [
+        "gpt-5.4-mini",
+        "gpt-5-mini",
+        "gpt-4.1",
+        "gpt-5.1",
+        "gpt-5.2",
+        "gpt-5.4",
+        "claude-haiku-4.5",
+        "claude-sonnet-4",
+        "claude-sonnet-4.5",
+        "claude-sonnet-4.6",
+        "claude-opus-4.5",
+        "claude-opus-4.6",
+    ];
 
     public ModelRegistry(
         AgentSquadConfig config,
@@ -33,23 +52,39 @@ public class ModelRegistry
     public event EventHandler<FallbackTriggeredEventArgs>? FallbackTriggered;
 
     /// <summary>Get or create a Kernel instance for the given model tier.</summary>
-    public Kernel GetKernel(string modelTier)
+    public Kernel GetKernel(string modelTier) => GetKernel(modelTier, agentId: null);
+
+    /// <summary>Get or create a Kernel for a tier, with optional per-agent model override.</summary>
+    public Kernel GetKernel(string modelTier, string? agentId)
     {
-        if (_kernelCache.TryGetValue(modelTier, out var cached))
+        // Check for per-agent model override
+        string? modelOverride = null;
+        if (agentId is not null)
+        {
+            lock (_overrideLock)
+            {
+                _agentModelOverrides.TryGetValue(agentId, out modelOverride);
+            }
+        }
+
+        // Cache key includes override model so different agents can have different kernels
+        var cacheKey = modelOverride is not null ? $"{modelTier}:{modelOverride}" : modelTier;
+
+        if (_kernelCache.TryGetValue(cacheKey, out var cached))
             return cached;
 
         Kernel? kernel = null;
 
-        // Try Copilot CLI first if enabled and available (and not already fallen back for this tier)
+        // Try Copilot CLI first if enabled and available
         if (_cliConfig.Enabled && _processManager?.IsAvailable == true && !_cliFallbackTiers.Contains(modelTier))
         {
-            kernel = BuildCopilotCliKernel(modelTier);
+            kernel = BuildCopilotCliKernel(modelTier, modelOverride);
         }
 
         // Fall back to API-key provider
         kernel ??= BuildApiKeyKernel(modelTier);
 
-        _kernelCache[modelTier] = kernel;
+        _kernelCache[cacheKey] = kernel;
         return kernel;
     }
 
@@ -61,6 +96,46 @@ public class ModelRegistry
 
     /// <summary>List available model tiers.</summary>
     public IReadOnlyList<string> GetAvailableTiers() => _modelConfigs.Keys.ToList().AsReadOnly();
+
+    /// <summary>Get the effective model name for a specific agent (override or default).</summary>
+    public string GetEffectiveModel(string agentId)
+    {
+        lock (_overrideLock)
+        {
+            return _agentModelOverrides.TryGetValue(agentId, out var overrideModel)
+                ? overrideModel
+                : _cliConfig.ModelName;
+        }
+    }
+
+    /// <summary>Set a per-agent model override. Takes effect on the agent's next AI call.</summary>
+    public void SetAgentModelOverride(string agentId, string modelName)
+    {
+        lock (_overrideLock)
+        {
+            _agentModelOverrides[agentId] = modelName;
+        }
+
+        var logger = _loggerFactory.CreateLogger<ModelRegistry>();
+        logger.LogInformation("Model override set for agent '{AgentId}': {Model}", agentId, modelName);
+        ModelOverrideChanged?.Invoke(this, new ModelOverrideChangedEventArgs
+        {
+            AgentId = agentId,
+            NewModel = modelName
+        });
+    }
+
+    /// <summary>Clear a per-agent model override (reverts to default).</summary>
+    public void ClearAgentModelOverride(string agentId)
+    {
+        lock (_overrideLock)
+        {
+            _agentModelOverrides.Remove(agentId);
+        }
+    }
+
+    /// <summary>Fired when a per-agent model override is changed.</summary>
+    public event EventHandler<ModelOverrideChangedEventArgs>? ModelOverrideChanged;
 
     /// <summary>
     /// Mark a tier as needing API-key fallback. Called when Copilot CLI fails at runtime.
@@ -81,8 +156,9 @@ public class ModelRegistry
         });
     }
 
-    private Kernel BuildCopilotCliKernel(string modelTier)
+    private Kernel BuildCopilotCliKernel(string modelTier, string? modelOverride = null)
     {
+        var effectiveModel = modelOverride ?? _cliConfig.ModelName;
         var builder = Kernel.CreateBuilder();
         builder.Services.AddSingleton(_loggerFactory);
 
@@ -92,11 +168,11 @@ public class ModelRegistry
             _loggerFactory.CreateLogger<CopilotCliChatCompletionService>());
 
         builder.Services.AddKeyedSingleton<Microsoft.SemanticKernel.ChatCompletion.IChatCompletionService>(
-            _cliConfig.ModelName, cliService);
+            effectiveModel, cliService);
 
         var logger = _loggerFactory.CreateLogger<ModelRegistry>();
         logger.LogInformation("Tier '{Tier}' using Copilot CLI provider (model: {Model})",
-            modelTier, _cliConfig.ModelName);
+            modelTier, effectiveModel);
 
         return builder.Build();
     }
@@ -152,4 +228,10 @@ public class FallbackTriggeredEventArgs : EventArgs
 {
     public required string ModelTier { get; init; }
     public required string Reason { get; init; }
+}
+
+public class ModelOverrideChangedEventArgs : EventArgs
+{
+    public required string AgentId { get; init; }
+    public required string NewModel { get; init; }
 }

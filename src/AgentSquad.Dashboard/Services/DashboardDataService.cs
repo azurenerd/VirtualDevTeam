@@ -1,4 +1,5 @@
 using AgentSquad.Core.Agents;
+using AgentSquad.Core.Configuration;
 using AgentSquad.Dashboard.Hubs;
 using AgentSquad.Orchestrator;
 using Microsoft.AspNetCore.SignalR;
@@ -15,6 +16,7 @@ public sealed record AgentSnapshot
     public required DateTime CreatedAt { get; init; }
     public string? AssignedPullRequest { get; init; }
     public string? StatusReason { get; init; }
+    public string ActiveModel { get; init; } = "";
     public DateTime LastStatusChange { get; set; } = DateTime.UtcNow;
     public int ErrorCount { get; init; }
 }
@@ -24,6 +26,7 @@ public sealed class DashboardDataService : BackgroundService
     private readonly AgentRegistry _registry;
     private readonly HealthMonitor _healthMonitor;
     private readonly DeadlockDetector _deadlockDetector;
+    private readonly ModelRegistry _modelRegistry;
     private readonly IHubContext<AgentHub> _hubContext;
     private readonly ILogger<DashboardDataService> _logger;
 
@@ -38,12 +41,14 @@ public sealed class DashboardDataService : BackgroundService
         AgentRegistry registry,
         HealthMonitor healthMonitor,
         DeadlockDetector deadlockDetector,
+        ModelRegistry modelRegistry,
         IHubContext<AgentHub> hubContext,
         ILogger<DashboardDataService> logger)
     {
         _registry = registry;
         _healthMonitor = healthMonitor;
         _deadlockDetector = deadlockDetector;
+        _modelRegistry = modelRegistry;
         _hubContext = hubContext;
         _logger = logger;
     }
@@ -131,6 +136,24 @@ public sealed class DashboardDataService : BackgroundService
             agent.ClearErrors();
 
         _ = _hubContext.Clients.All.SendAsync("AgentErrorsCleared", agentId);
+        NotifyStateChanged();
+    }
+
+    /// <summary>Get the list of available model names for the dropdown.</summary>
+    public IReadOnlyList<string> GetAvailableModels() => ModelRegistry.AvailableCopilotModels;
+
+    /// <summary>Change the model for a specific agent at runtime.</summary>
+    public void SetAgentModel(string agentId, string modelName)
+    {
+        _modelRegistry.SetAgentModelOverride(agentId, modelName);
+
+        lock (_cacheLock)
+        {
+            if (_agentCache.TryGetValue(agentId, out var snapshot))
+                _agentCache[agentId] = snapshot with { ActiveModel = modelName };
+        }
+
+        _ = _hubContext.Clients.All.SendAsync("AgentModelChanged", new { AgentId = agentId, Model = modelName });
         NotifyStateChanged();
     }
 
@@ -249,7 +272,7 @@ public sealed class DashboardDataService : BackgroundService
         NotifyStateChanged();
     }
 
-    private static AgentSnapshot ToSnapshot(IAgent agent) => new()
+    private AgentSnapshot ToSnapshot(IAgent agent) => new()
     {
         Id = agent.Identity.Id,
         DisplayName = agent.Identity.DisplayName,
@@ -259,6 +282,7 @@ public sealed class DashboardDataService : BackgroundService
         StatusReason = agent.StatusReason,
         CreatedAt = agent.Identity.CreatedAt,
         AssignedPullRequest = agent.Identity.AssignedPullRequest,
+        ActiveModel = _modelRegistry.GetEffectiveModel(agent.Identity.Id),
         LastStatusChange = DateTime.UtcNow,
         ErrorCount = agent.RecentErrors.Count
     };

@@ -210,7 +210,7 @@ public class ResearcherAgent : AgentBase
     private async Task<ResearchResult> ConductResearchAsync(
         ResearchDirective directive, CancellationToken ct)
     {
-        var kernel = _modelRegistry.GetKernel(Identity.ModelTier);
+        var kernel = _modelRegistry.GetKernel(Identity.ModelTier, Identity.Id);
         var chat = kernel.GetRequiredService<IChatCompletionService>();
 
         // Turn 1: Break down the research topic into sub-questions

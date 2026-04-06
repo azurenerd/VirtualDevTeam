@@ -47,7 +47,10 @@ public sealed class CopilotCliChatCompletionService : IChatCompletionService
         var prompt = FormatChatHistoryAsPrompt(chatHistory);
         _logger.LogDebug("Sending prompt to copilot CLI ({Length} chars)", prompt.Length);
 
-        var result = await _processManager.ExecutePromptAsync(prompt, cancellationToken);
+        // Allow per-request model override via PromptExecutionSettings.ModelId
+        var modelOverride = executionSettings?.ModelId;
+
+        var result = await _processManager.ExecutePromptAsync(prompt, modelOverride, cancellationToken);
 
         if (!result.IsSuccess)
         {

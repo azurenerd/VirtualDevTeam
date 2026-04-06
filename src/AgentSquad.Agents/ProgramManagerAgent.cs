@@ -667,7 +667,7 @@ public class ProgramManagerAgent : AgentBase
             var projectDescription = _config.Project.Description;
             var researchDoc = await _projectFiles.GetResearchDocAsync(ct);
 
-            var kernel = _modelRegistry.GetKernel(Identity.ModelTier);
+            var kernel = _modelRegistry.GetKernel(Identity.ModelTier, Identity.Id);
             var chat = kernel.GetRequiredService<IChatCompletionService>();
 
             var history = new ChatHistory();
@@ -764,7 +764,7 @@ public class ProgramManagerAgent : AgentBase
     {
         try
         {
-            var kernel = _modelRegistry.GetKernel(Identity.ModelTier);
+            var kernel = _modelRegistry.GetKernel(Identity.ModelTier, Identity.Id);
             var chat = kernel.GetRequiredService<IChatCompletionService>();
 
             var history = new ChatHistory();
@@ -799,7 +799,7 @@ public class ProgramManagerAgent : AgentBase
     {
         try
         {
-            var kernel = _modelRegistry.GetKernel(Identity.ModelTier);
+            var kernel = _modelRegistry.GetKernel(Identity.ModelTier, Identity.Id);
             var chat = kernel.GetRequiredService<IChatCompletionService>();
 
             var pmSpec = await _projectFiles.GetPMSpecAsync(ct);

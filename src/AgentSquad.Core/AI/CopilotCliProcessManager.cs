@@ -58,6 +58,14 @@ public sealed class CopilotCliProcessManager : IHostedService, IDisposable
         string prompt,
         CancellationToken ct = default)
     {
+        return await ExecutePromptAsync(prompt, modelOverride: null, ct);
+    }
+
+    public async Task<CopilotCliResult> ExecutePromptAsync(
+        string prompt,
+        string? modelOverride,
+        CancellationToken ct = default)
+    {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
         if (!_copilotAvailable)
@@ -67,7 +75,7 @@ public sealed class CopilotCliProcessManager : IHostedService, IDisposable
         await _concurrencyLimiter.WaitAsync(ct);
         try
         {
-            return await RunProcessAsync(prompt, ct);
+            return await RunProcessAsync(prompt, modelOverride, ct);
         }
         finally
         {
@@ -75,9 +83,9 @@ public sealed class CopilotCliProcessManager : IHostedService, IDisposable
         }
     }
 
-    private async Task<CopilotCliResult> RunProcessAsync(string prompt, CancellationToken ct)
+    private async Task<CopilotCliResult> RunProcessAsync(string prompt, string? modelOverride, CancellationToken ct)
     {
-        var args = BuildArguments();
+        var args = BuildArguments(modelOverride);
 
         var psi = new ProcessStartInfo
         {
@@ -233,7 +241,7 @@ public sealed class CopilotCliProcessManager : IHostedService, IDisposable
         return output.ToString();
     }
 
-    private string BuildArguments()
+    private string BuildArguments(string? modelOverride = null)
     {
         var args = new StringBuilder();
 
@@ -251,8 +259,9 @@ public sealed class CopilotCliProcessManager : IHostedService, IDisposable
         if (_config.JsonOutput)
             args.Append("--output-format json ");
 
-        // Model selection
-        args.Append($"--model {_config.ModelName} ");
+        // Model selection (per-agent override takes precedence)
+        var model = modelOverride ?? _config.ModelName;
+        args.Append($"--model {model} ");
 
         // Reasoning effort
         if (!string.IsNullOrEmpty(_config.ReasoningEffort))

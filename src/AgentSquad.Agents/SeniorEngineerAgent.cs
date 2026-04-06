@@ -123,7 +123,7 @@ public class SeniorEngineerAgent : AgentBase
             var researchDoc = await _projectFiles.GetResearchDocAsync(ct);
             var pmSpecDoc = await _projectFiles.GetPMSpecAsync(ct);
 
-            var kernel = _modelRegistry.GetKernel(Identity.ModelTier);
+            var kernel = _modelRegistry.GetKernel(Identity.ModelTier, Identity.Id);
             var chat = kernel.GetRequiredService<IChatCompletionService>();
 
             // Turn 1: Analyze requirements and plan approach

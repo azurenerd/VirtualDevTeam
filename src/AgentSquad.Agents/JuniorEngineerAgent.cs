@@ -126,7 +126,7 @@ public class JuniorEngineerAgent : AgentBase
             var pmSpecDoc = await _projectFiles.GetPMSpecAsync(ct);
             var taskTitle = PullRequestWorkflow.ParseTaskTitleFromTitle(pr.Title) ?? pr.Title;
 
-            var kernel = _modelRegistry.GetKernel(Identity.ModelTier);
+            var kernel = _modelRegistry.GetKernel(Identity.ModelTier, Identity.Id);
             var chat = kernel.GetRequiredService<IChatCompletionService>();
 
             // Step 1: Break down the task into smaller steps

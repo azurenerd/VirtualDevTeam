@@ -201,7 +201,7 @@ public class ArchitectAgent : AgentBase
         var research = await _projectFiles.GetResearchDocAsync(ct);
 
         // 2. Use Semantic Kernel multi-turn conversation to design architecture
-        var kernel = _modelRegistry.GetKernel(Identity.ModelTier);
+        var kernel = _modelRegistry.GetKernel(Identity.ModelTier, Identity.Id);
         var chat = kernel.GetRequiredService<IChatCompletionService>();
 
         var history = new ChatHistory();
@@ -391,7 +391,7 @@ public class ArchitectAgent : AgentBase
     {
         try
         {
-            var kernel = _modelRegistry.GetKernel(Identity.ModelTier);
+            var kernel = _modelRegistry.GetKernel(Identity.ModelTier, Identity.Id);
             var chat = kernel.GetRequiredService<IChatCompletionService>();
 
             var architectureDoc = await _projectFiles.GetArchitectureDocAsync(ct);

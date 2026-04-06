@@ -1696,6 +1696,42 @@ main {
 }
 
 /* ─── Error badge on agent cards ─── */
+/* ─── Model selector in agent cards ─── */
+.model-select {
+    background: var(--bg-primary, #0d1117);
+    color: var(--text-primary, #e6edf3);
+    border: 1px solid var(--accent-blue, #388bfd);
+    border-radius: 0.25rem;
+    padding: 0.15rem 0.3rem;
+    font-size: 0.75rem;
+    font-family: var(--font-mono, monospace);
+    outline: none;
+    max-width: 150px;
+    cursor: pointer;
+}
+
+.model-select:focus {
+    box-shadow: 0 0 0 2px rgba(56, 139, 253, 0.3);
+}
+
+.model-edit-btn {
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    font-size: 0.7rem;
+    padding: 0 0.25rem;
+    color: var(--text-muted, #8b949e);
+    opacity: 0.6;
+    transition: opacity 0.15s;
+    vertical-align: middle;
+}
+
+.model-edit-btn:hover {
+    opacity: 1;
+    color: var(--text-primary, #e6edf3);
+}
+
+/* ─── Error badge on agent cards ─── */
 .error-badge-row {
     margin-top: 0.25rem;
 }

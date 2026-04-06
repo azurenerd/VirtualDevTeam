@@ -182,7 +182,7 @@ public class PrincipalEngineerAgent : AgentBase
         var researchDoc = await _projectFiles.GetResearchDocAsync(ct);
         var pmSpec = await _projectFiles.GetPMSpecAsync(ct);
 
-        var kernel = _modelRegistry.GetKernel(Identity.ModelTier);
+        var kernel = _modelRegistry.GetKernel(Identity.ModelTier, Identity.Id);
         var chat = kernel.GetRequiredService<IChatCompletionService>();
 
         var history = new ChatHistory();
@@ -435,7 +435,7 @@ public class PrincipalEngineerAgent : AgentBase
             }
 
             // Use Semantic Kernel to produce the implementation
-            var kernel = _modelRegistry.GetKernel(Identity.ModelTier);
+            var kernel = _modelRegistry.GetKernel(Identity.ModelTier, Identity.Id);
             var chat = kernel.GetRequiredService<IChatCompletionService>();
 
             var architectureDoc = await _projectFiles.GetArchitectureDocAsync(ct);
@@ -710,7 +710,7 @@ public class PrincipalEngineerAgent : AgentBase
     {
         try
         {
-            var kernel = _modelRegistry.GetKernel(Identity.ModelTier);
+            var kernel = _modelRegistry.GetKernel(Identity.ModelTier, Identity.Id);
             var chat = kernel.GetRequiredService<IChatCompletionService>();
 
             var architectureDoc = await _projectFiles.GetArchitectureDocAsync(ct);

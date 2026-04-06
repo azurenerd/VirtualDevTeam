@@ -160,7 +160,7 @@ public class TestEngineerAgent : AgentBase
 
     private async Task<string> GenerateTestPlanAsync(AgentPullRequest pr, CancellationToken ct)
     {
-        var kernel = _modelRegistry.GetKernel(Identity.ModelTier);
+        var kernel = _modelRegistry.GetKernel(Identity.ModelTier, Identity.Id);
         var modelConfig = _modelRegistry.GetModelConfig(Identity.ModelTier);
 
         var prompt = $"""
