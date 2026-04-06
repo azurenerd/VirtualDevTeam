@@ -109,6 +109,13 @@ public class CopilotCliConfig
     /// <summary>Model to request from Copilot CLI (e.g., "claude-opus-4.6").</summary>
     public string ModelName { get; set; } = "claude-opus-4.6";
 
+    /// <summary>Alias for ModelName (backwards compatibility with appsettings).</summary>
+    public string DefaultModel
+    {
+        get => ModelName;
+        set => ModelName = value;
+    }
+
     /// <summary>
     /// Automatically approve all interactive prompts (y/n, selections, etc.).
     /// When true, the interactive watchdog auto-responds to unexpected prompts.
