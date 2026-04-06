@@ -22,6 +22,7 @@ public class ProgramManagerAgent : AgentBase
     private readonly ProjectFileManager _projectFiles;
     private readonly ModelRegistry _modelRegistry;
     private readonly AgentSpawnManager _spawnManager;
+    private readonly AgentRegistry _registry;
     private readonly AgentSquadConfig _config;
 
     private readonly Dictionary<string, AgentTracking> _trackedAgents = new();
@@ -43,6 +44,7 @@ public class ProgramManagerAgent : AgentBase
         ProjectFileManager projectFiles,
         ModelRegistry modelRegistry,
         AgentSpawnManager spawnManager,
+        AgentRegistry registry,
         IOptions<AgentSquadConfig> config,
         ILogger<ProgramManagerAgent> logger)
         : base(identity, logger)
@@ -54,6 +56,7 @@ public class ProgramManagerAgent : AgentBase
         _projectFiles = projectFiles ?? throw new ArgumentNullException(nameof(projectFiles));
         _modelRegistry = modelRegistry ?? throw new ArgumentNullException(nameof(modelRegistry));
         _spawnManager = spawnManager ?? throw new ArgumentNullException(nameof(spawnManager));
+        _registry = registry ?? throw new ArgumentNullException(nameof(registry));
         _config = config?.Value ?? throw new ArgumentNullException(nameof(config));
     }
 
@@ -128,6 +131,8 @@ public class ProgramManagerAgent : AgentBase
     /// One-time project kickoff: reads the project description from config,
     /// creates a GitHub Issue for the Researcher, and sends a TaskAssignmentMessage
     /// via the message bus to begin the Research phase.
+    /// Skips research kickoff entirely if Research.md already has meaningful content.
+    /// Also restores any previously-spawned engineers from TeamMembers.md.
     /// </summary>
     private async Task KickOffProjectAsync(CancellationToken ct)
     {
@@ -146,6 +151,41 @@ public class ProgramManagerAgent : AgentBase
 
             Logger.LogInformation(
                 "Kicking off project: {ProjectName}", projectName);
+
+            // Ensure TeamMembers.md exists with core agents
+            await EnsureTeamMembersDocAsync(ct);
+
+            // Restore any previously-spawned engineers from TeamMembers.md
+            await RestoreEngineersFromTeamMembersAsync(ct);
+
+            // Check if Research.md already has meaningful content — skip kickoff if so
+            // Note: the placeholder "No research has been documented yet" may still appear at top
+            // even after research is appended below it, so check for actual research section headings
+            var existingResearch = await _projectFiles.GetResearchDocAsync(ct);
+            var hasResearchContent = !string.IsNullOrWhiteSpace(existingResearch) &&
+                (existingResearch.Contains("## Research technology stack", StringComparison.OrdinalIgnoreCase) ||
+                 existingResearch.Contains("### Summary", StringComparison.OrdinalIgnoreCase) ||
+                 (existingResearch.Contains("## ", StringComparison.Ordinal) &&
+                  !existingResearch.Trim().Equals("# Research\n\n_No research has been documented yet._", StringComparison.OrdinalIgnoreCase)));
+
+            if (hasResearchContent)
+            {
+                Logger.LogInformation(
+                    "Research.md already exists with content — skipping research kickoff");
+
+                // Still signal downstream agents so they can proceed
+                await _messageBus.PublishAsync(new StatusUpdateMessage
+                {
+                    FromAgentId = Identity.Id,
+                    ToAgentId = "*",
+                    MessageType = "ResearchComplete",
+                    NewStatus = AgentStatus.Idle,
+                    Details = "Research already exists from prior run"
+                }, ct);
+
+                UpdateStatus(AgentStatus.Idle, "Project kickoff complete (research exists), monitoring team");
+                return;
+            }
 
             // Build the research guidance — use custom prompt if provided, otherwise generate a rich default
             var researchGuidance = GetResearchGuidance(projectName, projectDescription);
@@ -275,6 +315,157 @@ public class ProgramManagerAgent : AgentBase
             Produce a structured **Research.md** document with your findings covering all sections above.
             Be specific, opinionated, and actionable — the Architect and Engineers will build directly from this.
             """;
+    }
+
+    /// <summary>
+    /// Ensure TeamMembers.md exists in the repo with at least the core agents listed.
+    /// Called once at startup so the document is always present for tracking.
+    /// </summary>
+    private async Task EnsureTeamMembersDocAsync(CancellationToken ct)
+    {
+        try
+        {
+            var content = await _github.GetFileContentAsync("TeamMembers.md", null, ct);
+            if (content is not null)
+            {
+                Logger.LogDebug("TeamMembers.md already exists");
+                return;
+            }
+
+            // Create the initial TeamMembers.md with core agents
+            var coreAgents = _registry.GetAllAgents()
+                .Where(a => a.Identity.Role is AgentRole.ProgramManager or AgentRole.Researcher
+                    or AgentRole.Architect or AgentRole.PrincipalEngineer or AgentRole.TestEngineer)
+                .ToList();
+
+            var doc = """
+                # Team Members
+
+                | Name | Role | Status | Model Tier | Current PR | Since | Communication |
+                |------|------|--------|------------|------------|-------|---------------|
+                """;
+
+            foreach (var agent in coreAgents)
+            {
+                var since = agent.Identity.CreatedAt.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+                doc += $"\n| {agent.Identity.DisplayName} | {agent.Identity.Role} | Online | {agent.Identity.ModelTier} | — | {since} | Internal Bus |";
+            }
+
+            doc += "\n";
+
+            await _github.CreateOrUpdateFileAsync("TeamMembers.md", doc, "Initialize TeamMembers.md with core agents", null, ct);
+            Logger.LogInformation("Created TeamMembers.md with {Count} core agents", coreAgents.Count);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to ensure TeamMembers.md exists");
+        }
+    }
+
+    /// <summary>
+    /// Reads TeamMembers.md and re-spawns any Senior/Junior Engineers that were
+    /// previously active but are no longer running (e.g., after a restart).
+    /// Matches engineers by display name and restores their task assignments from the EngineeringPlan.
+    /// </summary>
+    private async Task RestoreEngineersFromTeamMembersAsync(CancellationToken ct)
+    {
+        try
+        {
+            var teamDoc = await _projectFiles.GetTeamMembersAsync(ct);
+            var engineeringPlan = await _projectFiles.GetEngineeringPlanAsync(ct);
+            var lines = teamDoc.Split('\n');
+            var restoredCount = 0;
+
+            foreach (var line in lines)
+            {
+                if (!line.StartsWith('|') || line.Contains("---") || line.Contains("Name"))
+                    continue;
+
+                var columns = line.Split('|', StringSplitOptions.RemoveEmptyEntries);
+                if (columns.Length < 3)
+                    continue;
+
+                var name = columns[0].Trim();
+                var roleText = columns[1].Trim();
+
+                // Only restore Senior/Junior engineers — core agents are already spawned by the worker
+                AgentRole? role = roleText switch
+                {
+                    "SeniorEngineer" => AgentRole.SeniorEngineer,
+                    "JuniorEngineer" => AgentRole.JuniorEngineer,
+                    _ => null
+                };
+
+                if (role is null)
+                    continue;
+
+                // Check if an agent with this name is already running
+                var existingAgents = _registry.GetAgentsByRole(role.Value);
+                if (existingAgents.Any(a => a.Identity.DisplayName.Equals(name, StringComparison.OrdinalIgnoreCase)))
+                {
+                    Logger.LogDebug("Engineer '{Name}' is already running, skipping restore", name);
+                    continue;
+                }
+
+                Logger.LogInformation("Restoring engineer '{Name}' ({Role}) from TeamMembers.md", name, role);
+
+                var spawnedIdentity = await _spawnManager.SpawnAgentAsync(role.Value, ct);
+                if (spawnedIdentity is null)
+                {
+                    Logger.LogWarning("Failed to restore engineer '{Name}' — spawn limit reached", name);
+                    continue;
+                }
+
+                restoredCount++;
+                _additionalEngineersHired++;
+
+                // Check if this engineer had a task assigned in the engineering plan
+                var assignedPr = FindAssignedPrFromPlan(engineeringPlan, name);
+                if (assignedPr is not null)
+                {
+                    spawnedIdentity.AssignedPullRequest = assignedPr;
+                    Logger.LogInformation(
+                        "Restored engineer '{Name}' with assigned PR #{Pr}",
+                        name, assignedPr);
+                }
+            }
+
+            if (restoredCount > 0)
+            {
+                Logger.LogInformation("Restored {Count} engineers from TeamMembers.md", restoredCount);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to restore engineers from TeamMembers.md");
+        }
+    }
+
+    /// <summary>
+    /// Parse the EngineeringPlan.md to find a PR number assigned to a specific engineer name.
+    /// </summary>
+    private static string? FindAssignedPrFromPlan(string engineeringPlan, string engineerName)
+    {
+        foreach (var line in engineeringPlan.Split('\n'))
+        {
+            if (!line.StartsWith('|') || line.Contains("---") || line.Contains("Task"))
+                continue;
+
+            var columns = line.Split('|', StringSplitOptions.RemoveEmptyEntries);
+            if (columns.Length < 5)
+                continue;
+
+            var assignedTo = columns[3].Trim();
+            var prColumn = columns[4].Trim();
+
+            if (assignedTo.Equals(engineerName, StringComparison.OrdinalIgnoreCase) &&
+                prColumn.StartsWith('#'))
+            {
+                return prColumn.TrimStart('#');
+            }
+        }
+
+        return null;
     }
 
     private async Task CheckExecutiveResponsesAsync(CancellationToken ct)
@@ -440,6 +631,9 @@ public class ProgramManagerAgent : AgentBase
                         Logger.LogInformation(
                             "Spawned {Role} '{Name}' for resource request #{Number}",
                             requestedRole, spawnedIdentity.DisplayName, issue.Number);
+
+                        // Track in TeamMembers.md for persistence across restarts
+                        await _projectFiles.AddTeamMemberAsync(spawnedIdentity, "Online", ct: ct);
 
                         await _github.AddIssueCommentAsync(issue.Number,
                             $"🚀 **{requestedRole} '{spawnedIdentity.DisplayName}' is now online** " +
@@ -638,6 +832,9 @@ public class ProgramManagerAgent : AgentBase
                 Logger.LogInformation(
                     "Spawned {Role} '{Name}' for bus resource request from {Agent}",
                     message.RequestedRole, spawnedIdentity.DisplayName, message.FromAgentId);
+
+                // Track in TeamMembers.md for persistence across restarts
+                await _projectFiles.AddTeamMemberAsync(spawnedIdentity, "Online", ct: ct);
             }
             else
             {
