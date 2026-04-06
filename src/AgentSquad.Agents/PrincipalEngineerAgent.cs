@@ -226,6 +226,10 @@ public class PrincipalEngineerAgent : EngineerAgentBase
             if (_taskBacklog.Count > 0)
             {
                 Logger.LogInformation("Restored {Count} tasks from existing engineering plan", _taskBacklog.Count);
+
+                // Reconcile task statuses against actual GitHub PR state
+                await ReconcileTaskStatusesAsync(ct);
+
                 _planningComplete = true;
                 UpdateStatus(AgentStatus.Working, $"Recovered {_taskBacklog.Count} tasks from engineering plan");
                 return;
@@ -846,6 +850,55 @@ public class PrincipalEngineerAgent : EngineerAgentBase
         catch (Exception ex)
         {
             Logger.LogWarning(ex, "Failed to check own PR #{PrNumber} status", CurrentPrNumber.Value);
+        }
+    }
+
+    /// <summary>
+    /// After restoring the task backlog from the engineering plan, reconcile task statuses
+    /// against actual GitHub PR state. InProgress tasks whose PRs are merged → Done.
+    /// InProgress tasks with no PR → reset to Pending.
+    /// </summary>
+    private async Task ReconcileTaskStatusesAsync(CancellationToken ct)
+    {
+        try
+        {
+            var myPRs = await PrWorkflow.GetAgentTasksAsync(Identity.DisplayName, ct);
+            var mergedPrNumbers = myPRs
+                .Where(pr => string.Equals(pr.State, "closed", StringComparison.OrdinalIgnoreCase))
+                .Select(pr => pr.Number)
+                .ToHashSet();
+
+            var reconciled = 0;
+            for (var i = 0; i < _taskBacklog.Count; i++)
+            {
+                var task = _taskBacklog[i];
+                if (!string.Equals(task.Status, "InProgress", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                if (task.PullRequestNumber.HasValue && mergedPrNumbers.Contains(task.PullRequestNumber.Value))
+                {
+                    _taskBacklog[i] = task with { Status = "Done" };
+                    Logger.LogInformation("Reconciled task {TaskId} to Done (PR #{PrNumber} merged)",
+                        task.Id, task.PullRequestNumber.Value);
+                    reconciled++;
+                }
+                else if (!task.PullRequestNumber.HasValue)
+                {
+                    _taskBacklog[i] = task with { Status = "Pending" };
+                    Logger.LogInformation("Reconciled task {TaskId} to Pending (no PR found)", task.Id);
+                    reconciled++;
+                }
+            }
+
+            if (reconciled > 0)
+            {
+                Logger.LogInformation("Reconciled {Count} task statuses against GitHub PR state", reconciled);
+                LogActivity("system", $"🔄 Reconciled {reconciled} task statuses from GitHub");
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to reconcile task statuses against GitHub");
         }
     }
 
