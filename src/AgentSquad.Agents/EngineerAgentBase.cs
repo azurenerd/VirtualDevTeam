@@ -171,6 +171,21 @@ public abstract class EngineerAgentBase : AgentBase
                             Identity.AssignedPullRequest = reviewPR.Number.ToString();
                             Logger.LogInformation("{Role} {Name} re-tracking PR #{PrNumber} awaiting review",
                                 Identity.Role, Identity.DisplayName, reviewPR.Number);
+
+                            // Re-broadcast review request so reviewers pick it up after restart
+                            // (bus messages are in-memory and lost on restart)
+                            await MessageBus.PublishAsync(new ReviewRequestMessage
+                            {
+                                FromAgentId = Identity.Id,
+                                ToAgentId = "*",
+                                MessageType = "ReviewRequest",
+                                PrNumber = reviewPR.Number,
+                                PrTitle = reviewPR.Title,
+                                ReviewType = "Recovery"
+                            }, ct);
+                            Logger.LogInformation("{Role} {Name} re-broadcast review request for PR #{PrNumber}",
+                                Identity.Role, Identity.DisplayName, reviewPR.Number);
+                            UpdateStatus(AgentStatus.Idle, $"PR #{reviewPR.Number} awaiting review");
                         }
                         else if (activePR == null)
                         {

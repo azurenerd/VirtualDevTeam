@@ -222,6 +222,7 @@ public class PrincipalEngineerAgent : EngineerAgentBase
             {
                 Logger.LogInformation("Restored {Count} tasks from existing engineering plan", _taskBacklog.Count);
                 _planningComplete = true;
+                UpdateStatus(AgentStatus.Working, $"Recovered {_taskBacklog.Count} tasks from engineering plan");
                 return;
             }
             Logger.LogWarning("Existing EngineeringPlan.md has no tasks — regenerating");

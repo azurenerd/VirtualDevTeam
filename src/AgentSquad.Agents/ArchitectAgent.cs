@@ -51,7 +51,7 @@ public class ArchitectAgent : AgentBase
         _config = config?.Value ?? throw new ArgumentNullException(nameof(config));
     }
 
-    protected override Task OnInitializeAsync(CancellationToken ct)
+    protected override async Task OnInitializeAsync(CancellationToken ct)
     {
         // Only listen for PMSpecReady — NOT generic TaskAssignments.
         // The PM sends a dedicated TaskAssignment after PMSpec is created,
@@ -62,13 +62,32 @@ public class ArchitectAgent : AgentBase
         _subscriptions.Add(_messageBus.Subscribe<ReviewRequestMessage>(
             Identity.Id, HandleReviewRequestAsync));
 
+        // Recovery: check if Architecture.md already exists from a prior run
+        try
+        {
+            var archDoc = await _projectFiles.GetArchitectureDocAsync(ct);
+            if (!string.IsNullOrWhiteSpace(archDoc)
+                && !archDoc.Contains("No architecture document has been created yet", StringComparison.OrdinalIgnoreCase)
+                && archDoc.Length > 200)
+            {
+                _architectureComplete = true;
+                Logger.LogInformation("Architect recovered: Architecture.md already exists, moving to PR review mode");
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to check for existing Architecture.md during init");
+        }
+
         Logger.LogInformation("Architect agent initialized, awaiting PMSpec completion");
-        return Task.CompletedTask;
     }
 
     protected override async Task RunAgentLoopAsync(CancellationToken ct)
     {
-        UpdateStatus(AgentStatus.Idle, "Waiting for PMSpec to be ready");
+        if (_architectureComplete)
+            UpdateStatus(AgentStatus.Idle, "Architecture complete, monitoring PRs");
+        else
+            UpdateStatus(AgentStatus.Idle, "Waiting for PMSpec to be ready");
 
         while (!ct.IsCancellationRequested)
         {
