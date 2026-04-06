@@ -359,42 +359,56 @@ public class GitHubService : IGitHubService
     public async Task CreateOrUpdateFileAsync(
         string path, string content, string commitMessage, string? branch = null, CancellationToken ct = default)
     {
-        try
+        const int maxRetries = 3;
+        for (int attempt = 1; attempt <= maxRetries; attempt++)
         {
-            string? existingSha = null;
-
             try
             {
-                var existing = branch is not null
-                    ? await _client.Repository.Content.GetAllContentsByRef(_owner, _repo, path, branch)
-                    : await _client.Repository.Content.GetAllContents(_owner, _repo, path);
+                string? existingSha = null;
 
-                existingSha = existing.FirstOrDefault()?.Sha;
-            }
-            catch (NotFoundException)
-            {
-                // File doesn't exist yet — will create
-            }
+                try
+                {
+                    var existing = branch is not null
+                        ? await _client.Repository.Content.GetAllContentsByRef(_owner, _repo, path, branch)
+                        : await _client.Repository.Content.GetAllContents(_owner, _repo, path);
 
-            if (existingSha is not null)
-            {
-                var update = new UpdateFileRequest(commitMessage, content, existingSha);
-                if (branch is not null) update.Branch = branch;
-                await _client.Repository.Content.UpdateFile(_owner, _repo, path, update);
-                _logger.LogDebug("Updated file: {Path}", path);
+                    existingSha = existing.FirstOrDefault()?.Sha;
+                }
+                catch (NotFoundException)
+                {
+                    // File doesn't exist yet — will create
+                }
+
+                if (existingSha is not null)
+                {
+                    var update = new UpdateFileRequest(commitMessage, content, existingSha);
+                    if (branch is not null) update.Branch = branch;
+                    await _client.Repository.Content.UpdateFile(_owner, _repo, path, update);
+                    _logger.LogDebug("Updated file: {Path}", path);
+                }
+                else
+                {
+                    var create = new CreateFileRequest(commitMessage, content);
+                    if (branch is not null) create.Branch = branch;
+                    await _client.Repository.Content.CreateFile(_owner, _repo, path, create);
+                    _logger.LogDebug("Created file: {Path}", path);
+                }
+                return; // Success
             }
-            else
+            catch (ApiException ex) when (attempt < maxRetries &&
+                (ex.Message.Contains("expected", StringComparison.OrdinalIgnoreCase) ||
+                 ex.Message.Contains("409", StringComparison.OrdinalIgnoreCase) ||
+                 ex.Message.Contains("sha", StringComparison.OrdinalIgnoreCase)))
             {
-                var create = new CreateFileRequest(commitMessage, content);
-                if (branch is not null) create.Branch = branch;
-                await _client.Repository.Content.CreateFile(_owner, _repo, path, create);
-                _logger.LogDebug("Created file: {Path}", path);
+                _logger.LogWarning("SHA conflict on {Path} (attempt {Attempt}/{Max}), retrying",
+                    path, attempt, maxRetries);
+                await Task.Delay(500 * attempt, ct);
             }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to create/update file: {Path}", path);
-            throw;
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to create/update file: {Path}", path);
+                throw;
+            }
         }
     }
 
