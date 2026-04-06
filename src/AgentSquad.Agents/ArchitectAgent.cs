@@ -150,8 +150,11 @@ public class ArchitectAgent : AgentBase
     private Task HandleReviewRequestAsync(ReviewRequestMessage message, CancellationToken ct)
     {
         Logger.LogInformation(
-            "Review request from {Agent} for PR #{PrNumber}: {Title}",
-            message.FromAgentId, message.PrNumber, message.PrTitle);
+            "Review request from {Agent} for PR #{PrNumber}: {Title} ({ReviewType})",
+            message.FromAgentId, message.PrNumber, message.PrTitle, message.ReviewType);
+
+        // Clear reviewed flag so reworked PRs get re-reviewed
+        _reviewedPrNumbers.Remove(message.PrNumber);
         _reviewQueue.Enqueue(message.PrNumber);
         return Task.CompletedTask;
     }

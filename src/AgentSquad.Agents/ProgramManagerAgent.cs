@@ -561,6 +561,18 @@ public class ProgramManagerAgent : AgentBase
                 {
                     await _prWorkflow.RequestChangesAsync(pr.Number, "ProgramManager", reviewBody, ct);
                     Logger.LogInformation("PM requested changes on PR #{Number}", pr.Number);
+
+                    // Notify the author engineer to rework
+                    await _messageBus.PublishAsync(new ChangesRequestedMessage
+                    {
+                        FromAgentId = Identity.Id,
+                        ToAgentId = "*",
+                        MessageType = "ChangesRequested",
+                        PrNumber = pr.Number,
+                        PrTitle = pr.Title,
+                        ReviewerAgent = "ProgramManager",
+                        Feedback = reviewBody
+                    }, ct);
                 }
 
                 _reviewedPrNumbers.Add(pr.Number);
@@ -696,8 +708,11 @@ public class ProgramManagerAgent : AgentBase
     private Task HandleReviewRequestAsync(ReviewRequestMessage message, CancellationToken ct)
     {
         Logger.LogInformation(
-            "Review request from {Agent} for PR #{PrNumber}: {Title}",
-            message.FromAgentId, message.PrNumber, message.PrTitle);
+            "Review request from {Agent} for PR #{PrNumber}: {Title} ({ReviewType})",
+            message.FromAgentId, message.PrNumber, message.PrTitle, message.ReviewType);
+
+        // Clear reviewed flag so reworked PRs get re-reviewed
+        _reviewedPrNumbers.Remove(message.PrNumber);
         _reviewQueue.Enqueue(message.PrNumber);
         return Task.CompletedTask;
     }

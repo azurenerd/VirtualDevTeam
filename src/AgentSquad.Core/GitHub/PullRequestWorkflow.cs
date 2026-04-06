@@ -602,12 +602,51 @@ public partial class PullRequestWorkflow
     }
 
     /// <summary>
-    /// Check if a specific agent still needs to review a PR 
-    /// (hasn't approved yet, and no newer changes-requested from this agent).
+    /// Check if a specific agent still needs to review a PR.
+    /// Returns true if: (a) the agent has never reviewed, OR (b) a new "ready for review"
+    /// marker was posted AFTER the agent's last review (indicating rework was done).
     /// </summary>
     public async Task<bool> NeedsReviewFromAsync(int prNumber, string agentName, CancellationToken ct = default)
     {
-        return !await HasAgentReviewedAsync(prNumber, agentName, ct);
+        var comments = await _github.GetPullRequestCommentsAsync(prNumber, ct);
+        var ordered = comments.OrderByDescending(c => c.CreatedAt).ToList();
+
+        // Find the agent's most recent review comment
+        DateTime? lastReviewTime = null;
+        foreach (var comment in ordered)
+        {
+            var approvalMatch = ApprovalPattern.Match(comment.Body);
+            if (approvalMatch.Success &&
+                string.Equals(approvalMatch.Groups[1].Value.Trim(), agentName, StringComparison.OrdinalIgnoreCase))
+            {
+                lastReviewTime = comment.CreatedAt;
+                break;
+            }
+
+            var changesMatch = ChangesRequestedPattern.Match(comment.Body);
+            if (changesMatch.Success &&
+                string.Equals(changesMatch.Groups[1].Value.Trim(), agentName, StringComparison.OrdinalIgnoreCase))
+            {
+                lastReviewTime = comment.CreatedAt;
+                break;
+            }
+        }
+
+        // Never reviewed → needs review
+        if (lastReviewTime is null)
+            return true;
+
+        // Check if a "ready for review" marker was posted AFTER the last review (indicating rework)
+        foreach (var comment in ordered)
+        {
+            if (comment.CreatedAt <= lastReviewTime)
+                break;
+
+            if (comment.Body.Contains("has marked this PR as ready for review", StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
     }
 
     /// <summary>

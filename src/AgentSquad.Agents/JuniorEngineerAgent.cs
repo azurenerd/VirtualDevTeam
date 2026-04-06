@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using AgentSquad.Core.Agents;
 using AgentSquad.Core.Configuration;
 using AgentSquad.Core.GitHub;
@@ -24,6 +25,7 @@ public class JuniorEngineerAgent : AgentBase
     private const int MaxSelfReviewRetries = 2;
 
     private readonly HashSet<int> _processedIssueIds = new();
+    private readonly ConcurrentQueue<ReworkItem> _reworkQueue = new();
     private readonly List<IDisposable> _subscriptions = new();
 
     public JuniorEngineerAgent(
@@ -52,6 +54,9 @@ public class JuniorEngineerAgent : AgentBase
         _subscriptions.Add(_messageBus.Subscribe<TaskAssignmentMessage>(
             Identity.Id, HandleTaskAssignmentAsync));
 
+        _subscriptions.Add(_messageBus.Subscribe<ChangesRequestedMessage>(
+            Identity.Id, HandleChangesRequestedAsync));
+
         Logger.LogInformation("Junior Engineer {Name} initialized, awaiting task assignments",
             Identity.DisplayName);
         return Task.CompletedTask;
@@ -65,6 +70,13 @@ public class JuniorEngineerAgent : AgentBase
         {
             try
             {
+                // Priority 1: Process rework feedback from reviewers
+                if (_reworkQueue.TryDequeue(out var rework))
+                {
+                    await HandleReworkAsync(rework, ct);
+                    continue;
+                }
+
                 var myTasks = await _prWorkflow.GetAgentTasksAsync(Identity.DisplayName, ct);
                 var activePR = myTasks.FirstOrDefault(pr =>
                     string.Equals(pr.State, "open", StringComparison.OrdinalIgnoreCase));
@@ -431,7 +443,95 @@ public class JuniorEngineerAgent : AgentBase
         return Task.CompletedTask;
     }
 
+    private Task HandleChangesRequestedAsync(ChangesRequestedMessage message, CancellationToken ct)
+    {
+        // Only handle feedback for PRs assigned to this agent
+        if (Identity.AssignedPullRequest != message.PrNumber.ToString())
+            return Task.CompletedTask;
+
+        Logger.LogInformation(
+            "Junior Engineer {Name} received change request from {Reviewer} on PR #{PrNumber}",
+            Identity.DisplayName, message.ReviewerAgent, message.PrNumber);
+
+        _reworkQueue.Enqueue(new ReworkItem(message.PrNumber, message.PrTitle, message.Feedback, message.ReviewerAgent));
+        return Task.CompletedTask;
+    }
+
     #endregion
+
+    private async Task HandleReworkAsync(ReworkItem rework, CancellationToken ct)
+    {
+        var pr = await _github.GetPullRequestAsync(rework.PrNumber, ct);
+        if (pr is null || !string.Equals(pr.State, "open", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        UpdateStatus(AgentStatus.Working, $"Addressing feedback on PR #{rework.PrNumber}");
+        Logger.LogInformation(
+            "Junior Engineer {Name} reworking PR #{PrNumber} based on feedback from {Reviewer}",
+            Identity.DisplayName, rework.PrNumber, rework.Reviewer);
+
+        try
+        {
+            var kernel = _modelRegistry.GetKernel(Identity.ModelTier, Identity.Id);
+            var chat = kernel.GetRequiredService<IChatCompletionService>();
+
+            var architectureDoc = await _projectFiles.GetArchitectureDocAsync(ct);
+            var pmSpecDoc = await _projectFiles.GetPMSpecAsync(ct);
+
+            var history = new ChatHistory();
+            history.AddSystemMessage(
+                "You are a Junior Software Engineer addressing review feedback on a pull request. " +
+                "The reviewer has requested changes. Carefully read the feedback, understand what needs " +
+                "to be fixed, and produce an updated implementation that addresses ALL the feedback points. " +
+                "Be thorough — every feedback item must be resolved. Ask for help if truly stuck.");
+
+            history.AddUserMessage(
+                $"## PR #{rework.PrNumber}: {rework.PrTitle}\n" +
+                $"## Original PR Description\n{pr.Body}\n\n" +
+                $"## Architecture (Summary)\n{TruncateForContext(architectureDoc)}\n\n" +
+                $"## PM Specification (Summary)\n{TruncateForContext(pmSpecDoc)}\n\n" +
+                $"## Review Feedback from {rework.Reviewer}\n{rework.Feedback}\n\n" +
+                "Please provide an updated implementation that addresses all the feedback. " +
+                "Include complete file contents for any changed files.");
+
+            var response = await chat.GetChatMessageContentAsync(history, cancellationToken: ct);
+            var updatedImpl = response.Content?.Trim() ?? "";
+
+            if (!string.IsNullOrWhiteSpace(updatedImpl))
+            {
+                var taskTitle = PullRequestWorkflow.ParseTaskTitleFromTitle(pr.Title);
+                await _prWorkflow.CommitFixesToPRAsync(
+                    pr.Number,
+                    $"docs/{taskTitle}-rework.md",
+                    $"## Rework: Addressing Review Feedback\n\n" +
+                    $"**Reviewer:** {rework.Reviewer}\n\n" +
+                    $"### Changes Made\n{updatedImpl}",
+                    $"Address review feedback from {rework.Reviewer}",
+                    ct);
+
+                await _prWorkflow.MarkReadyForReviewAsync(pr.Number, Identity.DisplayName, ct);
+
+                await _messageBus.PublishAsync(new ReviewRequestMessage
+                {
+                    FromAgentId = Identity.Id,
+                    ToAgentId = "*",
+                    MessageType = "ReviewRequest",
+                    PrNumber = pr.Number,
+                    PrTitle = pr.Title,
+                    ReviewType = "Rework"
+                }, ct);
+
+                Logger.LogInformation(
+                    "Junior Engineer {Name} submitted rework for PR #{PrNumber}, re-requesting review",
+                    Identity.DisplayName, pr.Number);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Junior Engineer {Name} failed rework on PR #{PrNumber}",
+                Identity.DisplayName, rework.PrNumber);
+        }
+    }
 
     #region Helpers
 

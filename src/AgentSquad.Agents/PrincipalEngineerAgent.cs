@@ -32,6 +32,7 @@ public class PrincipalEngineerAgent : AgentBase
     private readonly HashSet<int> _processedIssueIds = new();
     private readonly HashSet<int> _reviewedPrNumbers = new();
     private readonly ConcurrentQueue<int> _reviewQueue = new();
+    private readonly ConcurrentQueue<ReworkItem> _reworkQueue = new();
     private readonly List<IDisposable> _subscriptions = new();
 
     public PrincipalEngineerAgent(
@@ -68,6 +69,9 @@ public class PrincipalEngineerAgent : AgentBase
         _subscriptions.Add(_messageBus.Subscribe<ReviewRequestMessage>(
             Identity.Id, HandleReviewRequestAsync));
 
+        _subscriptions.Add(_messageBus.Subscribe<ChangesRequestedMessage>(
+            Identity.Id, HandleChangesRequestedAsync));
+
         Logger.LogInformation("Principal Engineer agent initialized, awaiting architecture document");
         return Task.CompletedTask;
     }
@@ -90,6 +94,8 @@ public class PrincipalEngineerAgent : AgentBase
                 }
                 else
                 {
+                    // Priority 1: Process rework feedback on our own PRs
+                    await ProcessOwnReworkAsync(ct);
                     await AssignTasksToAvailableEngineersAsync(ct);
                     await WorkOnOwnTasksAsync(ct);
                     await ReviewEngineerPRsAsync(ct);
@@ -593,6 +599,18 @@ public class PrincipalEngineerAgent : AgentBase
                 {
                     await _prWorkflow.RequestChangesAsync(pr.Number, "PrincipalEngineer", reviewBody, ct);
                     Logger.LogInformation("PE requested changes on PR #{Number}", pr.Number);
+
+                    // Notify the author engineer to rework
+                    await _messageBus.PublishAsync(new ChangesRequestedMessage
+                    {
+                        FromAgentId = Identity.Id,
+                        ToAgentId = "*",
+                        MessageType = "ChangesRequested",
+                        PrNumber = pr.Number,
+                        PrTitle = pr.Title,
+                        ReviewerAgent = "PrincipalEngineer",
+                        Feedback = reviewBody
+                    }, ct);
                 }
 
                 _reviewedPrNumbers.Add(prNumber);
@@ -601,6 +619,85 @@ public class PrincipalEngineerAgent : AgentBase
         catch (Exception ex)
         {
             Logger.LogWarning(ex, "Failed to review engineer PRs");
+        }
+    }
+
+    private async Task ProcessOwnReworkAsync(CancellationToken ct)
+    {
+        while (_reworkQueue.TryDequeue(out var rework))
+        {
+            var pr = await _github.GetPullRequestAsync(rework.PrNumber, ct);
+            if (pr is null || !string.Equals(pr.State, "open", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            UpdateStatus(AgentStatus.Working, $"Addressing feedback on PR #{rework.PrNumber}");
+            Logger.LogInformation(
+                "PE reworking own PR #{PrNumber} based on feedback from {Reviewer}",
+                rework.PrNumber, rework.Reviewer);
+
+            try
+            {
+                var kernel = _modelRegistry.GetKernel(Identity.ModelTier, Identity.Id);
+                var chat = kernel.GetRequiredService<IChatCompletionService>();
+
+                var architectureDoc = await _projectFiles.GetArchitectureDocAsync(ct);
+                var pmSpecDoc = await _projectFiles.GetPMSpecAsync(ct);
+                var planDoc = await _projectFiles.GetEngineeringPlanAsync(ct);
+
+                var history = new ChatHistory();
+                history.AddSystemMessage(
+                    "You are a Principal Engineer addressing review feedback on your pull request. " +
+                    "You have access to the full architecture, PM spec, and engineering plan. " +
+                    "Carefully read the feedback, understand what needs to be fixed, and produce " +
+                    "an updated implementation that addresses ALL the feedback points. " +
+                    "Be thorough and produce production-quality fixes.");
+
+                history.AddUserMessage(
+                    $"## PR #{rework.PrNumber}: {rework.PrTitle}\n" +
+                    $"## Original PR Description\n{pr.Body}\n\n" +
+                    $"## Architecture\n{architectureDoc}\n\n" +
+                    $"## PM Specification\n{pmSpecDoc}\n\n" +
+                    $"## Engineering Plan\n{planDoc}\n\n" +
+                    $"## Review Feedback from {rework.Reviewer}\n{rework.Feedback}\n\n" +
+                    "Please provide an updated implementation that addresses all the feedback. " +
+                    "Include complete file contents for any changed files.");
+
+                var response = await chat.GetChatMessageContentAsync(history, cancellationToken: ct);
+                var updatedImpl = response.Content?.Trim() ?? "";
+
+                if (!string.IsNullOrWhiteSpace(updatedImpl))
+                {
+                    var taskTitle = PullRequestWorkflow.ParseTaskTitleFromTitle(pr.Title);
+                    await _prWorkflow.CommitFixesToPRAsync(
+                        pr.Number,
+                        $"docs/{taskTitle}-rework.md",
+                        $"## Rework: Addressing Review Feedback\n\n" +
+                        $"**Reviewer:** {rework.Reviewer}\n\n" +
+                        $"### Changes Made\n{updatedImpl}",
+                        $"Address review feedback from {rework.Reviewer}",
+                        ct);
+
+                    await _prWorkflow.MarkReadyForReviewAsync(pr.Number, Identity.DisplayName, ct);
+
+                    await _messageBus.PublishAsync(new ReviewRequestMessage
+                    {
+                        FromAgentId = Identity.Id,
+                        ToAgentId = "*",
+                        MessageType = "ReviewRequest",
+                        PrNumber = pr.Number,
+                        PrTitle = pr.Title,
+                        ReviewType = "Rework"
+                    }, ct);
+
+                    Logger.LogInformation(
+                        "PE submitted rework for PR #{PrNumber}, re-requesting review",
+                        pr.Number);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, "PE failed rework on PR #{PrNumber}", rework.PrNumber);
+            }
         }
     }
 
@@ -759,9 +856,30 @@ public class PrincipalEngineerAgent : AgentBase
     private Task HandleReviewRequestAsync(ReviewRequestMessage message, CancellationToken ct)
     {
         Logger.LogInformation(
-            "Review request from {Agent} for PR #{PrNumber}: {Title}",
-            message.FromAgentId, message.PrNumber, message.PrTitle);
+            "Review request from {Agent} for PR #{PrNumber}: {Title} ({ReviewType})",
+            message.FromAgentId, message.PrNumber, message.PrTitle, message.ReviewType);
+
+        // Clear reviewed flag so reworked PRs get re-reviewed
+        _reviewedPrNumbers.Remove(message.PrNumber);
         _reviewQueue.Enqueue(message.PrNumber);
+        return Task.CompletedTask;
+    }
+
+    private Task HandleChangesRequestedAsync(ChangesRequestedMessage message, CancellationToken ct)
+    {
+        // Check if this PR belongs to us by matching backlog tasks
+        var isOurPr = _taskBacklog.Any(t =>
+            t.PullRequestNumber == message.PrNumber && t.Status == "InProgress" &&
+            string.Equals(t.AssignedTo, Identity.DisplayName, StringComparison.OrdinalIgnoreCase));
+
+        if (!isOurPr)
+            return Task.CompletedTask;
+
+        Logger.LogInformation(
+            "PE received change request from {Reviewer} on own PR #{PrNumber}",
+            message.ReviewerAgent, message.PrNumber);
+
+        _reworkQueue.Enqueue(new ReworkItem(message.PrNumber, message.PrTitle, message.Feedback, message.ReviewerAgent));
         return Task.CompletedTask;
     }
 

@@ -45,3 +45,16 @@ public record ReviewRequestMessage : AgentMessage
     public required string PrTitle { get; init; }
     public required string ReviewType { get; init; }
 }
+
+public record ChangesRequestedMessage : AgentMessage
+{
+    public required int PrNumber { get; init; }
+    public required string PrTitle { get; init; }
+    public required string ReviewerAgent { get; init; }
+    public required string Feedback { get; init; }
+}
+
+/// <summary>
+/// Queued rework item for an engineer to address reviewer feedback on a PR.
+/// </summary>
+public record ReworkItem(int PrNumber, string PrTitle, string Feedback, string Reviewer);
