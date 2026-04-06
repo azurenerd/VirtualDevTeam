@@ -1692,7 +1692,7 @@ main {
     color: #f0b90b;
 }
 
-/* Activity Log filter buttons */
+/* Activity Log filter buttons — styled to match feed-filter-btn pill pattern */
 .detail-card-header-row {
     display: flex;
     justify-content: space-between;
@@ -1706,62 +1706,62 @@ main {
 
 .detail-log-filters {
     display: flex;
-    gap: 0.35rem;
+    gap: 0.4rem;
     flex-wrap: wrap;
 }
 
 .log-filter-btn {
+    padding: 0.3rem 0.85rem;
+    border-radius: 20px;
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-card);
+    color: var(--text-secondary);
     font-family: var(--font-mono);
-    font-size: 0.65rem;
+    font-size: 0.7rem;
     font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    padding: 0.25rem 0.6rem;
-    border-radius: 8px;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    background: transparent;
-    color: var(--text-muted);
     cursor: pointer;
     transition: all var(--transition-fast);
+    text-transform: none;
+    letter-spacing: normal;
 }
 
 .log-filter-btn:hover {
-    background: rgba(255, 255, 255, 0.06);
+    background: var(--bg-card-hover);
     color: var(--text-primary);
 }
 
 .log-filter-btn.active {
-    background: rgba(255, 255, 255, 0.1);
-    color: var(--text-primary);
-    border-color: rgba(255, 255, 255, 0.2);
+    background: rgba(0, 212, 255, 0.12);
+    color: var(--accent-cyan);
+    border-color: rgba(0, 212, 255, 0.3);
 }
 
 .log-filter-btn.filter-task.active {
-    background: rgba(63, 185, 80, 0.15);
+    background: rgba(63, 185, 80, 0.12);
     color: var(--accent-green);
     border-color: rgba(63, 185, 80, 0.3);
 }
 
 .log-filter-btn.filter-status.active {
-    background: rgba(0, 212, 255, 0.15);
+    background: rgba(0, 212, 255, 0.12);
     color: var(--accent-cyan);
     border-color: rgba(0, 212, 255, 0.3);
 }
 
 .log-filter-btn.filter-system.active {
-    background: rgba(139, 148, 158, 0.15);
+    background: rgba(139, 148, 158, 0.12);
     color: var(--text-secondary);
     border-color: rgba(139, 148, 158, 0.3);
 }
 
 .log-filter-btn.filter-message.active {
-    background: rgba(163, 113, 247, 0.15);
+    background: rgba(163, 113, 247, 0.12);
     color: var(--accent-purple);
     border-color: rgba(163, 113, 247, 0.3);
 }
 
 .log-filter-btn.filter-github.active {
-    background: rgba(240, 185, 11, 0.15);
+    background: rgba(240, 185, 11, 0.12);
     color: #f0b90b;
     border-color: rgba(240, 185, 11, 0.3);
 }
