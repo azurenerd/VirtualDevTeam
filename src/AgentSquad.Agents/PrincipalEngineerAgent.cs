@@ -25,6 +25,7 @@ public class PrincipalEngineerAgent : EngineerAgentBase
 
     private bool _planningComplete;
     private bool _planningSignalReceived;
+    private bool _architectureReady;
     private bool _resourceRequestPending;
     private readonly List<EngineeringTask> _taskBacklog = new();
     private readonly Dictionary<string, int> _agentAssignments = new();
@@ -154,6 +155,7 @@ public class PrincipalEngineerAgent : EngineerAgentBase
     {
         try
         {
+            // Path 1: PM sent PlanningComplete AND Architecture.md has real content
             if (_planningSignalReceived)
             {
                 var archDoc = await ProjectFiles.GetArchitectureDocAsync(ct);
@@ -166,35 +168,25 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 Logger.LogInformation("Planning signal received but Architecture.md not ready yet, waiting...");
             }
 
-            var issues = await IssueWf.GetIssuesForAgentAsync("Principal Engineer", ct);
-
-            foreach (var issue in issues)
+            // Path 2: Architect sent ArchitectureComplete via message bus AND enhancement issues exist
+            // BUG FIX: Replaced issue-polling fallback. Previously the Architect created a
+            // spurious GitHub Issue to notify PE ("Principal Engineer: Question from Architect").
+            // Now uses the _architectureReady flag set by the ArchitectureComplete bus message.
+            if (_architectureReady)
             {
-                if (ProcessedIssueIds.Contains(issue.Number))
-                    continue;
-
-                if (issue.Body.Contains("Architecture document is ready", StringComparison.OrdinalIgnoreCase)
-                    || issue.Body.Contains("Architecture.md", StringComparison.OrdinalIgnoreCase))
+                var enhancements = await GitHub.GetIssuesByLabelAsync(
+                    IssueWorkflow.Labels.Enhancement, ct);
+                if (_planningSignalReceived || enhancements.Count > 0)
                 {
-                    ProcessedIssueIds.Add(issue.Number);
-
                     Logger.LogInformation(
-                        "Architecture ready signal received via issue #{Number}", issue.Number);
-
-                    await IssueWf.ResolveIssueAsync(
-                        issue.Number,
-                        "Acknowledged. Beginning engineering planning.",
-                        ct);
-
-                    var enhancements = await GitHub.GetIssuesByLabelAsync(
-                        IssueWorkflow.Labels.Enhancement, ct);
-                    if (_planningSignalReceived || enhancements.Count > 0)
-                        return true;
-
-                    Logger.LogInformation("Architecture ready but no enhancement issues yet, waiting for PM...");
+                        "Architecture ready signal received via bus, {Count} enhancement issues found",
+                        enhancements.Count);
+                    return true;
                 }
+                Logger.LogInformation("Architecture ready but no enhancement issues yet, waiting for PM...");
             }
 
+            // Path 3: Recovery — Architecture.md exists on disk AND enhancement issues exist
             var architectureDoc = await ProjectFiles.GetArchitectureDocAsync(ct);
             if (!architectureDoc.Contains("No architecture document has been created yet", StringComparison.OrdinalIgnoreCase)
                 && architectureDoc.Length > 200)
@@ -766,6 +758,18 @@ public class PrincipalEngineerAgent : EngineerAgentBase
         Logger.LogInformation(
             "Status update from {Agent}: {Status} — {Details}",
             message.FromAgentId, message.NewStatus, message.Details);
+
+        // BUG FIX: Handle ArchitectureComplete message from the Architect agent.
+        // Previously the Architect created a spurious GitHub Issue to notify the PE, but
+        // the correct path is this bus message. Sets the _architectureReady flag so
+        // CheckForArchitectureAsync can proceed without polling for fake issues.
+        if (string.Equals(message.MessageType, "ArchitectureComplete", StringComparison.OrdinalIgnoreCase))
+        {
+            _architectureReady = true;
+            Logger.LogInformation("Architecture complete signal received via message bus from {Agent}",
+                message.FromAgentId);
+            return Task.CompletedTask;
+        }
 
         // BUG FIX: Key _agentAssignments by agent Id (message.FromAgentId) not DisplayName.
         // Also match task by Name (case-insensitive) with Id fallback, because engineers

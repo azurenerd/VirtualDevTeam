@@ -354,17 +354,14 @@ public class ArchitectAgent : AgentBase
             }
         }
 
-        // 4. Create Issue for Principal Engineer
-        await _issueWorkflow.AskAgentAsync(
-            Identity.DisplayName,
-            "Principal Engineer",
-            "Architecture document is ready for review. " +
-            "Please review Architecture.md and begin engineering planning.",
-            ct);
+        // BUG FIX: Removed unnecessary GitHub Issue creation for PE notification.
+        // The Architect was creating an issue titled "Principal Engineer: Question from Architect"
+        // to tell the PE that Architecture.md was ready. This was wrong because: (a) it's not a
+        // question, (b) the PE should be notified via message bus not a GitHub Issue, and (c) the
+        // issue was never closed, cluttering the issue tracker. The StatusUpdateMessage broadcast
+        // below (ArchitectureComplete) is the correct notification mechanism.
 
-        Logger.LogInformation("Created issue for Principal Engineer to review architecture");
-
-        // 5. Notify PM via message bus
+        // Notify all agents via message bus that architecture is complete
         await _messageBus.PublishAsync(new StatusUpdateMessage
         {
             FromAgentId = Identity.Id,
