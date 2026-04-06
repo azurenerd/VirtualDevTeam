@@ -862,11 +862,19 @@ public class PrincipalEngineerAgent : EngineerAgentBase
     {
         try
         {
-            var myPRs = await PrWorkflow.GetAgentTasksAsync(Identity.DisplayName, ct);
-            var mergedPrNumbers = myPRs
-                .Where(pr => string.Equals(pr.State, "closed", StringComparison.OrdinalIgnoreCase))
-                .Select(pr => pr.Number)
-                .ToHashSet();
+            // Get all PRs (open + merged) to reconcile
+            var openPrs = await PrWorkflow.GetAgentTasksAsync(Identity.DisplayName, ct);
+            var mergedPrs = await GitHub.GetMergedPullRequestsAsync(ct);
+            var myMergedPrs = mergedPrs
+                .Where(pr => pr.Title.StartsWith(Identity.DisplayName + ":", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            var mergedPrTitles = myMergedPrs
+                .Select(pr => PullRequestWorkflow.ParseTaskTitleFromTitle(pr.Title))
+                .Where(t => !string.IsNullOrEmpty(t))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            var mergedPrNumbers = myMergedPrs.Select(pr => pr.Number).ToHashSet();
 
             var reconciled = 0;
             for (var i = 0; i < _taskBacklog.Count; i++)
@@ -875,17 +883,22 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 if (!string.Equals(task.Status, "InProgress", StringComparison.OrdinalIgnoreCase))
                     continue;
 
-                if (task.PullRequestNumber.HasValue && mergedPrNumbers.Contains(task.PullRequestNumber.Value))
+                // Match by PR number or by task name in PR title
+                var isMerged = (task.PullRequestNumber.HasValue && mergedPrNumbers.Contains(task.PullRequestNumber.Value))
+                    || mergedPrTitles.Contains(task.Name);
+
+                if (isMerged)
                 {
                     _taskBacklog[i] = task with { Status = "Done" };
-                    Logger.LogInformation("Reconciled task {TaskId} to Done (PR #{PrNumber} merged)",
-                        task.Id, task.PullRequestNumber.Value);
+                    Logger.LogInformation("Reconciled task {TaskId} '{TaskName}' to Done (PR merged)",
+                        task.Id, task.Name);
                     reconciled++;
                 }
-                else if (!task.PullRequestNumber.HasValue)
+                else if (!task.PullRequestNumber.HasValue
+                    && !openPrs.Any(pr => pr.Title.Contains(task.Name, StringComparison.OrdinalIgnoreCase)))
                 {
                     _taskBacklog[i] = task with { Status = "Pending" };
-                    Logger.LogInformation("Reconciled task {TaskId} to Pending (no PR found)", task.Id);
+                    Logger.LogInformation("Reconciled task {TaskId} '{TaskName}' to Pending (no PR found)", task.Id, task.Name);
                     reconciled++;
                 }
             }
