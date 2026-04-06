@@ -32,6 +32,9 @@ public abstract class EngineerAgentBase : AgentBase
     protected readonly ConcurrentQueue<IssueAssignmentMessage> AssignmentQueue = new();
     protected readonly ConcurrentQueue<ClarificationResponseMessage> ClarificationResponses = new();
     protected readonly List<IDisposable> Subscriptions = new();
+    // BUG FIX: Track rework attempts per PR to enforce MaxReworkCycles limit.
+    // Without this, PM could keep requesting changes and the engineer would loop forever.
+    protected readonly Dictionary<int, int> ReworkAttemptCounts = new();
     protected int? CurrentIssueNumber;
     protected int? CurrentPrNumber;
 
@@ -108,6 +111,9 @@ public abstract class EngineerAgentBase : AgentBase
                 await RunAdditionalLoopWorkAsync(ct);
 
                 // Priority 4: Check if our current PR was merged/closed — reset state
+                // BUG FIX: This check was added because CurrentPrNumber is now kept set after
+                // commit (to allow ChangesRequestedMessage matching). Without this, a merged PR
+                // would never be cleared and the engineer would be stuck forever.
                 if (CurrentPrNumber is not null)
                 {
                     var currentPr = await GitHub.GetPullRequestAsync(CurrentPrNumber.Value, ct);
@@ -121,6 +127,9 @@ public abstract class EngineerAgentBase : AgentBase
                 }
 
                 // Priority 5: Recovery — check for existing open PR after restart
+                // BUG FIX: Also re-tracks ready-for-review PRs so that rework feedback
+                // (ChangesRequestedMessage) can still match this engineer after a restart.
+                // Without this, restarted engineers would ignore rework requests.
                 if (CurrentPrNumber is null)
                 {
                     var myTasks = await PrWorkflow.GetAgentTasksAsync(Identity.DisplayName, ct);
@@ -408,9 +417,39 @@ public abstract class EngineerAgentBase : AgentBase
         if (pr is null || !string.Equals(pr.State, "open", StringComparison.OrdinalIgnoreCase))
             return;
 
-        UpdateStatus(AgentStatus.Working, $"Addressing feedback on PR #{rework.PrNumber}");
-        Logger.LogInformation("{Role} {Name} reworking PR #{PrNumber} based on feedback from {Reviewer}",
-            Identity.Role, Identity.DisplayName, rework.PrNumber, rework.Reviewer);
+        // BUG FIX: Enforce max rework cycles per PR. Without this limit, the PM/PE review
+        // loop could request changes indefinitely (observed in monitoring: PE stuck in
+        // infinite rework on PR #59 for 20+ min). After max cycles, force-approve instead.
+        var attempts = ReworkAttemptCounts.GetValueOrDefault(rework.PrNumber, 0) + 1;
+        ReworkAttemptCounts[rework.PrNumber] = attempts;
+
+        if (attempts > Config.Limits.MaxReworkCycles)
+        {
+            Logger.LogWarning(
+                "{Role} {Name} reached max rework cycles ({Max}) for PR #{PrNumber}, requesting force-approval",
+                Identity.Role, Identity.DisplayName, Config.Limits.MaxReworkCycles, rework.PrNumber);
+
+            await GitHub.AddPullRequestCommentAsync(
+                rework.PrNumber,
+                $"⚠️ **{Identity.DisplayName}** has reached the maximum rework cycle limit " +
+                $"({Config.Limits.MaxReworkCycles}). Requesting final approval to unblock progress.",
+                ct);
+
+            await MessageBus.PublishAsync(new ReviewRequestMessage
+            {
+                FromAgentId = Identity.Id,
+                ToAgentId = "*",
+                MessageType = "ReviewRequest",
+                PrNumber = pr.Number,
+                PrTitle = pr.Title,
+                ReviewType = "FinalApproval"
+            }, ct);
+            return;
+        }
+
+        UpdateStatus(AgentStatus.Working, $"Addressing feedback on PR #{rework.PrNumber} (attempt {attempts}/{Config.Limits.MaxReworkCycles})");
+        Logger.LogInformation("{Role} {Name} reworking PR #{PrNumber} based on feedback from {Reviewer} (attempt {Attempt}/{Max})",
+            Identity.Role, Identity.DisplayName, rework.PrNumber, rework.Reviewer, attempts, Config.Limits.MaxReworkCycles);
 
         try
         {
@@ -480,6 +519,11 @@ public abstract class EngineerAgentBase : AgentBase
         {
             Logger.LogError(ex, "{Role} {Name} failed rework on PR #{PrNumber}",
                 Identity.Role, Identity.DisplayName, rework.PrNumber);
+
+            // BUG FIX: Re-enqueue rework item on failure so it gets retried next loop.
+            // Previously, TryDequeue removed the item and a failed AI call meant the
+            // rework feedback was permanently lost — the PR would stay in limbo forever.
+            ReworkQueue.Enqueue(rework);
         }
     }
 
@@ -585,6 +629,10 @@ public abstract class EngineerAgentBase : AgentBase
 
     protected virtual Task HandleChangesRequestedAsync(ChangesRequestedMessage message, CancellationToken ct)
     {
+        // BUG FIX: Match by CurrentPrNumber OR AssignedPullRequest. Previously, CurrentPrNumber
+        // was cleared immediately after commit, so ChangesRequestedMessage could never match and
+        // the rework loop was completely broken. Now we keep CurrentPrNumber set until the PR is
+        // merged/closed or a new issue is assigned (see Priority 4 and WorkOnIssueAsync).
         if (Identity.AssignedPullRequest != message.PrNumber.ToString() &&
             CurrentPrNumber != message.PrNumber)
             return Task.CompletedTask;

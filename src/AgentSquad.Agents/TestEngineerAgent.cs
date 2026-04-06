@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using AgentSquad.Core.Agents;
+using AgentSquad.Core.AI;
 using AgentSquad.Core.Configuration;
 using AgentSquad.Core.GitHub;
 using AgentSquad.Core.GitHub.Models;
@@ -7,15 +8,28 @@ using AgentSquad.Core.Messaging;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Microsoft.SemanticKernel;
+using Microsoft.SemanticKernel.ChatCompletion;
 
 namespace AgentSquad.Agents;
 
 /// <summary>
-/// Monitors completed PRs and generates test plans / test PRs for untested changes.
+/// Monitors merged PRs and generates real test code (unit, integration, UI tests)
+/// for code changes. Only triggers after a PR is reviewed, approved, and merged —
+/// ignores non-code artifacts like markdown documentation.
 /// </summary>
 public class TestEngineerAgent : AgentBase
 {
     private const string TestedLabel = "tested";
+
+    /// <summary>
+    /// File extensions that are testable code. Everything else (markdown, images,
+    /// config, etc.) is ignored when deciding whether a merged PR needs tests.
+    /// </summary>
+    private static readonly HashSet<string> TestableExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".cs", ".ts", ".tsx", ".js", ".jsx", ".py", ".java", ".go", ".rs",
+        ".razor", ".blazor", ".vue", ".svelte", ".rb", ".php", ".swift", ".kt"
+    };
 
     private readonly IMessageBus _messageBus;
     private readonly IGitHubService _github;
@@ -24,7 +38,6 @@ public class TestEngineerAgent : AgentBase
     private readonly AgentSquadConfig _config;
 
     private readonly HashSet<int> _testedPRs = new();
-    private readonly ConcurrentQueue<int> _reviewQueue = new();
     private readonly List<IDisposable> _subscriptions = new();
 
     public TestEngineerAgent(
@@ -46,8 +59,7 @@ public class TestEngineerAgent : AgentBase
 
     protected override Task OnInitializeAsync(CancellationToken ct)
     {
-        _subscriptions.Add(_messageBus.Subscribe<ReviewRequestMessage>(
-            Identity.Id, HandleReviewRequestAsync));
+        // No message subscriptions needed — we poll for merged PRs
         return Task.CompletedTask;
     }
 
@@ -61,16 +73,16 @@ public class TestEngineerAgent : AgentBase
 
     protected override async Task RunAgentLoopAsync(CancellationToken ct)
     {
-        UpdateStatus(AgentStatus.Idle, "Monitoring PRs for test coverage");
+        UpdateStatus(AgentStatus.Idle, "Monitoring merged PRs for test coverage");
 
         while (!ct.IsCancellationRequested)
         {
             try
             {
-                await ScanForUntestedPRsAsync(ct);
+                await ScanMergedPRsForTestingAsync(ct);
 
                 // Poll less frequently than other agents
-                var pollInterval = TimeSpan.FromSeconds(_config.Limits.GitHubPollIntervalSeconds * 2);
+                var pollInterval = TimeSpan.FromSeconds(_config.Limits.GitHubPollIntervalSeconds * 3);
                 await Task.Delay(pollInterval, ct);
             }
             catch (OperationCanceledException)
@@ -88,28 +100,23 @@ public class TestEngineerAgent : AgentBase
         }
     }
 
-    private async Task ScanForUntestedPRsAsync(CancellationToken ct)
+    /// <summary>
+    /// Scans recently merged PRs and generates tests for any that contain code changes
+    /// and haven't been tested yet.
+    /// </summary>
+    private async Task ScanMergedPRsForTestingAsync(CancellationToken ct)
     {
-        // Drain the review queue — only test PRs we've been notified about
-        var prNumbersToTest = new HashSet<int>();
-        while (_reviewQueue.TryDequeue(out var prNumber))
-            prNumbersToTest.Add(prNumber);
+        var mergedPRs = await _github.GetMergedPullRequestsAsync(ct);
 
-        if (prNumbersToTest.Count == 0)
-            return;
-
-        foreach (var prNumber in prNumbersToTest)
+        foreach (var pr in mergedPRs)
         {
             if (ct.IsCancellationRequested)
                 break;
 
-            if (_testedPRs.Contains(prNumber))
+            if (_testedPRs.Contains(pr.Number))
                 continue;
 
-            var pr = await _github.GetPullRequestAsync(prNumber, ct);
-            if (pr is null)
-                continue;
-
+            // Skip PRs already labeled as tested
             if (pr.Labels.Contains(TestedLabel, StringComparer.OrdinalIgnoreCase))
             {
                 _testedPRs.Add(pr.Number);
@@ -120,54 +127,97 @@ public class TestEngineerAgent : AgentBase
             if (PullRequestWorkflow.ParseAgentNameFromTitle(pr.Title) is { } agent &&
                 agent.Equals(Identity.DisplayName, StringComparison.OrdinalIgnoreCase))
             {
+                _testedPRs.Add(pr.Number);
                 continue;
             }
 
-            Logger.LogInformation("Found untested PR #{Number}: {Title}", pr.Number, pr.Title);
+            // Get the files changed in this PR to check if it has testable code
+            var changedFiles = await _github.GetPullRequestChangedFilesAsync(pr.Number, ct);
+            var codeFiles = changedFiles
+                .Where(f => TestableExtensions.Contains(Path.GetExtension(f)))
+                .ToList();
+
+            if (codeFiles.Count == 0)
+            {
+                // No code files — only docs/config/images. Skip.
+                Logger.LogDebug("Skipping PR #{Number} — no testable code files (only docs/config)", pr.Number);
+                _testedPRs.Add(pr.Number);
+                continue;
+            }
+
+            Logger.LogInformation(
+                "Found merged PR #{Number} with {Count} testable code files: {Title}",
+                pr.Number, codeFiles.Count, pr.Title);
 
             try
             {
-                await ProcessUntestedPRAsync(pr, ct);
+                await GenerateTestsForMergedPRAsync(pr, codeFiles, ct);
                 _testedPRs.Add(pr.Number);
             }
             catch (Exception ex)
             {
-                Logger.LogWarning(ex, "Failed to process tests for PR #{Number}", pr.Number);
+                Logger.LogWarning(ex, "Failed to generate tests for merged PR #{Number}", pr.Number);
             }
         }
     }
 
-    private async Task ProcessUntestedPRAsync(AgentPullRequest pr, CancellationToken ct)
+    /// <summary>
+    /// Reads the actual source code from the merged PR's files on main,
+    /// generates real test code via AI, and creates a test PR with those files.
+    /// </summary>
+    private async Task GenerateTestsForMergedPRAsync(
+        AgentPullRequest pr, List<string> codeFilePaths, CancellationToken ct)
     {
-        UpdateStatus(AgentStatus.Working, $"Generating tests for PR #{pr.Number}");
+        UpdateStatus(AgentStatus.Working, $"Reading code from merged PR #{pr.Number}");
 
-        var testPlan = await GenerateTestPlanAsync(pr, ct);
-
-        if (string.IsNullOrWhiteSpace(testPlan))
+        // Read the actual code content from the main branch (files are merged there now)
+        var sourceFiles = new Dictionary<string, string>();
+        foreach (var filePath in codeFilePaths)
         {
-            Logger.LogWarning("Empty test plan generated for PR #{Number}", pr.Number);
+            try
+            {
+                var content = await _github.GetFileContentAsync(filePath, _config.Project.DefaultBranch, ct);
+                if (!string.IsNullOrWhiteSpace(content))
+                    sourceFiles[filePath] = content;
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "Could not read {Path} from main branch", filePath);
+            }
+        }
+
+        if (sourceFiles.Count == 0)
+        {
+            Logger.LogWarning("Could not read any source files from merged PR #{Number}", pr.Number);
             return;
         }
 
-        await CreateTestPRAsync(pr, testPlan, ct);
+        UpdateStatus(AgentStatus.Working, $"Generating tests for PR #{pr.Number} ({sourceFiles.Count} files)");
 
-        // Mark the source PR as tested
-        await _github.AddPullRequestCommentAsync(
-            pr.Number,
-            $"🧪 **{Identity.DisplayName}** has generated a test plan and created a test PR for this change.\n\n"
-            + "<details>\n<summary>Test Plan Summary</summary>\n\n"
-            + testPlan
-            + "\n</details>",
-            ct);
+        // Generate real test code via AI
+        var testOutput = await GenerateTestCodeAsync(pr, sourceFiles, ct);
 
-        var updatedLabels = pr.Labels
-            .Append(TestedLabel)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+        if (string.IsNullOrWhiteSpace(testOutput))
+        {
+            Logger.LogWarning("Empty test output for PR #{Number}", pr.Number);
+            return;
+        }
 
-        await _github.UpdatePullRequestAsync(pr.Number, labels: updatedLabels, ct: ct);
+        // Parse the AI output into code files
+        var testFiles = CodeFileParser.ParseFiles(testOutput);
 
-        Logger.LogInformation("Completed test generation for PR #{Number}", pr.Number);
+        if (testFiles.Count == 0)
+        {
+            Logger.LogWarning("AI generated test content but no parseable files for PR #{Number}", pr.Number);
+            return;
+        }
+
+        // Create the test PR with real code files
+        var testPrNumber = await CreateTestPRWithCodeAsync(pr, testFiles, ct);
+
+        Logger.LogInformation(
+            "Created test PR #{TestPR} with {Count} test files for merged PR #{SourcePR}",
+            testPrNumber, testFiles.Count, pr.Number);
 
         // Notify via message bus
         await _messageBus.PublishAsync(new StatusUpdateMessage
@@ -176,105 +226,116 @@ public class TestEngineerAgent : AgentBase
             ToAgentId = "*",
             MessageType = "status-update",
             NewStatus = AgentStatus.Working,
-            CurrentTask = $"Tests generated for PR #{pr.Number}",
-            Details = $"Test plan created for: {pr.Title}"
+            CurrentTask = $"Tests written for PR #{pr.Number}",
+            Details = $"Created {testFiles.Count} test files in PR #{testPrNumber}"
         }, ct);
+
+        UpdateStatus(AgentStatus.Idle, "Monitoring merged PRs for test coverage");
     }
 
-    private async Task<string> GenerateTestPlanAsync(AgentPullRequest pr, CancellationToken ct)
+    /// <summary>
+    /// Uses AI to generate real, runnable test code for the source files in a merged PR.
+    /// The prompt includes the actual file contents so the AI writes tests against real code.
+    /// </summary>
+    private async Task<string> GenerateTestCodeAsync(
+        AgentPullRequest pr, Dictionary<string, string> sourceFiles, CancellationToken ct)
     {
         var kernel = _modelRegistry.GetKernel(Identity.ModelTier, Identity.Id);
-        var modelConfig = _modelRegistry.GetModelConfig(Identity.ModelTier);
+        var chat = kernel.GetRequiredService<IChatCompletionService>();
+        var techStack = _config.Project.TechStack;
 
-        var prompt = $"""
-            You are an expert test engineer. Given the following pull request, generate a comprehensive test plan
-            with concrete test cases that should be written.
+        var history = new ChatHistory();
+        history.AddSystemMessage(
+            $"You are an expert test engineer writing tests for a {techStack} project.\n\n" +
+            "Your job is to generate REAL, RUNNABLE test code — not documentation or test plans.\n" +
+            "Write actual test files that can be compiled and executed.\n\n" +
+            "Guidelines:\n" +
+            "- Write unit tests for individual functions, methods, and classes\n" +
+            "- Write integration tests for component interactions where applicable\n" +
+            "- Write UI/rendering tests for frontend components where applicable\n" +
+            "- Use the standard testing framework for the tech stack (e.g., xUnit for C#, " +
+            "Jest for TypeScript, pytest for Python, bUnit for Blazor components)\n" +
+            "- Include proper imports, test class setup, and assertions\n" +
+            "- Test happy paths, edge cases, and error conditions\n" +
+            "- Use mocks/stubs for external dependencies\n" +
+            "- Place test files in a `tests/` directory mirroring the source structure\n\n" +
+            "Output each test file using this exact format:\n\n" +
+            "FILE: tests/path/to/TestFile.ext\n```language\n<complete file content>\n```\n\n" +
+            "Every file MUST use the FILE: marker format so it can be parsed and committed.");
 
-            ## Pull Request #{pr.Number}: {pr.Title}
-
-            ### Description
-            {pr.Body}
-
-            ### Branch
-            {pr.HeadBranch} -> {pr.BaseBranch}
-
-            ---
-
-            Generate a test plan in Markdown that includes:
-            1. **Test Strategy** — unit tests, integration tests, or end-to-end tests needed
-            2. **Test Cases** — numbered list with:
-               - Test name
-               - Description of what is being tested
-               - Expected behavior / assertions
-               - Edge cases to cover
-            3. **Test File Locations** — suggested file paths for the test files
-            4. **Dependencies / Mocks** — any services or components that need mocking
-
-            Be specific and actionable. Focus on testing the changes described, not the entire codebase.
-            """;
-
-        var settings = new PromptExecutionSettings
+        // Build source file context
+        var sourceContext = new System.Text.StringBuilder();
+        sourceContext.AppendLine("## Source Files to Test\n");
+        foreach (var (path, content) in sourceFiles)
         {
-            ExtensionData = new Dictionary<string, object>
-            {
-                ["max_tokens"] = modelConfig?.MaxTokensPerRequest ?? 4096,
-                ["temperature"] = modelConfig?.Temperature ?? 0.3
-            }
-        };
+            var ext = Path.GetExtension(path).TrimStart('.');
+            sourceContext.AppendLine($"### {path}");
+            sourceContext.AppendLine($"```{ext}");
+            // Truncate very large files to avoid token limits
+            var truncated = content.Length > 8000 ? content[..8000] + "\n// ... (truncated)" : content;
+            sourceContext.AppendLine(truncated);
+            sourceContext.AppendLine("```\n");
+        }
 
-        var result = await kernel.InvokePromptAsync(prompt, new KernelArguments(settings), cancellationToken: ct);
-        return result.GetValue<string>() ?? string.Empty;
+        history.AddUserMessage(
+            $"## Merged PR #{pr.Number}: {pr.Title}\n\n" +
+            $"## PR Description\n{pr.Body}\n\n" +
+            sourceContext.ToString() +
+            $"\nGenerate comprehensive test files for the above source code using {techStack}. " +
+            "Focus on testing the actual implementation — functions, classes, components, " +
+            "and their behavior. Include edge cases and error handling.");
+
+        var response = await chat.GetChatMessageContentAsync(history, cancellationToken: ct);
+        return response.Content?.Trim() ?? "";
     }
 
-    private async Task CreateTestPRAsync(AgentPullRequest sourcePR, string testPlan, CancellationToken ct)
+    /// <summary>
+    /// Creates a test PR with actual test code files committed to a branch.
+    /// </summary>
+    private async Task<int> CreateTestPRWithCodeAsync(
+        AgentPullRequest sourcePR,
+        IReadOnlyList<CodeFileParser.CodeFile> testFiles,
+        CancellationToken ct)
     {
         var taskSlug = $"{sourcePR.Number}-tests";
         var branchName = await _prWorkflow.CreateTaskBranchAsync(Identity.DisplayName, taskSlug, ct);
 
-        // Create the test plan file on the branch
-        var testPlanPath = $"docs/test-plans/pr-{sourcePR.Number}-test-plan.md";
-        var testPlanContent = $"""
-            # Test Plan for PR #{sourcePR.Number}: {sourcePR.Title}
+        // Commit all test files to the branch
+        foreach (var file in testFiles)
+        {
+            await _github.CreateOrUpdateFileAsync(
+                file.Path,
+                file.Content,
+                $"test: add {Path.GetFileName(file.Path)} for PR #{sourcePR.Number}",
+                branchName,
+                ct);
+        }
 
-            **Generated by:** {Identity.DisplayName}
-            **Source PR:** #{sourcePR.Number}
-            **Date:** {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC
-
-            ---
-
-            {testPlan}
-            """;
-
-        await _github.CreateOrUpdateFileAsync(
-            testPlanPath,
-            testPlanContent,
-            $"test: add test plan for PR #{sourcePR.Number}",
-            branchName,
-            ct);
-
-        // Create the test PR
+        // Create the test PR with file listing
+        var fileList = string.Join("\n", testFiles.Select(f => $"- `{f.Path}`"));
         var prTitle = $"{Identity.DisplayName}: Tests for PR #{sourcePR.Number} - {sourcePR.Title}";
         var prBody = $"""
             ## Test Engineering
 
-            **Source PR:** #{sourcePR.Number}
+            **Source PR:** #{sourcePR.Number} (merged)
             **Generated by:** {Identity.DisplayName}
+            **Test Files:** {testFiles.Count}
 
-            ### Summary
-            This PR contains a test plan and test scaffolding for the changes introduced in PR #{sourcePR.Number}.
+            ### Test Files
+            {fileList}
 
-            ### Test Plan
-            {testPlan}
+            ### Coverage
+            - Unit tests for new/changed functions and classes
+            - Integration tests for component interactions
+            - Edge case and error handling coverage
 
-            ### Checklist
-            - [x] Test plan generated
-            - [ ] Test implementations reviewed
-            - [ ] All tests passing
+            ### How to Run
+            Run the test suite with the standard test runner for the project tech stack.
             """;
 
         var labels = new[] { "tests", PullRequestWorkflow.Labels.InProgress };
 
-        await _github.CreatePullRequestAsync(
+        var testPr = await _github.CreatePullRequestAsync(
             prTitle,
             prBody,
             branchName,
@@ -283,16 +344,9 @@ public class TestEngineerAgent : AgentBase
             ct);
 
         Logger.LogInformation(
-            "Created test PR for source PR #{SourcePR} on branch {Branch}",
-            sourcePR.Number, branchName);
-    }
+            "Created test PR #{TestPR} for merged PR #{SourcePR} on branch {Branch}",
+            testPr.Number, sourcePR.Number, branchName);
 
-    private Task HandleReviewRequestAsync(ReviewRequestMessage message, CancellationToken ct)
-    {
-        Logger.LogInformation(
-            "Review request from {Agent} for PR #{PrNumber}: {Title}",
-            message.FromAgentId, message.PrNumber, message.PrTitle);
-        _reviewQueue.Enqueue(message.PrNumber);
-        return Task.CompletedTask;
+        return testPr.Number;
     }
 }

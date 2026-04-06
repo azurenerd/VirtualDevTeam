@@ -122,6 +122,38 @@ public class GitHubService : IGitHubService
         }
     }
 
+    public async Task<IReadOnlyList<AgentPullRequest>> GetMergedPullRequestsAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            var prs = await _client.PullRequest.GetAllForRepository(_owner, _repo,
+                new PullRequestRequest { State = ItemStateFilter.Closed, SortDirection = SortDirection.Descending });
+            return prs
+                .Where(pr => pr.Merged)
+                .Select(pr => MapPullRequest(pr, pr.Labels.Select(l => l.Name).ToList()))
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to get merged PRs");
+            throw;
+        }
+    }
+
+    public async Task<IReadOnlyList<string>> GetPullRequestChangedFilesAsync(int prNumber, CancellationToken ct = default)
+    {
+        try
+        {
+            var files = await _client.PullRequest.Files(_owner, _repo, prNumber);
+            return files.Select(f => f.FileName).ToList();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to get changed files for PR #{Number}", prNumber);
+            throw;
+        }
+    }
+
     public async Task<IReadOnlyList<Models.IssueComment>> GetPullRequestCommentsAsync(int prNumber, CancellationToken ct = default)
     {
         try
@@ -489,6 +521,11 @@ public class GitHubService : IGitHubService
             await _client.Git.Reference.Create(_owner, _repo, newRef);
             _logger.LogInformation("Created branch {Branch} from {Source}", branchName, fromBranch);
         }
+        // BUG FIX: Gracefully handle "Reference already exists" instead of throwing.
+        // When SpawnAgentAsync started agents twice (duplicate loop bug), the second
+        // kickoff tried to create the same branch, causing an ApiValidationException.
+        // Even after fixing the duplicate loop, this resilience prevents crashes on
+        // restarts where the branch from a prior run still exists.
         catch (ApiValidationException ex) when (ex.Message.Contains("Reference already exists", StringComparison.OrdinalIgnoreCase))
         {
             _logger.LogInformation("Branch {Branch} already exists, reusing", branchName);
@@ -589,6 +626,7 @@ public class GitHubService : IGitHubService
             Url = pr.HtmlUrl,
             CreatedAt = pr.CreatedAt.UtcDateTime,
             UpdatedAt = pr.UpdatedAt.UtcDateTime,
+            MergedAt = pr.MergedAt?.UtcDateTime,
             Labels = labels ?? pr.Labels.Select(l => l.Name).ToList(),
             ReviewComments = reviewComments ?? new List<string>(),
             Comments = comments ?? new List<Models.IssueComment>()

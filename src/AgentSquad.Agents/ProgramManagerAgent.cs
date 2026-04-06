@@ -28,6 +28,7 @@ public class ProgramManagerAgent : AgentBase
     private readonly Dictionary<string, AgentTracking> _trackedAgents = new();
     private readonly HashSet<int> _processedIssueIds = new();
     private readonly HashSet<int> _reviewedPrNumbers = new();
+    private readonly HashSet<int> _forceApprovalPrs = new();
     private readonly ConcurrentQueue<int> _reviewQueue = new();
     private readonly ConcurrentQueue<ClarificationRequestMessage> _clarificationQueue = new();
     private int _additionalEngineersHired;
@@ -743,7 +744,22 @@ public class ProgramManagerAgent : AgentBase
                 Logger.LogInformation("PM reviewing PR #{Number}: {Title}", pr.Number, pr.Title);
                 UpdateStatus(AgentStatus.Working, $"Reviewing PR #{pr.Number}: {pr.Title}");
 
-                var (approved, reviewBody) = await EvaluatePrAlignmentWithVerdictAsync(pr, ct);
+                // BUG FIX: After max rework cycles, force-approve instead of continuing
+                // to request changes. Prevents infinite rework loops.
+                bool approved;
+                string? reviewBody;
+                if (_forceApprovalPrs.Contains(prNumber))
+                {
+                    approved = true;
+                    reviewBody = $"Force-approving after maximum rework cycles reached. " +
+                        $"The PR has been through multiple review iterations and the engineer " +
+                        $"has made best-effort improvements.";
+                    _forceApprovalPrs.Remove(prNumber);
+                }
+                else
+                {
+                    (approved, reviewBody) = await EvaluatePrAlignmentWithVerdictAsync(pr, ct);
+                }
 
                 if (reviewBody is null)
                     continue;
@@ -916,6 +932,12 @@ public class ProgramManagerAgent : AgentBase
 
         // Clear reviewed flag so reworked PRs get re-reviewed
         _reviewedPrNumbers.Remove(message.PrNumber);
+
+        // BUG FIX: Track FinalApproval requests so the PM auto-approves after max rework
+        // cycles instead of continuing to request changes in an infinite loop.
+        if (string.Equals(message.ReviewType, "FinalApproval", StringComparison.OrdinalIgnoreCase))
+            _forceApprovalPrs.Add(message.PrNumber);
+
         _reviewQueue.Enqueue(message.PrNumber);
         return Task.CompletedTask;
     }

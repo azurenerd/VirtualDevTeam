@@ -29,6 +29,7 @@ public class PrincipalEngineerAgent : EngineerAgentBase
     private readonly List<EngineeringTask> _taskBacklog = new();
     private readonly Dictionary<string, int> _agentAssignments = new();
     private readonly HashSet<int> _reviewedPrNumbers = new();
+    private readonly HashSet<int> _forceApprovalPrs = new();
     private readonly ConcurrentQueue<int> _reviewQueue = new();
 
     public PrincipalEngineerAgent(
@@ -364,6 +365,10 @@ public class PrincipalEngineerAgent : EngineerAgentBase
         try
         {
             var registeredEngineers = new List<EngineerInfo>();
+            // BUG FIX: Collect both AgentId and DisplayName for each engineer.
+            // Previously, only DisplayName was stored and used for message routing, but
+            // the message bus routes by Identity.Id (e.g., "seniorengineer-abc123"), not
+            // DisplayName (e.g., "Senior Engineer 1"). Messages were never delivered.
             foreach (var agent in _registry.GetAgentsByRole(AgentRole.SeniorEngineer))
                 registeredEngineers.Add(new EngineerInfo { AgentId = agent.Identity.Id, Name = agent.Identity.DisplayName, Role = AgentRole.SeniorEngineer });
             foreach (var agent in _registry.GetAgentsByRole(AgentRole.JuniorEngineer))
@@ -371,6 +376,9 @@ public class PrincipalEngineerAgent : EngineerAgentBase
 
             foreach (var engineer in registeredEngineers)
             {
+                // BUG FIX: Key assignments by agent.AgentId (Identity.Id), not DisplayName.
+                // Previously keyed by DisplayName, but StatusUpdate.FromAgentId uses Identity.Id,
+                // so completed tasks were never matched and engineers were never freed.
                 if (_agentAssignments.ContainsKey(engineer.AgentId))
                 {
                     var assignedIssueNum = _agentAssignments[engineer.AgentId];
@@ -416,6 +424,9 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                         "Assigned issue #{IssueNumber} ({TaskName}) to {Engineer}",
                         task.IssueNumber, task.Name, engineer.Name);
 
+                    // BUG FIX: Route IssueAssignmentMessage to engineer.AgentId (Identity.Id),
+                    // NOT engineer.Name (DisplayName). The message bus delivers to mailboxes
+                    // keyed by Identity.Id. Using DisplayName caused silent message loss.
                     await MessageBus.PublishAsync(new IssueAssignmentMessage
                     {
                         FromAgentId = Identity.Id,
@@ -615,7 +626,20 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 Logger.LogInformation("PE reviewing PR #{Number}: {Title}", pr.Number, pr.Title);
                 UpdateStatus(AgentStatus.Working, $"Reviewing PR #{pr.Number}: {pr.Title}");
 
-                var (approved, reviewBody) = await EvaluatePrQualityAsync(pr, ct);
+                // BUG FIX: Force-approve after max rework cycles to prevent infinite loops.
+                bool approved;
+                string? reviewBody;
+                if (_forceApprovalPrs.Contains(prNumber))
+                {
+                    approved = true;
+                    reviewBody = $"Force-approving after maximum rework cycles. " +
+                        $"The engineer has made best-effort improvements across multiple iterations.";
+                    _forceApprovalPrs.Remove(prNumber);
+                }
+                else
+                {
+                    (approved, reviewBody) = await EvaluatePrQualityAsync(pr, ct);
+                }
 
                 if (reviewBody is null)
                     continue;
@@ -743,6 +767,9 @@ public class PrincipalEngineerAgent : EngineerAgentBase
             "Status update from {Agent}: {Status} — {Details}",
             message.FromAgentId, message.NewStatus, message.Details);
 
+        // BUG FIX: Key _agentAssignments by agent Id (message.FromAgentId) not DisplayName.
+        // Also match task by Name (case-insensitive) with Id fallback, because engineers
+        // send the issue Title as CurrentTask but the backlog stores it as task Name/Id.
         if (message.MessageType == "TaskComplete"
             && _agentAssignments.ContainsKey(message.FromAgentId))
         {
@@ -802,6 +829,11 @@ public class PrincipalEngineerAgent : EngineerAgentBase
             message.FromAgentId, message.PrNumber, message.PrTitle, message.ReviewType);
 
         _reviewedPrNumbers.Remove(message.PrNumber);
+
+        // BUG FIX: Track FinalApproval requests so PE auto-approves after max rework cycles.
+        if (string.Equals(message.ReviewType, "FinalApproval", StringComparison.OrdinalIgnoreCase))
+            _forceApprovalPrs.Add(message.PrNumber);
+
         _reviewQueue.Enqueue(message.PrNumber);
         return Task.CompletedTask;
     }
@@ -1081,6 +1113,8 @@ internal record EngineeringTask
     public List<string> Dependencies { get; init; } = new();
 }
 
+// BUG FIX: Added AgentId field. Previously only Name (DisplayName) was stored, but
+// all message routing and _agentAssignments must use Identity.Id for correct delivery.
 internal record EngineerInfo
 {
     public string AgentId { get; init; } = "";

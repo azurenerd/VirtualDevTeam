@@ -83,6 +83,12 @@ public class LimitsConfig
     public int MaxClarificationRoundTrips { get; set; } = 5;
 
     /// <summary>
+    /// Maximum number of rework cycles (review → change → re-review) per PR before
+    /// the reviewer force-approves to prevent infinite loops.
+    /// </summary>
+    public int MaxReworkCycles { get; set; } = 3;
+
+    /// <summary>
     /// If the Principal Engineer estimates all remaining tasks can be completed within
     /// this many minutes, it won't request additional engineers.
     /// </summary>

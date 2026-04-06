@@ -67,6 +67,11 @@ public class AgentSquadWorker : BackgroundService
             _logger.LogInformation("{Role} agent spawned: {Name}", role, identity.DisplayName);
         }
 
+        // BUG FIX: Do NOT start agent loops here — SpawnAgentAsync already calls
+        // agent.StartAsync() in a background task (lines 87-98 of AgentSpawnManager).
+        // Previously, this worker also iterated all agents calling StartAsync(), causing
+        // every agent loop to run TWICE in parallel. This caused duplicate GitHub issues,
+        // duplicate research kickoffs, and "Reference already exists" branch errors.
         _logger.LogInformation("All core agents spawned. Agent loops already started by SpawnAgentAsync.");
 
         // Keep alive until cancellation — agents run as background tasks started by SpawnAgentAsync

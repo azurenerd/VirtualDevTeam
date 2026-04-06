@@ -35,6 +35,10 @@ public interface IGitHubService
     Task<bool> BranchExistsAsync(string branchName, CancellationToken ct = default);
     Task DeleteBranchAsync(string branchName, CancellationToken ct = default);
 
+    // PR file inspection
+    Task<IReadOnlyList<AgentPullRequest>> GetMergedPullRequestsAsync(CancellationToken ct = default);
+    Task<IReadOnlyList<string>> GetPullRequestChangedFilesAsync(int prNumber, CancellationToken ct = default);
+
     // Rate Limiting
     Task<GitHubRateLimitInfo> GetRateLimitAsync(CancellationToken ct = default);
 }

@@ -12,9 +12,12 @@ public record AgentPullRequest
     public string Url { get; init; } = "";
     public DateTime CreatedAt { get; init; }
     public DateTime? UpdatedAt { get; init; }
+    public DateTime? MergedAt { get; init; }
+    public bool IsMerged => MergedAt.HasValue;
     public List<string> Labels { get; init; } = new();
     public List<string> ReviewComments { get; init; } = new();
     public List<IssueComment> Comments { get; init; } = new();
+    public List<string> ChangedFiles { get; init; } = new();
 }
 
 public record AgentIssue
