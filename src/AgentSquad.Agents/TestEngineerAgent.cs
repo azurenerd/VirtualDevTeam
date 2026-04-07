@@ -43,6 +43,7 @@ public class TestEngineerAgent : AgentBase
     private readonly List<IDisposable> _subscriptions = new();
     private readonly ConcurrentQueue<(int PrNumber, string PrTitle, string Feedback, string Reviewer)> _reworkQueue = new();
     private readonly Dictionary<int, int> _reworkAttempts = new();
+    private readonly DateTime _sessionStartUtc = DateTime.UtcNow;
     private int? _currentTestPrNumber;
 
     public TestEngineerAgent(
@@ -133,6 +134,13 @@ public class TestEngineerAgent : AgentBase
 
             if (_testedPRs.Contains(pr.Number))
                 continue;
+
+            // Skip PRs merged before this session started — they're from previous runs
+            if (pr.MergedAt.HasValue && pr.MergedAt.Value < _sessionStartUtc)
+            {
+                _testedPRs.Add(pr.Number);
+                continue;
+            }
 
             // Skip PRs already labeled as tested
             if (pr.Labels.Contains(TestedLabel, StringComparer.OrdinalIgnoreCase))

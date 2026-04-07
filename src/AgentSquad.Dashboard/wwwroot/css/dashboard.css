@@ -130,6 +130,10 @@ main {
     margin-top: 2px;
 }
 
+.navbar-toggler {
+    display: none;
+}
+
 /* ===== Sidebar Navigation ===== */
 .nav-scrollable {
     padding: 0.75rem 0;
@@ -2027,6 +2031,7 @@ main {
 /* ===== Agent Actions Row ===== */
 .agent-actions {
     display: flex;
+    justify-content: flex-end;
     gap: 6px;
     padding-top: 8px;
     border-top: 1px solid var(--border-subtle);
@@ -2034,7 +2039,6 @@ main {
 }
 
 .action-btn {
-    flex: 1;
     padding: 5px 10px;
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-sm);
@@ -2059,31 +2063,29 @@ main {
 
 /* ===== Chat Modal ===== */
 .chat-modal {
-    width: 600px;
-    max-width: 95vw;
-    max-height: 80vh;
-    background: var(--bg-secondary);
+    background: var(--bg-secondary, #1e1e2e);
     border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-lg);
-    box-shadow: 0 24px 48px rgba(0, 0, 0, 0.5);
+    border-radius: 0.75rem;
+    width: min(600px, 90vw);
+    max-height: 80vh;
     display: flex;
     flex-direction: column;
-    overflow: hidden;
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);
 }
 
 .chat-modal-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 16px 20px;
+    padding: 1rem 1.25rem;
     border-bottom: 1px solid var(--border-subtle);
-    background: var(--bg-card);
 }
 
 .chat-header-left {
     display: flex;
     flex-direction: column;
     gap: 4px;
+    min-width: 0;
 }
 
 .chat-header-left h3 {
@@ -2097,10 +2099,11 @@ main {
     padding: 2px 8px;
     border-radius: var(--radius-sm);
     cursor: help;
-    max-width: 400px;
+    max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    display: block;
 }
 
 .chat-diag-badge.compliant {
@@ -2118,11 +2121,11 @@ main {
 .chat-modal-body {
     flex: 1;
     overflow-y: auto;
-    padding: 16px 20px;
+    padding: 1rem 1.25rem;
     display: flex;
     flex-direction: column;
     gap: 12px;
-    min-height: 300px;
+    min-height: 250px;
     max-height: 50vh;
 }
 
@@ -2209,7 +2212,8 @@ main {
     color: var(--text-primary);
     line-height: 1.5;
     white-space: pre-wrap;
-    word-wrap: break-word;
+    word-break: break-word;
+    overflow-wrap: break-word;
 }
 
 .chat-typing {
@@ -2225,9 +2229,8 @@ main {
 .chat-modal-footer {
     display: flex;
     gap: 8px;
-    padding: 12px 20px;
+    padding: 0.75rem 1.25rem;
     border-top: 1px solid var(--border-subtle);
-    background: var(--bg-card);
 }
 
 .chat-input {
