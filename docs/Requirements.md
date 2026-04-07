@@ -30,6 +30,7 @@
 18. [AI Provider Requirements](#18-ai-provider-requirements)
 19. [Code Quality & Architecture Requirements](#19-code-quality--architecture-requirements)
 20. [End-to-End Workflow Scenarios](#20-end-to-end-workflow-scenarios)
+21. [PE Integration & Branch Sync Requirements](#21-pe-integration--branch-sync-requirements)
 
 ---
 
@@ -350,11 +351,40 @@ Each phase has gate conditions that must be met before advancing:
 
 ## 9. Test Engineer Requirements
 
-### REQ-TEST-001: Test Planning and Review
+### REQ-TEST-001: Test Generation from Merged PRs
 
-- **REQ-TEST-001a**: Test Engineer subscribes to `ReviewRequestMessage`.
-- **REQ-TEST-001b**: Reviews PRs for test coverage and quality.
-- **REQ-TEST-001c**: Uses standard model tier for test-related AI work.
+- **REQ-TEST-001a**: Test Engineer monitors merged PRs (via `GetMergedPullRequestsAsync`) every 3× poll interval and generates real, runnable test code for any PR that contains testable code files.
+- **REQ-TEST-001b**: Testable code files are identified by extension: `.cs`, `.ts`, `.tsx`, `.js`, `.jsx`, `.py`, `.java`, `.go`, `.rs`, `.razor`, `.blazor`, `.vue`, `.svelte`, `.rb`, `.php`, `.swift`, `.kt`. PRs with only non-code files (markdown, images, config) are skipped.
+- **REQ-TEST-001c**: Test Engineer skips PRs it created (self-authored test PRs) to avoid circular testing.
+- **REQ-TEST-001d**: Test Engineer uses standard model tier for all AI work.
+
+### REQ-TEST-002: Business Context for Test Generation
+
+- **REQ-TEST-002a**: Before generating tests, the Test Engineer MUST gather full business context: linked issue (user story + acceptance criteria from PR body "Closes #N"), PMSpec.md, and Architecture.md.
+- **REQ-TEST-002b**: The AI prompt includes: (1) linked issue acceptance criteria, (2) PM Specification, (3) Architecture document patterns, (4) actual source code files from the merged PR, and (5) PR title and description.
+- **REQ-TEST-002c**: Tests MUST validate both acceptance criteria (business behavior) and technical implementation (code correctness). Prioritize business behavior tests over structural code coverage.
+- **REQ-TEST-002d**: The Test Engineer uses `ProjectFileManager` to read PMSpec.md and Architecture.md, and `IGitHubService.GetIssueAsync` to read linked issue details.
+
+### REQ-TEST-003: Test PR Workflow
+
+- **REQ-TEST-003a**: Test PRs are created on branches named `agent/testengineer/{sourcepr-number}-tests`.
+- **REQ-TEST-003b**: After creating a test PR, the Test Engineer marks it ready-for-review and sends a `ReviewRequestMessage` to request PE review.
+- **REQ-TEST-003c**: The PE reviews test PRs before they are merged, using the same review loop as code PRs.
+- **REQ-TEST-003d**: After successful test generation, the Test Engineer applies a `tested` label to the source PR. This label persists across restarts and is the primary dedup mechanism.
+
+### REQ-TEST-004: Test Engineer Rework Loop
+
+- **REQ-TEST-004a**: Test Engineer subscribes to `ChangesRequestedMessage` and enqueues rework items when feedback targets its test PR.
+- **REQ-TEST-004b**: Rework follows the same pattern as engineer agents: read feedback → AI fixes → commit → re-mark ready-for-review → re-request review.
+- **REQ-TEST-004c**: Maximum 3 rework attempts per test PR before force-completing.
+
+### REQ-TEST-005: Test Engineer Restart Recovery
+
+- **REQ-TEST-005a**: On restart, Test Engineer scans for open test PRs it authored (matching branch pattern).
+- **REQ-TEST-005b**: If an open test PR has unaddressed CHANGES_REQUESTED feedback (from GitHub comments), the feedback is queued for rework.
+- **REQ-TEST-005c**: If an open test PR has no reviews, it re-requests review.
+- **REQ-TEST-005d**: `_testedPRs` HashSet is populated from the `tested` label on source PRs (persisted on GitHub, not in-memory only).
+- **REQ-TEST-005e**: If source files from a merged PR no longer exist on main (e.g., files were deleted), the PR is marked as tested and skipped. It MUST NOT retry every cycle.
 
 ---
 
@@ -441,6 +471,18 @@ Each phase has gate conditions that must be met before advancing:
 - **REQ-REV-002c**: It is expected that PRs will be smaller chunks of the entire solution.
 - **REQ-REV-002d**: Reviewers should NOT request changes because a PR doesn't cover something outside its stated scope.
 
+### REQ-REV-002.5: Code-Aware Reviews (All Reviewers)
+
+- **REQ-REV-002.5a**: ALL reviewers MUST read the actual code files committed in the PR (via `GetPRCodeContextAsync`), not just the PR title and description. Reviews based only on PR body text are insufficient.
+- **REQ-REV-002.5b**: ALL reviewers MUST read the linked issue (user story + acceptance criteria) parsed from the PR body ("Closes #N") via `ParseLinkedIssueNumber` + `GetIssueAsync`.
+- **REQ-REV-002.5c**: Each reviewer reads the context documents appropriate to their expertise:
+  - **Architect**: Architecture.md + PMSpec.md + linked issue + code files
+  - **PM (ProgramManager)**: PMSpec.md + EngineeringPlan.md + linked issue + code files
+  - **PE (PrincipalEngineer)**: Architecture.md + PMSpec.md + EngineeringPlan.md + linked issue + code files
+- **REQ-REV-002.5d**: The AI review prompt MUST explicitly instruct the model to evaluate the actual code, not just the PR description.
+- **REQ-REV-002.5e**: Code files are read from the PR's head branch and truncated per-file at 8,000 characters to stay within token budgets. Non-code files (images, binary) are excluded.
+- **REQ-REV-002.5f**: `PullRequestWorkflow.GetPRCodeContextAsync(prNumber, headBranch)` is the shared helper for building code context. It reads changed files, filters to code extensions, and formats them for AI prompts.
+
 ### REQ-REV-003: Review Triggering
 
 - **REQ-REV-003a**: Reviews are triggered ONLY by `ReviewRequestMessage` via message bus (not by polling labels).
@@ -453,6 +495,13 @@ Each phase has gate conditions that must be met before advancing:
 - **REQ-REV-004a**: `_reviewedPrNumbers` HashSet prevents re-reviewing in the same loop.
 - **REQ-REV-004b**: `HandleReviewRequestAsync` removes from `_reviewedPrNumbers` when rework is submitted (so re-review happens).
 - **REQ-REV-004c**: `HasAgentReviewedAsync` returns true for ANY review (approved OR changes-requested) — prevents duplicate reviews.
+- **REQ-REV-004d**: Architect MUST call `NeedsReviewFromAsync` before reviewing to prevent duplicate reviews across restarts. The in-memory `_reviewedPrNumbers` is lost on restart; `NeedsReviewFromAsync` checks GitHub comments as source of truth.
+
+### REQ-REV-005: PE-Authored PR Reviewer Substitution
+
+- **REQ-REV-005a**: When the PE authors a PR, it cannot review its own work. The required reviewers are dynamically substituted: PM + Architect (instead of the default PM + PE).
+- **REQ-REV-005b**: `GetRequiredReviewers(prAuthorRole)` returns `["ProgramManager", "Architect"]` when the author is PrincipalEngineer.
+- **REQ-REV-005c**: The Architect agent subscribes to `ReviewRequestMessage` and reviews PRs alongside the PM when the PE is the author.
 
 **Scenario: Dual Review and Merge**
 1. Engineer marks PR #35 ready-for-review → broadcasts `ReviewRequestMessage`
@@ -576,6 +625,10 @@ Each phase has gate conditions that must be met before advancing:
 - **REQ-IDEM-004b**: PE restores task backlog from existing EngineeringPlan.md and skips to development loop.
 - **REQ-IDEM-004c**: Engineers recover open PRs: `in-progress` PRs get re-implemented; `ready-for-review` PRs are tracked for rework but not re-implemented.
 - **REQ-IDEM-004d**: When PE restarts, `_agentAssignments` is empty — PE must re-check which engineers are free and re-assign unfinished tasks.
+- **REQ-IDEM-004e**: PE recovery for own PRs MUST check GitHub comments for unaddressed feedback (CHANGES_REQUESTED) using `GetPendingChangesRequestedAsync`, not just labels. If feedback exists, populate the ReworkQueue directly. If all reviewers approved, auto-merge. Only re-broadcast ReviewRequestMessage if no reviews exist at all.
+- **REQ-IDEM-004f**: The in-process message bus (`InProcessMessageBus`) is volatile — ALL messages are lost on restart. Recovery logic MUST use GitHub API (comments, labels, PR state) as the source of truth, never depend on bus message replay.
+- **REQ-IDEM-004g**: PE reconciles task statuses against merged PRs on startup. Tasks whose PRs are already merged are marked Complete in the backlog (uses `GetMergedPullRequestsAsync`).
+- **REQ-IDEM-004h**: Test Engineer recovery: scans for open test PRs, checks GitHub comments for unaddressed feedback, re-requests review for PRs with no reviews. Uses `tested` label on source PRs as persistent dedup marker.
 
 **Scenario: System Restart Recovery**
 1. System crashes while Senior Engineer 1 has PR #35 (ready-for-review) and Junior Engineer 1 has PR #36 (in-progress)
@@ -739,6 +792,62 @@ Each phase has gate conditions that must be met before advancing:
 11. All tasks eventually assigned and completed through the review cycle
 ```
 
+### Scenario F: Test Engineer Generates Tests with Business Context
+
+```
+1. Senior Engineer's PR #35 (Issue #43 "Export reports") is reviewed, approved, and merged
+2. Test Engineer scans merged PRs → finds PR #35 with 4 testable .ts files → not in _testedPRs, no "tested" label
+3. Test Engineer parses "Closes #43" from PR body → fetches Issue #43 (acceptance criteria: "supports PDF and Excel export")
+4. Test Engineer reads PMSpec.md (business requirements) and Architecture.md (tech patterns)
+5. AI generates tests targeting: (a) acceptance criteria from Issue #43, (b) code correctness of the 4 source files, (c) edge cases
+6. Creates test PR "TestEngineer: Tests for PR #35 - Export reports" on branch agent/testengineer/35-tests
+7. Commits test files → marks ready-for-review → sends ReviewRequestMessage
+8. PE reviews test PR → APPROVE → merge
+9. Test Engineer applies "tested" label to source PR #35
+10. On next restart: _testedPRs populated from "tested" label → PR #35 skipped
+```
+
+### Scenario G: Test Engineer Rework After PE Review
+
+```
+1. Test Engineer creates test PR #40 for merged PR #35
+2. PE reviews test PR #40 → CHANGES REQUESTED ("Missing test for error handling in export service")
+3. Test Engineer receives ChangesRequestedMessage → matches _currentTestPrNumber → enqueues rework
+4. AI reads feedback + original source + existing test code → generates additional error handling tests
+5. Commits fixes → re-marks ready-for-review → sends ReviewRequestMessage
+6. PE re-reviews → APPROVE → merge → "tested" label applied to source PR #35
+```
+
+---
+
+## 21. PE Integration & Branch Sync Requirements
+
+### REQ-INTEG-001: PE Integration PR (Final Glue Phase)
+
+- **REQ-INTEG-001a**: When the PE detects ALL engineering plan tasks are "Done" (PRs merged), it creates a final integration PR that verifies the combined result works as a whole.
+- **REQ-INTEG-001b**: The integration PR is created from a new branch off latest main.
+- **REQ-INTEG-001c**: AI reviews the full codebase against PMSpec + Architecture + all merged PRs and generates integration fixes: missing wiring, broken imports, config/route registration, cross-module references.
+- **REQ-INTEG-001d**: The integration PR goes through the normal review cycle (PM + Architect review and approve).
+- **REQ-INTEG-001e**: On merge of the integration PR, signal `testing.integration.complete` and advance toward Completion phase.
+
+### REQ-INTEG-002: Branch Sync (Pull Latest Main)
+
+- **REQ-INTEG-002a**: Before resuming work on an existing PR after restart, agents MUST sync their branch with the latest main using GitHub's Update Branch API (`PUT /pulls/{number}/update-branch`).
+- **REQ-INTEG-002b**: Before marking a PR ready-for-review, the branch should be synced to ensure no merge conflicts.
+- **REQ-INTEG-002c**: `UpdatePullRequestBranchAsync` is added to `IGitHubService` / `GitHubService`.
+- **REQ-INTEG-002d**: `EngineerAgentBase` calls branch sync at key points: before `WorkOnExistingPrAsync` and before `MarkReadyForReviewAsync`.
+
+**Scenario: Integration PR After All Tasks Complete**
+```
+1. PE plan has 6 tasks (T1-T6). All assigned, implemented, reviewed, and merged.
+2. PE detects all tasks Complete → creates integration branch from latest main
+3. AI reads full codebase + PMSpec + Architecture → finds: missing route registration for T3's controller, T5 imports a module from T2 using wrong path
+4. AI generates fixes → commits to integration branch → creates PR "PrincipalEngineer: Integration — Final Assembly"
+5. PM reviews integration PR → APPROVE (all user stories covered)
+6. Architect reviews → APPROVE (no architectural violations)
+7. Squash merge → signal testing.integration.complete → Completion phase
+```
+
 ---
 
 ## Appendix: Known Bugs Fixed
@@ -753,3 +862,11 @@ These bugs were discovered during scenario analysis and fixed. Listed here as re
 | CurrentPrNumber cleared too early | MODERATE | Rework feedback never matched to engineer | Cleared immediately after commit, before review | Keep until PR merged/closed |
 | Review spam from repeated polling | MODERATE | Duplicate review comments created | HasAgentApprovedAsync returned false for CHANGES_REQUESTED | Added HasAgentReviewedAsync |
 | Tech stack ignored in prompts | MODERATE | Generated code was markdown instead of C# | TechStack not incorporated into agent prompts | Added TechStack to all prompts |
+| Architect duplicate reviews on restart | MODERATE | Same PR reviewed twice after restart | `_reviewedPrNumbers` in-memory only, lost on restart | Added `NeedsReviewFromAsync` check before reviewing |
+| PE stuck after CHANGES_REQUESTED + restart | CRITICAL | PE waits forever for review that already happened | `ChangesRequestedMessage` lost on restart, recovery only checked labels not comments | `RecoverReadyForReviewPRsAsync` now reads GitHub comments via `GetPendingChangesRequestedAsync` |
+| TestEngineer re-scans stale PRs every cycle | MODERATE | Tries to read files from old merged PRs, fails, never marks tested | `_testedPRs` in-memory only, never applies "tested" label, doesn't skip files-missing PRs | Apply "tested" label after generation, mark stale PRs as tested |
+| TestEngineer tests have no business context | MODERATE | Tests only validate code structure, not acceptance criteria | AI prompt only included source code + PR description, no issue/PMSpec/Architecture context | Added full context gathering: linked issue + PMSpec + Architecture |
+| Reviewers don't read actual code | CRITICAL | Reviews based on PR description only, not the committed code | AI prompts only included PR title/body, not file contents from the branch | All reviewers now read actual code files via `GetPRCodeContextAsync` |
+| PM review missing linked issue | MODERATE | PM couldn't validate acceptance criteria | No issue lookup in PM review prompt | Added `ParseLinkedIssueNumber` + `GetIssueAsync` to PM review |
+| Architect review missing PMSpec | MODERATE | Architect couldn't validate business alignment | Only Architecture.md included in prompt | Added PMSpec.md + linked issue to Architect review |
+| PE task reconciliation crash | MODERATE | Used non-existent method | Called `GetClosedPullRequestsAsync` which didn't exist | Changed to `GetMergedPullRequestsAsync` |
