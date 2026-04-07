@@ -564,9 +564,49 @@ public partial class PullRequestWorkflow
     }
 
     /// <summary>
+    /// Get the latest unaddressed CHANGES_REQUESTED feedback on a PR.
+    /// Walks all comments, tracks each reviewer's latest action, and returns the first
+    /// reviewer whose most recent comment is CHANGES_REQUESTED (not superseded by APPROVED).
+    /// Returns null if all reviewers' latest actions are APPROVED or no reviews exist.
+    /// </summary>
+    public async Task<(string Reviewer, string Feedback)?> GetPendingChangesRequestedAsync(
+        int prNumber, CancellationToken ct = default)
+    {
+        var comments = await _github.GetPullRequestCommentsAsync(prNumber, ct);
+        var latestByAgent = new Dictionary<string, (bool IsApproval, string Body)>(StringComparer.OrdinalIgnoreCase);
+
+        // Walk forward so later comments overwrite earlier ones per agent
+        foreach (var comment in comments.OrderBy(c => c.CreatedAt))
+        {
+            var approvalMatch = ApprovalPattern.Match(comment.Body);
+            if (approvalMatch.Success)
+            {
+                latestByAgent[approvalMatch.Groups[1].Value.Trim()] = (true, comment.Body);
+                continue;
+            }
+            var changesMatch = ChangesRequestedPattern.Match(comment.Body);
+            if (changesMatch.Success)
+            {
+                latestByAgent[changesMatch.Groups[1].Value.Trim()] = (false, comment.Body);
+            }
+        }
+
+        foreach (var (agent, (isApproval, body)) in latestByAgent)
+        {
+            if (!isApproval)
+            {
+                var dashIdx = body.IndexOf('—');
+                var feedback = dashIdx >= 0 ? body[(dashIdx + 1)..].Trim() : body;
+                return (agent, feedback);
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
     /// Detect the author's agent role from the PR title (format: "AgentRole: Task title").
     /// </summary>
-    private static string DetectAuthorRole(string prTitle)
+    public static string DetectAuthorRole(string prTitle)
     {
         var colonIdx = prTitle.IndexOf(':');
         if (colonIdx > 0)

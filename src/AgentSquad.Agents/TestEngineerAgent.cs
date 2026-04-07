@@ -39,6 +39,9 @@ public class TestEngineerAgent : AgentBase
 
     private readonly HashSet<int> _testedPRs = new();
     private readonly List<IDisposable> _subscriptions = new();
+    private readonly ConcurrentQueue<(int PrNumber, string PrTitle, string Feedback, string Reviewer)> _reworkQueue = new();
+    private readonly Dictionary<int, int> _reworkAttempts = new();
+    private int? _currentTestPrNumber;
 
     public TestEngineerAgent(
         AgentIdentity identity,
@@ -59,7 +62,8 @@ public class TestEngineerAgent : AgentBase
 
     protected override Task OnInitializeAsync(CancellationToken ct)
     {
-        // No message subscriptions needed — we poll for merged PRs
+        _subscriptions.Add(_messageBus.Subscribe<ChangesRequestedMessage>(
+            Identity.Id, HandleChangesRequestedAsync));
         return Task.CompletedTask;
     }
 
@@ -79,6 +83,13 @@ public class TestEngineerAgent : AgentBase
         {
             try
             {
+                // Priority 1: Process rework feedback on test PRs
+                await ProcessReworkAsync(ct);
+
+                // Priority 2: Recover any open test PRs that need review
+                await RecoverTestPRsAsync(ct);
+
+                // Priority 3: Scan for new merged PRs to test
                 await ScanMergedPRsForTestingAsync(ct);
 
                 // Poll less frequently than other agents
@@ -189,7 +200,9 @@ public class TestEngineerAgent : AgentBase
 
         if (sourceFiles.Count == 0)
         {
-            Logger.LogWarning("Could not read any source files from merged PR #{Number}", pr.Number);
+            // Files no longer exist on main — mark as tested to avoid re-scanning every cycle
+            Logger.LogWarning("Could not read any source files from merged PR #{Number} (files may have been removed)", pr.Number);
+            _testedPRs.Add(pr.Number);
             return;
         }
 
@@ -215,24 +228,46 @@ public class TestEngineerAgent : AgentBase
 
         // Create the test PR with real code files
         var testPrNumber = await CreateTestPRWithCodeAsync(pr, testFiles, ct);
+        _currentTestPrNumber = testPrNumber;
 
         Logger.LogInformation(
             "Created test PR #{TestPR} with {Count} test files for merged PR #{SourcePR}",
             testPrNumber, testFiles.Count, pr.Number);
         LogActivity("task", $"✅ Created test PR #{testPrNumber} with {testFiles.Count} test files for PR #{pr.Number}");
 
-        // Notify via message bus
-        await _messageBus.PublishAsync(new StatusUpdateMessage
+        // Apply "tested" label to the source PR so we don't re-process it on restart
+        try
+        {
+            var sourcePrData = await _github.GetPullRequestAsync(pr.Number, ct);
+            if (sourcePrData is not null)
+            {
+                var updatedLabels = sourcePrData.Labels
+                    .Append(TestedLabel)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+                await _github.UpdatePullRequestAsync(pr.Number, labels: updatedLabels, ct: ct);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex, "Could not apply tested label to source PR #{Number}", pr.Number);
+        }
+
+        // Mark test PR ready-for-review and request PE review
+        await _prWorkflow.MarkReadyForReviewAsync(testPrNumber, Identity.DisplayName, ct);
+
+        await _messageBus.PublishAsync(new ReviewRequestMessage
         {
             FromAgentId = Identity.Id,
             ToAgentId = "*",
-            MessageType = "status-update",
-            NewStatus = AgentStatus.Working,
-            CurrentTask = $"Tests written for PR #{pr.Number}",
-            Details = $"Created {testFiles.Count} test files in PR #{testPrNumber}"
+            MessageType = "ReviewRequest",
+            PrNumber = testPrNumber,
+            PrTitle = $"{Identity.DisplayName}: Tests for PR #{pr.Number} - {pr.Title}",
+            ReviewType = "CodeReview"
         }, ct);
 
-        UpdateStatus(AgentStatus.Idle, "Monitoring merged PRs for test coverage");
+        Logger.LogInformation("Test PR #{TestPR} marked ready-for-review, requested PE review", testPrNumber);
+        UpdateStatus(AgentStatus.Idle, $"Test PR #{testPrNumber} awaiting PE review");
     }
 
     /// <summary>
@@ -351,4 +386,172 @@ public class TestEngineerAgent : AgentBase
 
         return testPr.Number;
     }
+
+    #region Rework Loop
+
+    private Task HandleChangesRequestedAsync(ChangesRequestedMessage message, CancellationToken ct)
+    {
+        if (_currentTestPrNumber != message.PrNumber)
+            return Task.CompletedTask;
+
+        Logger.LogInformation("TestEngineer received change request from {Reviewer} on PR #{PrNumber}",
+            message.ReviewerAgent, message.PrNumber);
+
+        _reworkQueue.Enqueue((message.PrNumber, message.PrTitle, message.Feedback, message.ReviewerAgent));
+        return Task.CompletedTask;
+    }
+
+    private async Task ProcessReworkAsync(CancellationToken ct)
+    {
+        while (_reworkQueue.TryDequeue(out var rework))
+        {
+            var pr = await _github.GetPullRequestAsync(rework.PrNumber, ct);
+            if (pr is null || !string.Equals(pr.State, "open", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var attempts = _reworkAttempts.GetValueOrDefault(rework.PrNumber, 0) + 1;
+            _reworkAttempts[rework.PrNumber] = attempts;
+
+            if (attempts > _config.Limits.MaxReworkCycles)
+            {
+                Logger.LogWarning("TestEngineer reached max rework cycles for PR #{PrNumber}", rework.PrNumber);
+                await _github.AddPullRequestCommentAsync(rework.PrNumber,
+                    $"⚠️ **{Identity.DisplayName}** has reached the maximum rework cycle limit. " +
+                    "Requesting final approval to unblock progress.", ct);
+                await _messageBus.PublishAsync(new ReviewRequestMessage
+                {
+                    FromAgentId = Identity.Id,
+                    ToAgentId = "*",
+                    MessageType = "ReviewRequest",
+                    PrNumber = pr.Number,
+                    PrTitle = pr.Title,
+                    ReviewType = "FinalApproval"
+                }, ct);
+                return;
+            }
+
+            UpdateStatus(AgentStatus.Working,
+                $"Addressing feedback on test PR #{rework.PrNumber} (attempt {attempts}/{_config.Limits.MaxReworkCycles})");
+            Logger.LogInformation("TestEngineer reworking PR #{PrNumber} based on feedback from {Reviewer} (attempt {Attempt})",
+                rework.PrNumber, rework.Reviewer, attempts);
+
+            try
+            {
+                var kernel = _modelRegistry.GetKernel(Identity.ModelTier, Identity.Id);
+                var chat = kernel.GetRequiredService<IChatCompletionService>();
+                var techStack = _config.Project.TechStack;
+
+                var history = new ChatHistory();
+                history.AddSystemMessage(
+                    $"You are an expert test engineer maintaining tests for a {techStack} project.\n" +
+                    "A reviewer requested changes on your test PR. Update the test files to address all feedback.\n\n" +
+                    "Output each corrected file using this exact format:\n" +
+                    "FILE: tests/path/to/TestFile.ext\n```language\n<complete file content>\n```\n\n" +
+                    "Include the COMPLETE content of each changed file.");
+
+                history.AddUserMessage(
+                    $"## Test PR #{rework.PrNumber}: {rework.PrTitle}\n\n" +
+                    $"## Original PR Description\n{pr.Body}\n\n" +
+                    $"## Review Feedback from {rework.Reviewer}\n{rework.Feedback}\n\n" +
+                    "Please provide the corrected test files that address all the feedback.");
+
+                var response = await chat.GetChatMessageContentAsync(history, cancellationToken: ct);
+                var updatedContent = response.Content?.Trim() ?? "";
+
+                if (!string.IsNullOrWhiteSpace(updatedContent))
+                {
+                    var codeFiles = CodeFileParser.ParseFiles(updatedContent);
+                    if (codeFiles.Count > 0)
+                    {
+                        await _prWorkflow.CommitCodeFilesToPRAsync(
+                            pr.Number, codeFiles, "Address review feedback on tests", ct);
+                    }
+
+                    await _prWorkflow.MarkReadyForReviewAsync(pr.Number, Identity.DisplayName, ct);
+                    await _messageBus.PublishAsync(new ReviewRequestMessage
+                    {
+                        FromAgentId = Identity.Id,
+                        ToAgentId = "*",
+                        MessageType = "ReviewRequest",
+                        PrNumber = pr.Number,
+                        PrTitle = pr.Title,
+                        ReviewType = "Rework"
+                    }, ct);
+
+                    Logger.LogInformation("TestEngineer submitted rework for PR #{PrNumber}, re-requesting review", pr.Number);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, "TestEngineer failed rework on PR #{PrNumber}", rework.PrNumber);
+                _reworkQueue.Enqueue(rework);
+            }
+        }
+    }
+
+    /// <summary>
+    /// On restart, recover any open test PRs that need review or have unaddressed feedback.
+    /// </summary>
+    private async Task RecoverTestPRsAsync(CancellationToken ct)
+    {
+        if (_currentTestPrNumber is not null)
+            return; // Already tracking a PR
+
+        try
+        {
+            var myPRs = await _prWorkflow.GetAgentTasksAsync(Identity.DisplayName, ct);
+            foreach (var pr in myPRs)
+            {
+                if (!string.Equals(pr.State, "open", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                _currentTestPrNumber = pr.Number;
+
+                // Check for unaddressed feedback
+                var pendingFeedback = await _prWorkflow.GetPendingChangesRequestedAsync(pr.Number, ct);
+                if (pendingFeedback is var (reviewer, feedback))
+                {
+                    _reworkQueue.Enqueue((pr.Number, pr.Title, feedback, reviewer));
+                    Logger.LogInformation("TestEngineer recovered feedback on PR #{PrNumber} from {Reviewer}",
+                        pr.Number, reviewer);
+                    UpdateStatus(AgentStatus.Working, $"Processing feedback on test PR #{pr.Number}");
+                    return;
+                }
+
+                // Check if PR needs review
+                if (pr.Labels.Contains("ready-for-review", StringComparer.OrdinalIgnoreCase))
+                {
+                    // Check if PE already approved — maybe we can just wait for merge
+                    if (!await _prWorkflow.NeedsReviewFromAsync(pr.Number, "PrincipalEngineer", ct))
+                    {
+                        UpdateStatus(AgentStatus.Idle, $"Test PR #{pr.Number} reviewed, awaiting merge");
+                        return;
+                    }
+
+                    // Re-request review
+                    await _messageBus.PublishAsync(new ReviewRequestMessage
+                    {
+                        FromAgentId = Identity.Id,
+                        ToAgentId = "*",
+                        MessageType = "ReviewRequest",
+                        PrNumber = pr.Number,
+                        PrTitle = pr.Title,
+                        ReviewType = "Recovery"
+                    }, ct);
+
+                    Logger.LogInformation("TestEngineer re-requested review for PR #{PrNumber}", pr.Number);
+                    UpdateStatus(AgentStatus.Idle, $"Test PR #{pr.Number} awaiting PE review");
+                    return;
+                }
+
+                break;
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to recover test PRs");
+        }
+    }
+
+    #endregion
 }

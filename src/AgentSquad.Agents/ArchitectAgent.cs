@@ -417,6 +417,13 @@ public class ArchitectAgent : AgentBase
                 if (_reviewedPrNumbers.Contains(prNumber))
                     continue;
 
+                // Dedup across restarts: check GitHub comments to see if we already reviewed
+                if (!await _prWorkflow.NeedsReviewFromAsync(prNumber, "Architect", ct))
+                {
+                    _reviewedPrNumbers.Add(prNumber);
+                    continue;
+                }
+
                 var pr = await _github.GetPullRequestAsync(prNumber, ct);
                 if (pr is null)
                     continue;

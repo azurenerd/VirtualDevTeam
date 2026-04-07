@@ -767,8 +767,11 @@ public class PrincipalEngineerAgent : EngineerAgentBase
     }
 
     /// <summary>
-    /// On restart, check for our own PRs that are ready-for-review but haven't been
-    /// picked up by reviewers (bus messages lost). Re-broadcasts ReviewRequestMessage.
+    /// On restart, check for our own PRs that are ready-for-review.
+    /// Instead of blindly re-broadcasting, check PR comments for unaddressed feedback:
+    /// - If CHANGES_REQUESTED exists → populate ReworkQueue directly
+    /// - If all required reviewers approved → attempt merge
+    /// - If no reviews yet → re-broadcast ReviewRequestMessage
     /// </summary>
     private async Task RecoverReadyForReviewPRsAsync(CancellationToken ct)
     {
@@ -781,28 +784,65 @@ public class PrincipalEngineerAgent : EngineerAgentBase
             var myPRs = await PrWorkflow.GetAgentTasksAsync(Identity.DisplayName, ct);
             foreach (var pr in myPRs)
             {
-                if (string.Equals(pr.State, "open", StringComparison.OrdinalIgnoreCase)
-                    && pr.Labels.Contains("ready-for-review", StringComparer.OrdinalIgnoreCase))
+                if (!string.Equals(pr.State, "open", StringComparison.OrdinalIgnoreCase)
+                    || !pr.Labels.Contains("ready-for-review", StringComparer.OrdinalIgnoreCase))
+                    continue;
+
+                // Track this PR
+                CurrentPrNumber = pr.Number;
+                Identity.AssignedPullRequest = pr.Number.ToString();
+
+                // Check for unaddressed CHANGES_REQUESTED feedback on GitHub
+                var pendingFeedback = await PrWorkflow.GetPendingChangesRequestedAsync(pr.Number, ct);
+                if (pendingFeedback is var (reviewer, feedback))
                 {
-                    // Track this PR
-                    CurrentPrNumber = pr.Number;
-                    Identity.AssignedPullRequest = pr.Number.ToString();
-
-                    // Re-broadcast review request
-                    await MessageBus.PublishAsync(new ReviewRequestMessage
-                    {
-                        FromAgentId = Identity.Id,
-                        ToAgentId = "*",
-                        MessageType = "ReviewRequest",
-                        PrNumber = pr.Number,
-                        PrTitle = pr.Title,
-                        ReviewType = "Recovery"
-                    }, ct);
-
-                    Logger.LogInformation("PE re-broadcast review request for own PR #{PrNumber}: {Title}",
-                        pr.Number, pr.Title);
-                    UpdateStatus(AgentStatus.Idle, $"PR #{pr.Number} awaiting review");
+                    // Populate rework queue directly — no need to re-broadcast
+                    ReworkQueue.Enqueue(new ReworkItem(pr.Number, pr.Title, feedback, reviewer));
+                    Logger.LogInformation(
+                        "PE recovered unaddressed feedback on PR #{PrNumber} from {Reviewer}",
+                        pr.Number, reviewer);
+                    UpdateStatus(AgentStatus.Working, $"Processing recovered feedback on PR #{pr.Number}");
+                    continue;
                 }
+
+                // No unaddressed changes — check if all reviewers approved (maybe we can merge)
+                var authorRole = PullRequestWorkflow.DetectAuthorRole(pr.Title);
+                var required = PullRequestWorkflow.GetRequiredReviewers(authorRole);
+                var approved = await PrWorkflow.GetApprovedReviewersAsync(pr.Number, ct);
+
+                if (required.All(r => approved.Contains(r, StringComparer.OrdinalIgnoreCase)))
+                {
+                    // All approved — merge
+                    Logger.LogInformation("PE PR #{PrNumber} has all approvals, merging", pr.Number);
+                    await GitHub.MergePullRequestAsync(pr.Number,
+                        $"Merged after dual approval from {string.Join(" and ", approved)}", ct);
+                    if (!string.IsNullOrEmpty(pr.HeadBranch))
+                        await GitHub.DeleteBranchAsync(pr.HeadBranch, ct);
+
+                    var taskIdx = _taskBacklog.FindIndex(t => t.PullRequestNumber == pr.Number);
+                    if (taskIdx >= 0)
+                        _taskBacklog[taskIdx] = _taskBacklog[taskIdx] with { Status = "Done" };
+
+                    CurrentPrNumber = null;
+                    Identity.AssignedPullRequest = null;
+                    UpdateStatus(AgentStatus.Idle, "Ready for next task");
+                    continue;
+                }
+
+                // Partial or no reviews — re-broadcast for missing reviewers
+                await MessageBus.PublishAsync(new ReviewRequestMessage
+                {
+                    FromAgentId = Identity.Id,
+                    ToAgentId = "*",
+                    MessageType = "ReviewRequest",
+                    PrNumber = pr.Number,
+                    PrTitle = pr.Title,
+                    ReviewType = "Recovery"
+                }, ct);
+
+                Logger.LogInformation("PE re-broadcast review request for own PR #{PrNumber}: {Title}",
+                    pr.Number, pr.Title);
+                UpdateStatus(AgentStatus.Idle, $"PR #{pr.Number} awaiting review");
             }
         }
         catch (Exception ex)
