@@ -4,6 +4,7 @@
 @using AgentSquad.Core.Diagnostics
 @using AgentSquad.Dashboard.Services
 @using Microsoft.Extensions.Logging
+@using Markdig
 @implements IDisposable
 @inject DashboardDataService DataService
 @inject NavigationManager Navigation
@@ -240,7 +241,7 @@ else
                             <span class="chat-role">@(msg.Role == "user" ? "👤 You" : $"🤖 {_chatAgentName}")</span>
                             <span class="chat-time">@msg.Timestamp.ToLocalTime().ToString("HH:mm:ss")</span>
                         </div>
-                        <div class="chat-msg-body">@msg.Content</div>
+                        <div class="chat-msg-body">@((MarkupString)RenderMarkdown(msg.Content))</div>
                     </div>
                 }
                 @if (_chatSending)
@@ -365,6 +366,13 @@ else
 
     private static string TruncateDiagnostic(string text) =>
         text.Length <= 80 ? text : string.Concat(text.AsSpan(0, 77), "...");
+
+    private static readonly MarkdownPipeline _mdPipeline = new MarkdownPipelineBuilder()
+        .UseAdvancedExtensions()
+        .Build();
+
+    private static string RenderMarkdown(string markdown) =>
+        Markdown.ToHtml(markdown ?? "", _mdPipeline);
 
     private void OnModelSelected(string agentId, ChangeEventArgs e)
     {
