@@ -308,9 +308,9 @@ public class WorkflowStateMachine
                 new()
                 {
                     Name = "PM Online",
-                    Description = "Program Manager agent must be Online.",
+                    Description = "Program Manager agent must be active.",
                     IsMet = _registry.GetAgentsByRole(AgentRole.ProgramManager)
-                                .Any(a => a.Status is AgentStatus.Online or AgentStatus.Working)
+                                .Any(a => a.Status is AgentStatus.Online or AgentStatus.Working or AgentStatus.Idle)
                 }
             },
 
