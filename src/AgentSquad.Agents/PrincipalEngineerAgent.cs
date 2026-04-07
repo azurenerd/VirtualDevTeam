@@ -119,6 +119,8 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                     await RecoverReadyForReviewPRsAsync(ct);
                     // Check if our tracked PR has been merged/closed
                     await CheckOwnPrStatusAsync(ct);
+                    // Recovery: finish stuck in-progress PRs that were never marked ready
+                    await RecoverStuckInProgressPRAsync(ct);
                     // Priority 1: Process rework feedback on our own PRs
                     await ProcessOwnReworkAsync(ct);
                     // Priority 2: Assign issues to available engineers
@@ -863,6 +865,57 @@ public class PrincipalEngineerAgent : EngineerAgentBase
     }
 
     /// <summary>
+    /// Detect and recover from the case where WorkOnOwnTasksAsync created a PR and
+    /// committed code but failed before calling MarkReadyForReviewAsync. The task is
+    /// InProgress, the PR is open with "in-progress" label, but no one is reviewing it.
+    /// Fix: mark it ready-for-review and broadcast the review request.
+    /// </summary>
+    private async Task RecoverStuckInProgressPRAsync(CancellationToken ct)
+    {
+        try
+        {
+            // Only act if we have a tracked PR
+            if (CurrentPrNumber is null)
+                return;
+
+            var pr = await GitHub.GetPullRequestAsync(CurrentPrNumber.Value, ct);
+            if (pr is null || !string.Equals(pr.State, "open", StringComparison.OrdinalIgnoreCase))
+                return;
+
+            // Only recover in-progress PRs (not already ready-for-review)
+            if (pr.Labels.Contains("ready-for-review", StringComparer.OrdinalIgnoreCase))
+                return;
+
+            // Must have at least some code committed (updated after creation)
+            if (pr.UpdatedAt is null || pr.UpdatedAt <= pr.CreatedAt.AddMinutes(1))
+                return;
+
+            Logger.LogInformation(
+                "PE recovering stuck in-progress PR #{PrNumber} — marking ready for review",
+                pr.Number);
+            LogActivity("system", $"🔄 Recovering stuck PR #{pr.Number} — marking ready for review");
+
+            await PrWorkflow.MarkReadyForReviewAsync(pr.Number, Identity.DisplayName, ct);
+
+            await MessageBus.PublishAsync(new ReviewRequestMessage
+            {
+                FromAgentId = Identity.Id,
+                ToAgentId = "*",
+                MessageType = "ReviewRequest",
+                PrNumber = pr.Number,
+                PrTitle = pr.Title,
+                ReviewType = "CodeReview"
+            }, ct);
+
+            UpdateStatus(AgentStatus.Idle, $"PR #{pr.Number} ready for review (recovered)");
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to recover stuck in-progress PR");
+        }
+    }
+
+    /// <summary>
     /// Check if our currently tracked PR has been merged or closed, and clear state so
     /// the PE can move on to the next task.
     /// </summary>
@@ -876,20 +929,26 @@ public class PrincipalEngineerAgent : EngineerAgentBase
             var pr = await GitHub.GetPullRequestAsync(CurrentPrNumber.Value, ct);
             if (pr is null || !string.Equals(pr.State, "open", StringComparison.OrdinalIgnoreCase))
             {
-                var wasMerged = pr?.State?.Equals("closed", StringComparison.OrdinalIgnoreCase) == true;
-                Logger.LogInformation("PE own PR #{PrNumber} is no longer open ({State}), clearing tracking",
-                    CurrentPrNumber.Value, pr?.State ?? "unknown");
+                var wasMerged = pr?.IsMerged == true;
+                Logger.LogInformation("PE own PR #{PrNumber} is no longer open ({State}, merged={Merged}), clearing tracking",
+                    CurrentPrNumber.Value, pr?.State ?? "unknown", wasMerged);
 
-                // Mark the backlog task as Done if it was merged
-                if (wasMerged)
+                // Mark the backlog task as Done if merged, or reset to Pending if closed without merge
+                var taskIdx = _taskBacklog.FindIndex(t => t.PullRequestNumber == CurrentPrNumber.Value);
+                if (taskIdx >= 0)
                 {
-                    var taskIdx = _taskBacklog.FindIndex(t => t.PullRequestNumber == CurrentPrNumber.Value);
-                    if (taskIdx >= 0)
+                    if (wasMerged)
                     {
                         _taskBacklog[taskIdx] = _taskBacklog[taskIdx] with { Status = "Done" };
                         Logger.LogInformation("PE task {TaskId} marked Done (PR #{PrNumber} merged)",
                             _taskBacklog[taskIdx].Id, CurrentPrNumber.Value);
                         LogActivity("task", $"✅ Task {_taskBacklog[taskIdx].Id}: {_taskBacklog[taskIdx].Name} completed (PR #{CurrentPrNumber.Value} merged)");
+                    }
+                    else
+                    {
+                        _taskBacklog[taskIdx] = _taskBacklog[taskIdx] with { Status = "Pending", PullRequestNumber = null };
+                        Logger.LogInformation("PE task {TaskId} reset to Pending (PR #{PrNumber} closed without merge)",
+                            _taskBacklog[taskIdx].Id, CurrentPrNumber.Value);
                     }
                 }
 
@@ -900,7 +959,7 @@ public class PrincipalEngineerAgent : EngineerAgentBase
         }
         catch (Exception ex)
         {
-            Logger.LogWarning(ex, "Failed to check own PR #{PrNumber} status", CurrentPrNumber.Value);
+            Logger.LogWarning(ex, "Failed to check own PR #{PrNumber} status", CurrentPrNumber);
         }
     }
 
