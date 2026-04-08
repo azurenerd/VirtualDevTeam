@@ -50,15 +50,23 @@ public interface IGitHubService
 
     /// <summary>
     /// Merge the base branch (main) into a PR branch to bring it up to date.
-    /// Returns true if the update succeeded, false if there are merge conflicts.
+    /// Returns true if the update succeeded or branch is already up to date,
+    /// false if there are genuine merge conflicts.
     /// </summary>
     Task<bool> UpdatePullRequestBranchAsync(int prNumber, CancellationToken ct = default);
+
+    /// <summary>
+    /// Checks whether a PR branch is behind main (i.e., main has commits not in the branch).
+    /// Returns true if the branch is behind and needs syncing, false if up to date.
+    /// </summary>
+    Task<bool> IsBranchBehindMainAsync(int prNumber, CancellationToken ct = default);
 
     /// <summary>
     /// Force-rebase a PR branch onto main by: reading all changed files from the branch,
     /// resetting the branch ref to main HEAD, and re-committing the files on top.
     /// This eliminates merge conflicts caused by parallel branches diverging from main.
     /// Returns true if successful, false if no files to rebase or an error occurred.
+    /// WARNING: This is destructive — only use when there are genuine merge conflicts.
     /// </summary>
     Task<bool> RebaseBranchOnMainAsync(int prNumber, CancellationToken ct = default);
 

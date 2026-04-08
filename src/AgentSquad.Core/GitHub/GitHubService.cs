@@ -731,7 +731,19 @@ public class GitHubService : IGitHubService
         }
         catch (ApiException ex) when (ex.StatusCode == System.Net.HttpStatusCode.UnprocessableEntity)
         {
-            _logger.LogWarning("PR #{PrNumber} branch update failed — possible merge conflict", prNumber);
+            // 422 can mean "already up to date" OR "merge conflict".
+            // Check the message to distinguish.
+            var msg = ex.Message ?? "";
+            if (msg.Contains("already up-to-date", StringComparison.OrdinalIgnoreCase) ||
+                msg.Contains("already up to date", StringComparison.OrdinalIgnoreCase) ||
+                msg.Contains("no update is needed", StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.LogDebug("PR #{PrNumber} branch is already up to date with main", prNumber);
+                return true; // Not a conflict — branch is fine
+            }
+
+            _logger.LogWarning("PR #{PrNumber} branch update failed — merge conflict (422: {Message})",
+                prNumber, msg.Length > 200 ? msg[..200] : msg);
             return false;
         }
         catch (ApiException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Accepted)
@@ -744,6 +756,35 @@ public class GitHubService : IGitHubService
         {
             _logger.LogWarning(ex, "Failed to update PR #{PrNumber} branch", prNumber);
             return false;
+        }
+    }
+
+    public async Task<bool> IsBranchBehindMainAsync(int prNumber, CancellationToken ct = default)
+    {
+        try
+        {
+            var pr = await _client.PullRequest.Get(_owner, _repo, prNumber);
+            var baseSha = pr.Base.Sha;
+            var headRef = pr.Head.Ref;
+
+            // Compare: how many commits is main ahead of the PR branch?
+            var comparison = await _client.Repository.Commit.Compare(
+                _owner, _repo, headRef, pr.Base.Ref);
+
+            if (comparison.AheadBy > 0)
+            {
+                _logger.LogDebug("PR #{PrNumber} branch is {Count} commits behind main",
+                    prNumber, comparison.AheadBy);
+                return true;
+            }
+
+            _logger.LogDebug("PR #{PrNumber} branch is up to date with main", prNumber);
+            return false;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to check if PR #{PrNumber} is behind main — assuming yes", prNumber);
+            return true; // Assume behind if check fails
         }
     }
 
@@ -847,20 +888,16 @@ public class GitHubService : IGitHubService
                 return false;
             }
 
-            // 6. Now safe to force-reset the branch to main's HEAD
-            await _client.Git.Reference.Update(_owner, _repo, $"heads/{branchName}",
-                new ReferenceUpdate(mainCommitSha, true)); // force update
-
-            _logger.LogInformation(
-                "Reset branch {Branch} to main HEAD ({Sha}) for PR #{PrNumber} rebase",
-                branchName, mainCommitSha[..7], prNumber);
-
-            // 7. Create the commit with our pre-built tree and update branch
+            // 6. Create the commit FIRST (parent = main HEAD), THEN do one atomic ref update.
+            // This avoids the dangerous window where the branch is at main HEAD with no new commit.
+            // Git commits are objects — they don't require the branch to point anywhere specific.
             var newCommit = new NewCommit($"Rebase: {pr.Title}", treeResult.Sha, mainCommitSha);
             var commitResult = await _client.Git.Commit.Create(_owner, _repo, newCommit);
 
+            // 7. Single atomic force-push: move branch directly to the new commit
+            // If this fails, branch still has its old code (safe). No intermediate reset.
             await _client.Git.Reference.Update(_owner, _repo, $"heads/{branchName}",
-                new ReferenceUpdate(commitResult.Sha));
+                new ReferenceUpdate(commitResult.Sha, true)); // force update
 
             _logger.LogInformation(
                 "Rebased PR #{PrNumber} ({FileCount} files) onto main — branch {Branch} is now conflict-free",

@@ -294,6 +294,19 @@ public abstract class EngineerAgentBase : AgentBase
     {
         try
         {
+            // First check if the branch is actually behind main — skip sync entirely if not
+            var isBehind = await GitHub.IsBranchBehindMainAsync(prNumber, ct);
+            if (!isBehind)
+            {
+                Logger.LogDebug("{Role} {Name} PR #{PrNumber} branch is already up to date with main — no sync needed",
+                    Identity.Role, Identity.DisplayName, prNumber);
+                return;
+            }
+
+            // Branch IS behind main — try non-destructive merge update first
+            Logger.LogInformation("{Role} {Name} PR #{PrNumber} branch is behind main — syncing",
+                Identity.Role, Identity.DisplayName, prNumber);
+
             var synced = await GitHub.UpdatePullRequestBranchAsync(prNumber, ct);
             if (synced)
             {
@@ -302,8 +315,8 @@ public abstract class EngineerAgentBase : AgentBase
             }
             else
             {
-                // Standard merge-update failed (content conflict) — force-rebase onto main
-                Logger.LogWarning("{Role} {Name} PR #{PrNumber} branch sync failed — attempting force-rebase onto main",
+                // Genuine merge conflict — force-rebase as last resort
+                Logger.LogWarning("{Role} {Name} PR #{PrNumber} has merge conflicts — attempting force-rebase onto main",
                     Identity.Role, Identity.DisplayName, prNumber);
 
                 var rebased = await GitHub.RebaseBranchOnMainAsync(prNumber, ct);
