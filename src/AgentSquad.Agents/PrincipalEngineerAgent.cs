@@ -125,6 +125,13 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 }
                 else
                 {
+                    // Show meaningful status at the start of each orchestration loop
+                    var pending = _taskManager.PendingCount;
+                    var done = _taskManager.DoneCount;
+                    var total = _taskManager.TotalCount;
+                    UpdateStatus(AgentStatus.Working,
+                        $"Orchestrating tasks ({done}/{total} done, {pending} pending, {_reviewQueue.Count} PRs queued)");
+
                     // Recovery: re-track and re-broadcast review for our own ready-for-review PRs
                     await RecoverReadyForReviewPRsAsync(ct);
                     // Check if our tracked PR has been merged/closed
@@ -260,7 +267,8 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 _taskManager.TotalCount, _taskManager.DoneCount, _taskManager.PendingCount);
 
             _planningComplete = true;
-            UpdateStatus(AgentStatus.Working, $"Recovered {_taskManager.TotalCount} tasks from issues");
+            UpdateStatus(AgentStatus.Working,
+                $"Loaded {_taskManager.TotalCount} tasks ({_taskManager.DoneCount} done, {_taskManager.PendingCount} pending)");
             return;
         }
 
