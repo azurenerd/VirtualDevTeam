@@ -850,7 +850,9 @@ public class ProgramManagerAgent : AgentBase
                 }
 
                 // Skip if we've already posted a review comment (GitHub check)
-                if (!await _prWorkflow.NeedsReviewFromAsync(prNumber, "ProgramManager", ct))
+                // BUT always process force-approval PRs regardless
+                if (!_forceApprovalPrs.Contains(prNumber) &&
+                    !await _prWorkflow.NeedsReviewFromAsync(prNumber, "ProgramManager", ct))
                 {
                     _reviewedPrNumbers.Add(prNumber);
                     continue;

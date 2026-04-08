@@ -494,7 +494,9 @@ public class ArchitectAgent : AgentBase
                 }
 
                 // Dedup across restarts: check GitHub comments to see if we already reviewed
-                if (!await _prWorkflow.NeedsReviewFromAsync(prNumber, "Architect", ct))
+                // BUT always process force-approval PRs regardless
+                if (!_forceApprovalPrs.Contains(prNumber) &&
+                    !await _prWorkflow.NeedsReviewFromAsync(prNumber, "Architect", ct))
                 {
                     _reviewedPrNumbers.Add(prNumber);
                     continue;
