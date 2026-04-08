@@ -442,7 +442,7 @@ public partial class PullRequestWorkflow
     // ── Code PR Review Workflow ────────────────────────────────────────
 
     /// <summary>
-    /// Approval comment marker format: **[AgentName] APPROVED** — reason
+    /// Approval comment marker format: **[AgentName] APPROVED**\n\nreason
     /// </summary>
     private static readonly Regex ApprovalPattern = new(
         @"\*\*\[(.+?)\]\s*APPROVED\*\*", RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -541,7 +541,7 @@ public partial class PullRequestWorkflow
         ArgumentException.ThrowIfNullOrWhiteSpace(approverAgent);
 
         // Post the approval comment
-        var comment = $"**[{approverAgent}] APPROVED** — {reason}";
+        var comment = $"**[{approverAgent}] APPROVED**";
         await _github.AddPullRequestCommentAsync(prNumber, comment, ct);
         _logger.LogInformation("Agent {Agent} approved PR #{Number}", approverAgent, prNumber);
 
