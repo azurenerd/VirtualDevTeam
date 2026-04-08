@@ -706,26 +706,24 @@ public partial class PullRequestWorkflow
         if (changedFiles.Count == 0)
             return "";
 
-        var codeExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        // Skip only known binary extensions — include everything else
+        var binaryExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            ".cs", ".ts", ".tsx", ".js", ".jsx", ".py", ".java", ".go", ".rs",
-            ".razor", ".blazor", ".vue", ".svelte", ".rb", ".php", ".swift", ".kt",
-            ".css", ".scss", ".html", ".json", ".md", ".txt", ".yml", ".yaml",
-            ".xml", ".config", ".csproj", ".sln", ".props", ".targets", ".sample"
+            ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".svg", ".webp",
+            ".woff", ".woff2", ".ttf", ".eot", ".otf",
+            ".zip", ".tar", ".gz", ".7z", ".rar",
+            ".dll", ".exe", ".bin", ".obj", ".pdb",
+            ".pdf", ".doc", ".docx", ".xls", ".xlsx"
         };
 
-        var codeFiles = changedFiles
-            .Where(f => codeExtensions.Contains(Path.GetExtension(f)))
-            .ToList();
-
-        if (codeFiles.Count == 0)
-            return "";
-
         var sb = new System.Text.StringBuilder();
-        sb.AppendLine("## Code Files Changed in This PR\n");
+        sb.AppendLine("## Files Changed in This PR\n");
 
-        foreach (var filePath in codeFiles)
+        foreach (var filePath in changedFiles)
         {
+            if (binaryExtensions.Contains(Path.GetExtension(filePath)))
+                continue;
+
             try
             {
                 var content = await _github.GetFileContentAsync(filePath, headBranch, ct);
