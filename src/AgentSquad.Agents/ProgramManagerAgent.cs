@@ -207,8 +207,11 @@ public class ProgramManagerAgent : AgentBase
             var existingKickoff = existingIssues.FirstOrDefault(i =>
                 i.Title.Equals(issueTitle, StringComparison.OrdinalIgnoreCase));
 
+            int? kickoffIssueNumber = null;
+
             if (existingKickoff is not null)
             {
+                kickoffIssueNumber = existingKickoff.Number;
                 Logger.LogInformation(
                     "Kickoff issue already exists as #{Number}, skipping issue creation",
                     existingKickoff.Number);
@@ -232,6 +235,7 @@ public class ProgramManagerAgent : AgentBase
                     [IssueWorkflow.Labels.AgentQuestion],
                     ct);
 
+                kickoffIssueNumber = issue.Number;
                 Logger.LogInformation(
                     "Created kickoff issue #{Number}: {Title}",
                     issue.Number, issueTitle);
@@ -240,6 +244,7 @@ public class ProgramManagerAgent : AgentBase
             // 2. Send a TaskAssignmentMessage via bus to trigger the Researcher.
             //    Include the research guidance in the description so the Researcher
             //    gets the full context even if it doesn't read the GitHub issue.
+            //    Pass the issue number so the Researcher can link it directly.
             var taskId = $"kickoff-research-{Guid.NewGuid():N}";
             await _messageBus.PublishAsync(new TaskAssignmentMessage
             {
@@ -249,7 +254,8 @@ public class ProgramManagerAgent : AgentBase
                 TaskId = taskId,
                 Title = $"Research technology stack for {projectName}",
                 Description = $"{projectDescription}\n\n## Research Guidance\n{researchGuidance}",
-                Complexity = "High"
+                Complexity = "High",
+                IssueNumber = kickoffIssueNumber
             }, ct);
 
             Logger.LogInformation(
@@ -742,16 +748,25 @@ public class ProgramManagerAgent : AgentBase
                 if (_reviewedPrNumbers.Contains(prNumber))
                     continue;
 
+                var pr = await _github.GetPullRequestAsync(prNumber, ct);
+                if (pr is null)
+                    continue;
+
+                // Skip TestEngineer PRs — PM doesn't review test suites, only PE does
+                var authorRole = PullRequestWorkflow.DetectAuthorRole(pr.Title);
+                if (authorRole.Contains("TestEngineer", StringComparison.OrdinalIgnoreCase)
+                    || authorRole.Contains("Test Engineer", StringComparison.OrdinalIgnoreCase))
+                {
+                    _reviewedPrNumbers.Add(prNumber);
+                    continue;
+                }
+
                 // Skip if we've already posted a review comment (GitHub check)
                 if (!await _prWorkflow.NeedsReviewFromAsync(prNumber, "ProgramManager", ct))
                 {
                     _reviewedPrNumbers.Add(prNumber);
                     continue;
                 }
-
-                var pr = await _github.GetPullRequestAsync(prNumber, ct);
-                if (pr is null)
-                    continue;
 
                 Logger.LogInformation("PM reviewing PR #{Number}: {Title}", pr.Number, pr.Title);
                 UpdateStatus(AgentStatus.Working, $"Reviewing PR #{pr.Number}: {pr.Title}");
@@ -1430,29 +1445,26 @@ public class ProgramManagerAgent : AgentBase
 
             var history = new ChatHistory();
             history.AddSystemMessage(
-                "You are a Program Manager reviewing a pull request for alignment with " +
-                "project requirements and the PM specification.\n\n" +
-                "IMPORTANT: This PR is ONE TASK from the Engineering Plan — it is NOT expected to " +
-                "cover the entire PM Spec or Architecture. Review it ONLY against its own stated " +
-                "description, acceptance criteria, and the specific task it addresses. Do NOT request " +
-                "changes because the PR doesn't implement features from other tasks.\n\n" +
-                "You will be given the PM spec, engineering plan, the linked user story, AND the " +
-                "actual code files. Review the ACTUAL CODE — not just the PR description.\n\n" +
-                "Evaluate:\n" +
-                "1. Does the code fulfill the linked issue's acceptance criteria?\n" +
-                "2. Is the implementation consistent with the PM spec for the scope of THIS task?\n" +
-                "3. Are there any bugs, gaps, or missing edge cases within this task's scope?\n" +
-                "4. Does the approach make sense for the business goals?\n" +
-                "5. Does the code quality meet expectations for a production deliverable?\n\n" +
-                "REVIEW PHILOSOPHY: Be pragmatic, not pedantic. Only request changes for issues " +
-                "that are both significant AND fixable within a reasonable code change. Minor " +
-                "style issues, naming preferences, or cosmetic concerns should be noted as " +
-                "suggestions in an APPROVE verdict, not as blockers. If a problem would require " +
-                "a complete rewrite, APPROVE with caveats for future iteration.\n\n" +
-                "Be constructive and specific with feedback.\n" +
-                "End your review with exactly one of these verdicts on a new line:\n" +
-                "VERDICT: APPROVE\n" +
-                "VERDICT: REQUEST_CHANGES");
+                "You are a PM reviewing a PR for requirements alignment ONLY.\n\n" +
+                "SCOPE: This PR is ONE task. Check it against its linked user story/issue and " +
+                "the PM Spec context for that feature.\n\n" +
+                "CHECK: Are the acceptance criteria from the user story met? Does the feature " +
+                "align with the PM Spec vision for this area of the product?\n\n" +
+                "IGNORE: code quality, null checks, error handling, naming, tests, architecture, " +
+                "specific method/class implementations, file completeness, PR metadata/checkboxes. " +
+                "Do NOT reference specific code files, methods, or classes — you review REQUIREMENTS, " +
+                "not code. The Principal Engineer reviews code quality.\n\n" +
+                "IMPORTANT: Code may appear truncated in your review context due to length limits — " +
+                "this is a tooling limitation, NOT a code defect. Do NOT request changes for " +
+                "truncated code or incomplete-looking files.\n\n" +
+                "Only request changes when a user story acceptance criterion is clearly unmet or " +
+                "the feature contradicts the PM Spec.\n\n" +
+                "RESPONSE FORMAT:\n" +
+                "- If requesting changes: use a **numbered list** (1. 2. 3.) for each issue. " +
+                "Reference acceptance criteria by name, not code files. " +
+                "No praise, no summary of what works.\n" +
+                "- If approving: one sentence or empty. No recap.\n" +
+                "- End with: VERDICT: APPROVE or VERDICT: REQUEST_CHANGES");
 
             history.AddUserMessage(
                 $"## PM Specification\n{pmSpec}\n\n" +

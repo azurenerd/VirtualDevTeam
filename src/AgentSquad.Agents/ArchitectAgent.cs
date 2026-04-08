@@ -65,15 +65,17 @@ public class ArchitectAgent : AgentBase
             Identity.Id, HandleReviewRequestAsync));
 
         // Recovery: check if Architecture.md already exists from a prior run
+        // Must verify content has real architecture sections, not just any file content
         try
         {
             var archDoc = await _projectFiles.GetArchitectureDocAsync(ct);
             if (!string.IsNullOrWhiteSpace(archDoc)
                 && !archDoc.Contains("No architecture document has been created yet", StringComparison.OrdinalIgnoreCase)
-                && archDoc.Length > 200)
+                && archDoc.Length > 200
+                && archDoc.Contains("## System Components", StringComparison.OrdinalIgnoreCase))
             {
                 _architectureComplete = true;
-                Logger.LogInformation("Architect recovered: Architecture.md already exists, moving to PR review mode");
+                Logger.LogInformation("Architect recovered: Architecture.md already exists with valid sections, moving to PR review mode");
             }
         }
         catch (Exception ex)
@@ -193,10 +195,11 @@ public class ArchitectAgent : AgentBase
 
     private async Task DesignArchitectureAsync(ArchitectureDirective directive, CancellationToken ct)
     {
-        // Idempotency: check if Architecture.md already has real content
+        // Idempotency: check if Architecture.md already has real architectural content
         var existingArch = await _projectFiles.GetArchitectureDocAsync(ct);
         if (!string.IsNullOrWhiteSpace(existingArch) &&
-            !existingArch.Contains("No architecture document has been created yet"))
+            !existingArch.Contains("No architecture document has been created yet") &&
+            existingArch.Contains("## System Components", StringComparison.OrdinalIgnoreCase))
         {
             Logger.LogInformation("Architecture.md already exists with content, skipping design");
             // Still signal downstream so PE isn't stuck
@@ -237,7 +240,7 @@ public class ArchitectAgent : AgentBase
             relatedIssue,
             ct);
 
-        UpdateStatus(AgentStatus.Working, "Designing (1/5): Key architectural decisions");
+        UpdateStatus(AgentStatus.Working, "Starting architecture design");
         Logger.LogInformation("Starting architecture design for task {TaskId}: {Title}",
             directive.TaskId, directive.Title);
         LogActivity("task", $"🏗️ Starting architecture design: {directive.Title}");
@@ -264,6 +267,42 @@ public class ArchitectAgent : AgentBase
             "infrastructure around this technology. Do NOT recommend or use alternative stacks." +
             (string.IsNullOrEmpty(memoryContext) ? "" : $"\n\n{memoryContext}"));
 
+        var useSinglePass = _config.CopilotCli.SinglePassMode || _config.CopilotCli.FastMode;
+        string architectureDoc;
+
+        if (useSinglePass)
+        {
+            // Single-pass mode: one comprehensive prompt instead of 5 conversational turns
+            UpdateStatus(AgentStatus.Working, "Designing architecture (single-pass)");
+            history.AddUserMessage(
+                $"I need you to design the complete system architecture for our project.\n\n" +
+                $"**Task:** {directive.Title}\n\n" +
+                $"**Description:** {directive.Description}\n\n" +
+                $"**Technology Stack (mandatory):** {_config.Project.TechStack}\n\n" +
+                $"## PM Specification (Business Requirements)\n{pmSpec}\n\n" +
+                $"## Research Findings\n{research}\n\n" +
+                "Produce a complete, structured Architecture.md document with ALL of these sections:\n\n" +
+                "# Architecture\n\n" +
+                "## Overview & Goals\n(High-level summary)\n\n" +
+                "## System Components\n(Each component with responsibilities, interfaces, dependencies, data)\n\n" +
+                "## Component Interactions\n(Data flow and communication patterns)\n\n" +
+                "## Data Model\n(Entities, relationships, storage)\n\n" +
+                "## API Contracts\n(Endpoints, request/response shapes, error handling)\n\n" +
+                "## Infrastructure Requirements\n(Hosting, networking, storage, CI/CD)\n\n" +
+                "## Technology Stack Decisions\n(Chosen technologies with justification)\n\n" +
+                "## Security Considerations\n(Auth, data protection, validation)\n\n" +
+                "## Scaling Strategy\n(How the system scales)\n\n" +
+                "## Risks & Mitigations\n(Key risks and how to address them)\n\n" +
+                "Use these exact section headers. Be thorough and specific. " +
+                "All decisions must use the mandatory technology stack. " +
+                "This document will be the single source of truth for the engineering team.");
+
+            var singleResponse = await chat.GetChatMessageContentAsync(
+                history, cancellationToken: ct);
+            architectureDoc = singleResponse.Content?.Trim() ?? "";
+        }
+        else
+        {
         // Turn 1: Identify key architectural decisions
         history.AddUserMessage(
             $"I need you to design the system architecture for our project.\n\n" +
@@ -363,7 +402,9 @@ public class ArchitectAgent : AgentBase
 
         var architectureResponse = await chat.GetChatMessageContentAsync(
             history, cancellationToken: ct);
-        var architectureDoc = architectureResponse.Content?.Trim() ?? "";
+        architectureDoc = architectureResponse.Content?.Trim() ?? "";
+
+        } // end else (multi-turn)
 
         Logger.LogDebug("Architecture document compiled for {TaskId}", directive.TaskId);
 
@@ -439,16 +480,25 @@ public class ArchitectAgent : AgentBase
                 if (_reviewedPrNumbers.Contains(prNumber))
                     continue;
 
+                var pr = await _github.GetPullRequestAsync(prNumber, ct);
+                if (pr is null)
+                    continue;
+
+                // Skip TestEngineer PRs — architecture review not needed for test suites
+                var authorRole = PullRequestWorkflow.DetectAuthorRole(pr.Title);
+                if (authorRole.Contains("TestEngineer", StringComparison.OrdinalIgnoreCase)
+                    || authorRole.Contains("Test Engineer", StringComparison.OrdinalIgnoreCase))
+                {
+                    _reviewedPrNumbers.Add(prNumber);
+                    continue;
+                }
+
                 // Dedup across restarts: check GitHub comments to see if we already reviewed
                 if (!await _prWorkflow.NeedsReviewFromAsync(prNumber, "Architect", ct))
                 {
                     _reviewedPrNumbers.Add(prNumber);
                     continue;
                 }
-
-                var pr = await _github.GetPullRequestAsync(prNumber, ct);
-                if (pr is null)
-                    continue;
 
                 Logger.LogInformation("Reviewing PR #{Number} for architectural alignment: {Title}",
                     pr.Number, pr.Title);
@@ -551,30 +601,19 @@ public class ArchitectAgent : AgentBase
 
             var history = new ChatHistory();
             history.AddSystemMessage(
-                "You are a software architect reviewing a pull request for alignment with " +
-                "the project's architecture document and PM specification.\n\n" +
-                "IMPORTANT: This PR implements ONE TASK from the Engineering Plan — it is NOT expected " +
-                "to cover the entire architecture. Review ONLY whether the components and patterns " +
-                "used in this PR follow the architectural decisions and boundaries for the parts it " +
-                "touches. Do NOT flag missing features that belong to other tasks.\n\n" +
-                "You will be given the architecture doc, PM spec, the linked user story, AND the " +
-                "actual code files. Review the ACTUAL CODE — not just the PR description.\n\n" +
-                "Evaluate:\n" +
-                "1. Does the code follow the architectural patterns, component boundaries, and tech stack?\n" +
-                "2. Are the file/folder structures consistent with the architecture?\n" +
-                "3. Does the implementation align with the business requirements for this task?\n" +
-                "4. Are there architectural anti-patterns or violations?\n\n" +
-                "REVIEW PHILOSOPHY: Be pragmatic, not pedantic. Only request REWORK for issues that " +
-                "are both significant AND fixable within a reasonable code change. If the code works " +
-                "and the deviations are minor or cosmetic, APPROVE with suggestions. If a problem " +
-                "would require a complete rewrite or fundamental tech stack change, APPROVE with " +
-                "caveats noting the concern for future iteration — do NOT request a rewrite.\n\n" +
-                "Be concise and actionable.\n\n" +
-                "You MUST start your response with exactly one of these two verdicts on the first line:\n" +
-                "APPROVED — if the PR aligns with the architecture (minor suggestions are fine)\n" +
-                "REWORK — if there are significant architectural deviations that must be fixed\n\n" +
-                "Then provide your reasoning on subsequent lines. Default to APPROVED unless there " +
-                "are clear, significant architectural violations.");
+                "You are a software architect reviewing a PR for architecture alignment ONLY.\n\n" +
+                "SCOPE: This PR is ONE task. Review only the parts it touches against the architecture doc.\n\n" +
+                "CHECK: component boundaries, folder structure, tech stack compliance, architectural patterns.\n" +
+                "IGNORE: code quality, null checks, naming, tests, business requirements.\n\n" +
+                "IMPORTANT: Code may appear truncated in your review context due to length limits — " +
+                "this is a tooling limitation, NOT a code defect. Do NOT flag truncated code.\n\n" +
+                "Only request REWORK for real architectural violations (wrong boundaries, wrong tech stack, " +
+                "wrong patterns). Minor issues → APPROVE.\n\n" +
+                "RESPONSE FORMAT:\n" +
+                "- First line: APPROVED or REWORK\n" +
+                "- If REWORK: use a **numbered list** (1. 2. 3.) for each violation. " +
+                "No praise, no summary of what's correct.\n" +
+                "- If APPROVED: one sentence or empty. No recap.");
 
             history.AddUserMessage(
                 $"## Architecture Document\n{architectureDoc}\n\n" +

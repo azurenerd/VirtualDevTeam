@@ -16,6 +16,13 @@ public abstract class AgentBase : IAgent, IDisposable
     private readonly List<AgentLogEntry> _recentErrors = new();
     private string? _cachedMemorySummary;
 
+    /// <summary>
+    /// The Copilot CLI session ID for this agent. Non-engineer agents use a single
+    /// persistent session for their lifetime. Engineer agents override this to
+    /// manage per-PR sessions via <see cref="SetCliSession"/>.
+    /// </summary>
+    private string _cliSessionId = Guid.NewGuid().ToString();
+
     protected AgentBase(AgentIdentity identity, ILogger<AgentBase> logger, AgentMemoryStore? memoryStore = null)
     {
         Identity = identity ?? throw new ArgumentNullException(nameof(identity));
@@ -63,6 +70,22 @@ public abstract class AgentBase : IAgent, IDisposable
     protected ILogger<AgentBase> Logger { get; }
     protected CancellationTokenSource LifetimeCts { get; }
 
+    /// <summary>
+    /// Gets the current Copilot CLI session ID. Non-engineer agents keep one session
+    /// for their lifetime. Engineer agents switch sessions per PR/Issue.
+    /// </summary>
+    protected string CliSessionId => _cliSessionId;
+
+    /// <summary>
+    /// Sets the active CLI session ID. Use this in engineer agents to switch context
+    /// when starting a new PR or resuming rework on an existing one.
+    /// </summary>
+    protected void SetCliSession(string sessionId)
+    {
+        _cliSessionId = sessionId;
+        AgentCallContext.CurrentSessionId = sessionId;
+    }
+
     /// <summary>Persistent memory store, available to all agents.</summary>
     protected AgentMemoryStore? MemoryStore { get; }
 
@@ -109,6 +132,7 @@ public abstract class AgentBase : IAgent, IDisposable
     public async Task InitializeAsync(CancellationToken ct = default)
     {
         AgentCallContext.CurrentAgentId = Identity.Id;
+        AgentCallContext.CurrentSessionId = _cliSessionId;
         UpdateStatus(AgentStatus.Initializing, "Agent initialization started");
         LogActivity("system", "Agent initialization started");
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, LifetimeCts.Token);
@@ -120,6 +144,7 @@ public abstract class AgentBase : IAgent, IDisposable
     public async Task StartAsync(CancellationToken ct = default)
     {
         AgentCallContext.CurrentAgentId = Identity.Id;
+        AgentCallContext.CurrentSessionId = _cliSessionId;
         UpdateStatus(AgentStatus.Working, "Agent starting main loop");
         LogActivity("system", "Agent starting main loop");
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, LifetimeCts.Token);

@@ -16,6 +16,8 @@ public record TaskAssignmentMessage : AgentMessage
     public required string Description { get; init; }
     public string? PullRequestUrl { get; init; }
     public required string Complexity { get; init; }
+    /// <summary>Optional linked GitHub issue number for tracking.</summary>
+    public int? IssueNumber { get; init; }
 }
 
 public record StatusUpdateMessage : AgentMessage

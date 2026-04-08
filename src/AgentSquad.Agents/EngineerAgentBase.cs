@@ -38,6 +38,8 @@ public abstract class EngineerAgentBase : AgentBase
     protected readonly Dictionary<int, int> ReworkAttemptCounts = new();
     // Prevent duplicate "max limit" comments when multiple reviewers' feedback arrives
     private readonly HashSet<int> _forceApprovalSentPrs = new();
+    // Per-PR CLI session IDs — resumes the session used to create the PR during rework
+    private readonly Dictionary<int, string> _prSessionIds = new();
     protected int? CurrentIssueNumber;
     protected int? CurrentPrNumber;
 
@@ -175,6 +177,8 @@ public abstract class EngineerAgentBase : AgentBase
 
                     if (activePR != null && Identity.AssignedPullRequest != activePR.Number.ToString())
                     {
+                        // Sync branch with main before resuming work (picks up changes merged since last run)
+                        await SyncBranchWithMainAsync(activePR.Number, ct);
                         await WorkOnExistingPrAsync(activePR, ct);
                     }
                     else
@@ -257,6 +261,68 @@ public abstract class EngineerAgentBase : AgentBase
             sub.Dispose();
         Subscriptions.Clear();
         return Task.CompletedTask;
+    }
+
+    #endregion
+
+    #region Branch Sync
+
+    /// <summary>
+    /// Sync a PR branch with the latest main to avoid merge conflicts.
+    /// Logs result but does not throw — sync failures are non-fatal.
+    /// </summary>
+    protected async Task SyncBranchWithMainAsync(int prNumber, CancellationToken ct)
+    {
+        try
+        {
+            var synced = await GitHub.UpdatePullRequestBranchAsync(prNumber, ct);
+            if (synced)
+            {
+                Logger.LogInformation("{Role} {Name} synced PR #{PrNumber} branch with main",
+                    Identity.Role, Identity.DisplayName, prNumber);
+            }
+            else
+            {
+                Logger.LogWarning("{Role} {Name} PR #{PrNumber} branch sync failed — possible merge conflict",
+                    Identity.Role, Identity.DisplayName, prNumber);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "{Role} {Name} failed to sync PR #{PrNumber} branch",
+                Identity.Role, Identity.DisplayName, prNumber);
+        }
+    }
+
+    #endregion
+
+    #region CLI Session Management
+
+    /// <summary>
+    /// Gets or creates a CLI session ID for a specific PR. When an engineer starts
+    /// a new task, a fresh session is created. When doing rework on an existing PR,
+    /// the same session is resumed so the CLI has full context of what was built.
+    /// </summary>
+    protected string GetOrCreatePrSession(int prNumber)
+    {
+        if (!_prSessionIds.TryGetValue(prNumber, out var sessionId))
+        {
+            sessionId = Guid.NewGuid().ToString();
+            _prSessionIds[prNumber] = sessionId;
+            Logger.LogDebug("{Role} {Name} created CLI session {Session} for PR #{Pr}",
+                Identity.Role, Identity.DisplayName, sessionId, prNumber);
+        }
+        SetCliSession(sessionId);
+        return sessionId;
+    }
+
+    /// <summary>
+    /// Activates the CLI session for a PR. Call this before any AI interaction
+    /// related to a specific PR (implementation, rework, self-review).
+    /// </summary>
+    protected void ActivatePrSession(int prNumber)
+    {
+        GetOrCreatePrSession(prNumber);
     }
 
     #endregion
@@ -347,6 +413,9 @@ public abstract class EngineerAgentBase : AgentBase
 
             CurrentPrNumber = pr.Number;
             Identity.AssignedPullRequest = pr.Number.ToString();
+
+            // Bind CLI session to this PR for conversational continuity
+            ActivatePrSession(pr.Number);
 
             Logger.LogInformation("{Role} {Name} created PR #{PrNumber} for issue #{IssueNumber}",
                 Identity.Role, Identity.DisplayName, pr.Number, issue.Number);
@@ -646,6 +715,8 @@ public abstract class EngineerAgentBase : AgentBase
     /// </summary>
     private async Task MarkPrCompleteAsync(AgentPullRequest pr, AgentIssue issue, CancellationToken ct)
     {
+        // Sync branch with main before marking ready — ensures PR is merge-clean
+        await SyncBranchWithMainAsync(pr.Number, ct);
         await PrWorkflow.MarkReadyForReviewAsync(pr.Number, Identity.DisplayName, ct);
 
         await MessageBus.PublishAsync(new ReviewRequestMessage
@@ -774,6 +845,8 @@ public abstract class EngineerAgentBase : AgentBase
                 ct);
         }
 
+        // Sync branch with main before marking ready — ensures PR is merge-clean
+        await SyncBranchWithMainAsync(pr.Number, ct);
         await PrWorkflow.MarkReadyForReviewAsync(pr.Number, Identity.DisplayName, ct);
 
         await MessageBus.PublishAsync(new ReviewRequestMessage
@@ -802,7 +875,6 @@ public abstract class EngineerAgentBase : AgentBase
 
         UpdateStatus(AgentStatus.Idle, $"Completed PR #{pr.Number}, awaiting review/next task");
         // Keep CurrentPrNumber and AssignedPullRequest set so rework feedback can match.
-        // They will be cleared when the next issue assignment starts in WorkOnIssueAsync.
     }
 
     #endregion
@@ -863,6 +935,9 @@ public abstract class EngineerAgentBase : AgentBase
         Logger.LogInformation("{Role} {Name} reworking PR #{PrNumber} based on feedback from {Reviewers} (attempt {Attempt}/{Max})",
             Identity.Role, Identity.DisplayName, rework.PrNumber, allReviewers, attempts, Config.Limits.MaxReworkCycles);
 
+        // Resume the CLI session that was used to create this PR
+        ActivatePrSession(rework.PrNumber);
+
         try
         {
             var kernel = Models.GetKernel(Identity.ModelTier, Identity.Id);
@@ -884,8 +959,10 @@ public abstract class EngineerAgentBase : AgentBase
                 $"## PM Specification\n{pmSpecDoc}\n\n" +
                 await GetAdditionalReworkContextAsync(ct) +
                 $"## Review Feedback\n{combinedFeedback}\n\n" +
-                "Please provide the corrected files that address all the feedback. " +
-                "Output each file using this exact format:\n\n" +
+                "First, output a CHANGES SUMMARY section that addresses each numbered feedback item " +
+                "from the reviewer. Use the same numbers (1. 2. 3.) and briefly state what you " +
+                "changed or why no change was needed. Keep each response to one sentence.\n\n" +
+                "Then output the corrected files using this exact format:\n\n" +
                 "FILE: path/to/file.ext\n```language\n<file content>\n```\n\n" +
                 "Include the COMPLETE content of each changed file.");
 
@@ -894,6 +971,12 @@ public abstract class EngineerAgentBase : AgentBase
 
             if (!string.IsNullOrWhiteSpace(updatedImpl))
             {
+                // Extract the changes summary (everything before first FILE: block)
+                var summaryEnd = updatedImpl.IndexOf("FILE:", StringComparison.OrdinalIgnoreCase);
+                var changesSummary = summaryEnd > 0
+                    ? updatedImpl[..summaryEnd].Trim()
+                    : null;
+
                 var codeFiles = AgentSquad.Core.AI.CodeFileParser.ParseFiles(updatedImpl);
                 if (codeFiles.Count > 0)
                 {
@@ -913,6 +996,21 @@ public abstract class EngineerAgentBase : AgentBase
                         ct);
                 }
 
+                // Post a comment with the numbered changes summary
+                var commentBody = $"**[{Identity.DisplayName}] Rework** — Addressed feedback from {allReviewers}.\n\n";
+                if (!string.IsNullOrWhiteSpace(changesSummary))
+                    commentBody += changesSummary;
+                else
+                {
+                    var filesList = codeFiles.Count > 0
+                        ? string.Join(", ", codeFiles.Select(f => $"`{f.Path}`"))
+                        : "rework document";
+                    commentBody += $"**Files updated:** {filesList}";
+                }
+                await GitHub.AddPullRequestCommentAsync(pr.Number, commentBody, ct);
+
+                // Sync branch with main before marking ready — ensures PR is merge-clean
+                await SyncBranchWithMainAsync(pr.Number, ct);
                 await PrWorkflow.MarkReadyForReviewAsync(pr.Number, Identity.DisplayName, ct);
 
                 await MessageBus.PublishAsync(new ReviewRequestMessage
@@ -1139,6 +1237,9 @@ public abstract class EngineerAgentBase : AgentBase
         UpdateStatus(AgentStatus.Working, $"Working on PR #{pr.Number}: {pr.Title}");
         Identity.AssignedPullRequest = pr.Number.ToString();
 
+        // Resume or create a CLI session for this PR
+        ActivatePrSession(pr.Number);
+
         Logger.LogInformation("{Role} {Name} starting work on PR #{Number}: {Title}",
             Identity.Role, Identity.DisplayName, pr.Number, pr.Title);
 
@@ -1258,6 +1359,8 @@ public abstract class EngineerAgentBase : AgentBase
                 }
             }
 
+            // Sync branch with main before marking ready — ensures PR is merge-clean
+            await SyncBranchWithMainAsync(pr.Number, ct);
             await PrWorkflow.MarkReadyForReviewAsync(pr.Number, Identity.DisplayName, ct);
 
             await MessageBus.PublishAsync(new ReviewRequestMessage

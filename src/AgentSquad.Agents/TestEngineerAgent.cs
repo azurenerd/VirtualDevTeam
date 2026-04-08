@@ -43,6 +43,7 @@ public class TestEngineerAgent : AgentBase
     private readonly List<IDisposable> _subscriptions = new();
     private readonly ConcurrentQueue<(int PrNumber, string PrTitle, string Feedback, string Reviewer)> _reworkQueue = new();
     private readonly Dictionary<int, int> _reworkAttempts = new();
+    private readonly Dictionary<int, string> _prSessionIds = new();
     private readonly DateTime _sessionStartUtc = DateTime.UtcNow;
     private int? _currentTestPrNumber;
 
@@ -195,6 +196,9 @@ public class TestEngineerAgent : AgentBase
     private async Task GenerateTestsForMergedPRAsync(
         AgentPullRequest pr, List<string> codeFilePaths, CancellationToken ct)
     {
+        // Create a CLI session for this test PR (or resume existing)
+        ActivateTestPrSession(pr.Number);
+
         UpdateStatus(AgentStatus.Working, $"Reading code from merged PR #{pr.Number}");
 
         // Read the actual code content from the main branch (files are merged there now)
@@ -270,6 +274,9 @@ public class TestEngineerAgent : AgentBase
         {
             Logger.LogDebug(ex, "Could not apply tested label to source PR #{Number}", pr.Number);
         }
+
+        // Sync branch with main before marking ready — ensures PR is merge-clean
+        await SyncBranchWithMainAsync(testPrNumber, ct);
 
         // Mark test PR ready-for-review and request PE review
         await _prWorkflow.MarkReadyForReviewAsync(testPrNumber, Identity.DisplayName, ct);
@@ -539,6 +546,9 @@ public class TestEngineerAgent : AgentBase
             Logger.LogInformation("TestEngineer reworking PR #{PrNumber} based on feedback from {Reviewer} (attempt {Attempt})",
                 rework.PrNumber, rework.Reviewer, attempts);
 
+            // Resume the CLI session used to create these tests
+            ActivateTestPrSession(rework.PrNumber);
+
             try
             {
                 var kernel = _modelRegistry.GetKernel(Identity.ModelTier, Identity.Id);
@@ -557,19 +567,43 @@ public class TestEngineerAgent : AgentBase
                     $"## Test PR #{rework.PrNumber}: {rework.PrTitle}\n\n" +
                     $"## Original PR Description\n{pr.Body}\n\n" +
                     $"## Review Feedback from {rework.Reviewer}\n{rework.Feedback}\n\n" +
-                    "Please provide the corrected test files that address all the feedback.");
+                    "First, output a CHANGES SUMMARY that addresses each numbered feedback item " +
+                    "from the reviewer. Use the same numbers (1. 2. 3.) and briefly state what you " +
+                    "changed or why no change was needed. Keep each response to one sentence.\n\n" +
+                    "Then output the corrected test files.");
 
                 var response = await chat.GetChatMessageContentAsync(history, cancellationToken: ct);
                 var updatedContent = response.Content?.Trim() ?? "";
 
                 if (!string.IsNullOrWhiteSpace(updatedContent))
                 {
+                    // Extract the changes summary (everything before first FILE: block)
+                    var summaryEnd = updatedContent.IndexOf("FILE:", StringComparison.OrdinalIgnoreCase);
+                    var changesSummary = summaryEnd > 0
+                        ? updatedContent[..summaryEnd].Trim()
+                        : null;
+
                     var codeFiles = CodeFileParser.ParseFiles(updatedContent);
                     if (codeFiles.Count > 0)
                     {
                         await _prWorkflow.CommitCodeFilesToPRAsync(
                             pr.Number, codeFiles, "Address review feedback on tests", ct);
                     }
+
+                    var commentBody = $"**[{Identity.DisplayName}] Rework** — Addressed feedback from {rework.Reviewer}.\n\n";
+                    if (!string.IsNullOrWhiteSpace(changesSummary))
+                        commentBody += changesSummary;
+                    else
+                    {
+                        var filesSummary = codeFiles.Count > 0
+                            ? string.Join(", ", codeFiles.Select(f => $"`{f.Path}`"))
+                            : "test files";
+                        commentBody += $"**Files updated:** {filesSummary}";
+                    }
+                    await _github.AddPullRequestCommentAsync(pr.Number, commentBody, ct);
+
+                    // Sync branch with main before marking ready — ensures PR is merge-clean
+                    await SyncBranchWithMainAsync(pr.Number, ct);
 
                     await _prWorkflow.MarkReadyForReviewAsync(pr.Number, Identity.DisplayName, ct);
                     await _messageBus.PublishAsync(new ReviewRequestMessage
@@ -667,6 +701,40 @@ public class TestEngineerAgent : AgentBase
         var cut = text[..maxLength];
         var lastPeriod = cut.LastIndexOf('.');
         return lastPeriod > maxLength / 2 ? cut[..(lastPeriod + 1)] : cut + "…";
+    }
+
+    /// <summary>
+    /// Sync a PR branch with the latest main to avoid merge conflicts.
+    /// Non-fatal: logs result but does not throw.
+    /// </summary>
+    private async Task SyncBranchWithMainAsync(int prNumber, CancellationToken ct)
+    {
+        try
+        {
+            var synced = await _github.UpdatePullRequestBranchAsync(prNumber, ct);
+            if (synced)
+                Logger.LogInformation("TestEngineer synced PR #{PrNumber} branch with main", prNumber);
+            else
+                Logger.LogWarning("TestEngineer PR #{PrNumber} branch sync failed — possible conflict", prNumber);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "TestEngineer failed to sync PR #{PrNumber} branch", prNumber);
+        }
+    }
+
+    /// <summary>
+    /// Gets or creates a CLI session for a specific test PR, providing conversational
+    /// continuity when doing rework on tests.
+    /// </summary>
+    private void ActivateTestPrSession(int prNumber)
+    {
+        if (!_prSessionIds.TryGetValue(prNumber, out var sessionId))
+        {
+            sessionId = Guid.NewGuid().ToString();
+            _prSessionIds[prNumber] = sessionId;
+        }
+        SetCliSession(sessionId);
     }
 
     #endregion

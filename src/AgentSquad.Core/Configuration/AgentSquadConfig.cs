@@ -168,6 +168,20 @@ public class CopilotCliConfig
     /// <summary>Model to use when FastMode is enabled. Defaults to claude-haiku-4.5.</summary>
     public string FastModeModel { get; set; } = "claude-haiku-4.5";
 
+    /// <summary>
+    /// Maximum number of automatic retries for transient errors (auth failures, timeouts).
+    /// Retries use exponential backoff (5s, 15s, 30s). Set to 0 to disable retries.
+    /// </summary>
+    public int MaxRetries { get; set; } = 3;
+
+    /// <summary>
+    /// When true, multi-turn agents (Researcher, Architect) collapse their
+    /// chain-of-thought into a single comprehensive prompt instead of multiple
+    /// conversational turns. Faster but potentially less thorough.
+    /// Automatically enabled when FastMode is true.
+    /// </summary>
+    public bool SinglePassMode { get; set; } = false;
+
     /// <summary>Tools to exclude from the CLI's available tools (e.g., "shell", "write").</summary>
     public List<string> ExcludedTools { get; set; } = new();
 

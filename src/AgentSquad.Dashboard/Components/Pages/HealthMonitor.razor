@@ -181,9 +181,9 @@
 
 @* ── Diagnostic Feed ── *@
 <div class="health-card feed-card">
-    <h2>Diagnostic Feed</h2>
-    <div class="feed-toolbar">
-        <div class="feed-filter-pills">
+    <div class="feed-header">
+        <h2>Diagnostic Feed</h2>
+        <div class="feed-controls">
             <select class="feed-pill" @bind="_filterAgent">
                 <option value="">🤖 All Agents</option>
                 @foreach (var agent in _agents.OrderBy(a => a.DisplayName))
@@ -196,8 +196,8 @@
                 <option value="compliant">✅ Compliant</option>
                 <option value="non-compliant">⚠️ Non-Compliant</option>
             </select>
+            <span class="feed-count">@GetFilteredFeed().Count entries</span>
         </div>
-        <span class="feed-count">@GetFilteredFeed().Count entries</span>
     </div>
 
     <div class="feed-list">

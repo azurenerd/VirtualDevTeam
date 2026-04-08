@@ -25,9 +25,11 @@ builder.Services.AddSingleton<AgentSquad.Core.Diagnostics.AgentChatService>();
 builder.Services.AddSemanticKernelModels();
 builder.Services.AddGitHubIntegration();
 
-// Persistence
-builder.Services.AddSingleton<AgentStateStore>();
-builder.Services.AddSingleton<AgentMemoryStore>();
+// Persistence — database scoped per repo to prevent cross-project contamination
+var repoSlug = builder.Configuration["AgentSquad:Project:GitHubRepo"]?.Replace('/', '_') ?? "default";
+var dbPath = $"agentsquad_{repoSlug}.db";
+builder.Services.AddSingleton(new AgentStateStore(dbPath));
+builder.Services.AddSingleton(new AgentMemoryStore(dbPath));
 builder.Services.AddSingleton<ProjectFileManager>(sp =>
 {
     var config = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<AgentSquadConfig>>().Value;

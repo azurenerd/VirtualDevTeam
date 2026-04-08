@@ -86,19 +86,24 @@ public class ResearcherAgent : AgentBase
                     }
                     else
                     {
-                        // Find the related issue to link in the PR
-                        int? relatedIssue = null;
-                        try
+                        // Use the issue number passed directly from the PM's TaskAssignment
+                        // instead of fragile title-based searching that could match wrong issues
+                        int? relatedIssue = directive.IssueNumber;
+                        if (!relatedIssue.HasValue)
                         {
-                            var issues = await _github.GetOpenIssuesAsync(ct);
-                            var matchingIssue = issues.FirstOrDefault(i =>
-                                i.Title.Contains("Research", StringComparison.OrdinalIgnoreCase) &&
-                                i.Title.Contains(directive.Topic, StringComparison.OrdinalIgnoreCase));
-                            relatedIssue = matchingIssue?.Number;
-                        }
-                        catch (Exception ex)
-                        {
-                            Logger.LogWarning(ex, "Could not find related issue for research topic");
+                            // Fallback: search by title if PM didn't pass the number
+                            try
+                            {
+                                var issues = await _github.GetOpenIssuesAsync(ct);
+                                var matchingIssue = issues.FirstOrDefault(i =>
+                                    i.Title.Contains("Research", StringComparison.OrdinalIgnoreCase) &&
+                                    i.Title.Contains(directive.Topic, StringComparison.OrdinalIgnoreCase));
+                                relatedIssue = matchingIssue?.Number;
+                            }
+                            catch (Exception ex)
+                            {
+                                Logger.LogWarning(ex, "Could not find related issue for research topic");
+                            }
                         }
 
                         // Create the PR upfront so it's visible immediately
@@ -218,7 +223,8 @@ public class ResearcherAgent : AgentBase
         {
             TaskId = message.TaskId,
             Topic = message.Title,
-            Description = message.Description
+            Description = message.Description,
+            IssueNumber = message.IssueNumber
         });
 
         return Task.CompletedTask;
@@ -234,8 +240,6 @@ public class ResearcherAgent : AgentBase
         var kernel = _modelRegistry.GetKernel(Identity.ModelTier, Identity.Id);
         var chat = kernel.GetRequiredService<IChatCompletionService>();
 
-        // Turn 1: Break down the research topic into sub-questions
-        UpdateStatus(AgentStatus.Working, "Researching (1/3): Identifying sub-questions");
         var history = new ChatHistory();
         var memoryContext = await GetMemoryContextAsync(ct: ct);
         history.AddSystemMessage(
@@ -250,6 +254,40 @@ public class ResearcherAgent : AgentBase
             "native to or compatible with this stack. Do NOT recommend alternative tech stacks — " +
             "the decision is final." +
             (string.IsNullOrEmpty(memoryContext) ? "" : $"\n\n{memoryContext}"));
+
+        var useSinglePass = _config.CopilotCli.SinglePassMode || _config.CopilotCli.FastMode;
+        string synthesisContent;
+        string detailedAnalysis;
+
+        if (useSinglePass)
+        {
+            // Single-pass: one comprehensive prompt instead of 3 turns
+            UpdateStatus(AgentStatus.Working, "Researching (single-pass)");
+            history.AddUserMessage(
+                $"Research the following topic for our software project.\n\n" +
+                $"**Topic:** {directive.Topic}\n\n" +
+                $"**Context:**\n{directive.Description}\n\n" +
+                "Produce a comprehensive, structured research document with these sections:\n\n" +
+                "1. **Executive Summary** — Concise overview of findings and primary recommendation.\n" +
+                "2. **Key Findings** — Most important discoveries, one per bullet (prefixed with '- ').\n" +
+                "3. **Recommended Technology Stack** — Specific tools, frameworks, libraries with versions. " +
+                "Organize by layer (frontend, backend, database, infrastructure, testing).\n" +
+                "4. **Architecture Recommendations** — Patterns, data flow, structural decisions.\n" +
+                "5. **Security & Infrastructure** — Auth, hosting, deployment, operational concerns.\n" +
+                "6. **Risks & Trade-offs** — Technical risks, bottlenecks, mitigation strategies.\n" +
+                "7. **Open Questions** — Decisions needing stakeholder input.\n" +
+                "8. **Implementation Recommendations** — Phasing, MVP scope, quick wins.\n\n" +
+                "Use these exact section headers. Be specific, opinionated, and actionable. " +
+                "Include version numbers, compatibility notes, and real-world considerations.");
+
+            var response = await chat.GetChatMessageContentAsync(history, cancellationToken: ct);
+            synthesisContent = response.Content ?? "";
+            detailedAnalysis = synthesisContent;
+        }
+        else
+        {
+        // Turn 1: Break down the research topic into sub-questions
+        UpdateStatus(AgentStatus.Working, "Researching (1/3): Identifying sub-questions");
 
         history.AddUserMessage(
             $"I need you to research the following topic for our software project.\n\n" +
@@ -304,14 +342,17 @@ public class ResearcherAgent : AgentBase
 
         var synthesisResponse = await chat.GetChatMessageContentAsync(
             history, cancellationToken: ct);
-        var synthesisContent = synthesisResponse.Content ?? "";
+        synthesisContent = synthesisResponse.Content ?? "";
+        detailedAnalysis = analysisResponse.Content ?? "";
+
+        } // end else (multi-turn)
 
         Logger.LogDebug("Research synthesis complete for {Topic}", directive.Topic);
         await RememberAsync(MemoryType.Decision,
             $"Technology evaluation decisions for '{directive.Topic}'",
             TruncateForMemory(synthesisContent), ct);
 
-        return ParseResearchResult(synthesisContent, analysisResponse.Content ?? "");
+        return ParseResearchResult(synthesisContent, detailedAnalysis);
     }
 
     private static ResearchResult ParseResearchResult(string synthesis, string detailedAnalysis)
@@ -511,6 +552,8 @@ internal record ResearchDirective
     public string TaskId { get; init; } = "";
     public string Topic { get; init; } = "";
     public string Description { get; init; } = "";
+    /// <summary>Issue number passed from PM's TaskAssignment for direct linking.</summary>
+    public int? IssueNumber { get; init; }
 }
 
 internal record ResearchResult

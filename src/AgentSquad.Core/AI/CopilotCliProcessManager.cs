@@ -66,6 +66,15 @@ public sealed class CopilotCliProcessManager : IHostedService, IDisposable
         string? modelOverride,
         CancellationToken ct = default)
     {
+        return await ExecutePromptAsync(prompt, modelOverride, sessionId: null, ct);
+    }
+
+    public async Task<CopilotCliResult> ExecutePromptAsync(
+        string prompt,
+        string? modelOverride,
+        string? sessionId,
+        CancellationToken ct = default)
+    {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
         if (!_copilotAvailable)
@@ -75,7 +84,7 @@ public sealed class CopilotCliProcessManager : IHostedService, IDisposable
         await _concurrencyLimiter.WaitAsync(ct);
         try
         {
-            return await RunProcessAsync(prompt, modelOverride, ct);
+            return await RunProcessAsync(prompt, modelOverride, sessionId, ct);
         }
         finally
         {
@@ -83,9 +92,9 @@ public sealed class CopilotCliProcessManager : IHostedService, IDisposable
         }
     }
 
-    private async Task<CopilotCliResult> RunProcessAsync(string prompt, string? modelOverride, CancellationToken ct)
+    private async Task<CopilotCliResult> RunProcessAsync(string prompt, string? modelOverride, string? sessionId, CancellationToken ct)
     {
-        var args = BuildArguments(modelOverride);
+        var args = BuildArguments(modelOverride, sessionId);
 
         var psi = new ProcessStartInfo
         {
@@ -241,7 +250,7 @@ public sealed class CopilotCliProcessManager : IHostedService, IDisposable
         return output.ToString();
     }
 
-    private string BuildArguments(string? modelOverride = null)
+    private string BuildArguments(string? modelOverride = null, string? sessionId = null)
     {
         var args = new StringBuilder();
 
@@ -251,6 +260,10 @@ public sealed class CopilotCliProcessManager : IHostedService, IDisposable
         args.Append("--no-ask-user ");
         args.Append("--no-auto-update ");
         args.Append("--no-custom-instructions ");
+
+        // Session resume for conversational continuity across calls
+        if (!string.IsNullOrEmpty(sessionId))
+            args.Append($"--resume={sessionId} ");
 
         if (_config.SilentMode)
             args.Append("--silent ");

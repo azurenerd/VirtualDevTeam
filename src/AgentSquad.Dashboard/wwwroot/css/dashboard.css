@@ -2698,6 +2698,27 @@ main {
 .mini-badge.status-offline { background: rgba(255, 255, 255, 0.05); color: var(--text-muted); }
 
 /* ── Diagnostic Feed ── */
+.feed-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.75rem;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.feed-header h2 {
+    margin: 0;
+    flex-shrink: 0;
+}
+
+.feed-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+}
+
 .feed-toolbar {
     display: flex;
     align-items: center;

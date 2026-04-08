@@ -454,8 +454,22 @@ public partial class PullRequestWorkflow
     /// Get the required reviewers for a PR, substituting the Architect when the
     /// author is one of the default reviewers (e.g., PE can't review its own PR).
     /// </summary>
+    /// <summary>
+    /// Determine which agents must approve a PR before it can be merged.
+    /// Routing rules:
+    ///   - TestEngineer PRs → only PrincipalEngineer (test quality, not business/arch review)
+    ///   - Engineer PRs (Senior/Junior/PE) → ProgramManager + PrincipalEngineer
+    ///   - When the author IS a default reviewer, Architect substitutes in
+    /// </summary>
     public static string[] GetRequiredReviewers(string prAuthorRole)
     {
+        // TestEngineer PRs need only PE approval — PM/Architect don't review test suites
+        if (prAuthorRole.Contains("TestEngineer", StringComparison.OrdinalIgnoreCase)
+            || prAuthorRole.Contains("Test Engineer", StringComparison.OrdinalIgnoreCase))
+        {
+            return ["PrincipalEngineer"];
+        }
+
         if (DefaultReviewers.Any(r => string.Equals(r, prAuthorRole, StringComparison.OrdinalIgnoreCase)))
         {
             return DefaultReviewers
@@ -547,8 +561,43 @@ public partial class PullRequestWorkflow
                 await _github.UpdatePullRequestAsync(prNumber, labels: updatedLabels, ct: ct);
             }
 
-            await _github.MergePullRequestAsync(prNumber,
-                $"Merged by {approverAgent} after dual approval from {string.Join(" and ", approvedReviewers)}", ct);
+            try
+            {
+                await _github.MergePullRequestAsync(prNumber,
+                    $"Merged by {approverAgent} after dual approval from {string.Join(" and ", approvedReviewers)}", ct);
+            }
+            catch (Octokit.PullRequestNotMergeableException)
+            {
+                // Branch is behind main or has conflicts — try to update
+                _logger.LogWarning("PR #{Number} not mergeable, attempting branch update", prNumber);
+                var updated = await _github.UpdatePullRequestBranchAsync(prNumber, ct);
+                if (updated)
+                {
+                    // Wait briefly for GitHub to process the merge commit
+                    await Task.Delay(5000, ct);
+                    try
+                    {
+                        await _github.MergePullRequestAsync(prNumber,
+                            $"Merged by {approverAgent} after branch sync and dual approval from {string.Join(" and ", approvedReviewers)}", ct);
+                    }
+                    catch (Exception retryEx)
+                    {
+                        _logger.LogWarning(retryEx, "PR #{Number} still not mergeable after branch update — may have real conflicts", prNumber);
+                        await _github.AddPullRequestCommentAsync(prNumber,
+                            $"⚠️ **Merge blocked** — PR has conflicts with `main` that could not be auto-resolved. " +
+                            $"Branch update was attempted but merge still failed.", ct);
+                        return false;
+                    }
+                }
+                else
+                {
+                    _logger.LogWarning("PR #{Number} branch update failed — merge conflicts require manual resolution", prNumber);
+                    await _github.AddPullRequestCommentAsync(prNumber,
+                        $"⚠️ **Merge blocked** — PR has conflicts with `main` that require resolution. " +
+                        $"The engineer should rebase and resolve conflicts.", ct);
+                    return false;
+                }
+            }
 
             // Clean up the head branch after squash merge
             if (pr is not null && !string.IsNullOrEmpty(pr.HeadBranch))
@@ -816,8 +865,9 @@ public partial class PullRequestWorkflow
         var comments = await _github.GetPullRequestCommentsAsync(prNumber, ct);
         var ordered = comments.OrderByDescending(c => c.CreatedAt).ToList();
 
-        // Find the agent's most recent review comment
+        // Find the agent's most recent review comment and whether it was an approval
         DateTime? lastReviewTime = null;
+        bool lastActionWasApproval = false;
         foreach (var comment in ordered)
         {
             var approvalMatch = ApprovalPattern.Match(comment.Body);
@@ -825,6 +875,7 @@ public partial class PullRequestWorkflow
                 string.Equals(approvalMatch.Groups[1].Value.Trim(), agentName, StringComparison.OrdinalIgnoreCase))
             {
                 lastReviewTime = comment.CreatedAt;
+                lastActionWasApproval = true;
                 break;
             }
 
@@ -833,6 +884,7 @@ public partial class PullRequestWorkflow
                 string.Equals(changesMatch.Groups[1].Value.Trim(), agentName, StringComparison.OrdinalIgnoreCase))
             {
                 lastReviewTime = comment.CreatedAt;
+                lastActionWasApproval = false;
                 break;
             }
         }
@@ -841,16 +893,45 @@ public partial class PullRequestWorkflow
         if (lastReviewTime is null)
             return true;
 
-        // Check if a "ready for review" marker was posted AFTER the last review (indicating rework)
+        // Check if rework happened after this agent's last review
+        bool reworkHappenedSince = false;
         foreach (var comment in ordered)
         {
             if (comment.CreatedAt <= lastReviewTime)
                 break;
 
             if (comment.Body.Contains("has marked this PR as ready for review", StringComparison.OrdinalIgnoreCase))
-                return true;
+            {
+                reworkHappenedSince = true;
+                break;
+            }
         }
 
+        // No rework since last review → no re-review needed regardless of verdict
+        if (!reworkHappenedSince)
+            return false;
+
+        // Rework happened. If this agent requested changes, they need to re-review.
+        if (!lastActionWasApproval)
+            return true;
+
+        // This agent APPROVED but rework happened (triggered by a different reviewer).
+        // Only re-review if this agent is the SOLE required reviewer for this PR.
+        // Otherwise, let the reviewer who requested changes handle it.
+        var pr = await _github.GetPullRequestAsync(prNumber, ct);
+        if (pr is not null)
+        {
+            var authorRole = DetectAuthorRole(pr.Title);
+            var requiredReviewers = GetRequiredReviewers(authorRole);
+            if (requiredReviewers.Length == 1 &&
+                string.Equals(requiredReviewers[0], agentName, StringComparison.OrdinalIgnoreCase))
+            {
+                // Sole reviewer — must re-review after rework
+                return true;
+            }
+        }
+
+        // Multi-reviewer setup and this agent already approved — skip
         return false;
     }
 

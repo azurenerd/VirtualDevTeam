@@ -28,6 +28,10 @@ public class PrincipalEngineerAgent : EngineerAgentBase
     private bool _architectureReady;
     private bool _resourceRequestPending;
     private bool _recoveredReviewPRs;
+    private DateTime _lastResourceRequestTime = DateTime.MinValue;
+    private static readonly TimeSpan SpawnCooldown = TimeSpan.FromSeconds(45);
+    private bool _allTasksComplete;
+    private bool _integrationPrCreated;
     private readonly List<EngineeringTask> _taskBacklog = new();
     private readonly Dictionary<string, int> _agentAssignments = new();
     private readonly HashSet<int> _reviewedPrNumbers = new();
@@ -124,14 +128,33 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                     await RecoverStuckInProgressPRAsync(ct);
                     // Priority 1: Process rework feedback on our own PRs
                     await ProcessOwnReworkAsync(ct);
-                    // Priority 2: Assign issues to available engineers
-                    await AssignTasksToAvailableEngineersAsync(ct);
-                    // Priority 3: Work on our own high-complexity tasks
-                    await WorkOnOwnTasksAsync(ct);
-                    // Priority 4: Review engineer PRs
-                    await ReviewEngineerPRsAsync(ct);
-                    // Priority 5: Check if more engineers are needed
-                    await EvaluateResourceNeedsAsync(ct);
+
+                    // Check if all tasks are complete → integration phase
+                    if (!_allTasksComplete)
+                    {
+                        await CheckAllTasksCompleteAsync(ct);
+                    }
+
+                    if (_allTasksComplete)
+                    {
+                        // Integration phase: create integration PR if needed
+                        if (!_integrationPrCreated)
+                        {
+                            await CreateIntegrationPRAsync(ct);
+                        }
+                    }
+                    else
+                    {
+                        // Priority 2: Assign issues to available engineers
+                        await AssignTasksToAvailableEngineersAsync(ct);
+                        // Priority 3: Work on our own tasks (any complexity)
+                        await WorkOnOwnTasksAsync(ct);
+                        // Priority 4: Review engineer PRs
+                        await ReviewEngineerPRsAsync(ct);
+                        // Priority 5: Check if more engineers are needed
+                        await EvaluateResourceNeedsAsync(ct);
+                    }
+
                     // Persist state
                     await UpdateEngineeringPlanAsync(ct);
                 }
@@ -195,10 +218,11 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 Logger.LogInformation("Architecture ready but no enhancement issues yet, waiting for PM...");
             }
 
-            // Path 3: Recovery — Architecture.md exists on disk AND enhancement issues exist
+            // Path 3: Recovery — Architecture.md exists on disk with real content AND enhancement issues exist
             var architectureDoc = await ProjectFiles.GetArchitectureDocAsync(ct);
             if (!architectureDoc.Contains("No architecture document has been created yet", StringComparison.OrdinalIgnoreCase)
-                && architectureDoc.Length > 200)
+                && architectureDoc.Length > 200
+                && architectureDoc.Contains("## System Components", StringComparison.OrdinalIgnoreCase))
             {
                 var enhancementIssues = await GitHub.GetIssuesByLabelAsync(
                     IssueWorkflow.Labels.Enhancement, ct);
@@ -252,7 +276,9 @@ public class PrincipalEngineerAgent : EngineerAgentBase
 
         if (enhancementIssues.Count == 0)
         {
-            Logger.LogWarning("No enhancement issues found, cannot create engineering plan");
+            Logger.LogWarning("No open enhancement issues found — PM may not have created them yet, will retry");
+            UpdateStatus(AgentStatus.Idle, "Waiting for PM to create User Story Issues");
+            _planningComplete = false; // Force re-check on next loop
             return;
         }
 
@@ -402,59 +428,83 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                     _agentAssignments.Remove(engineer.AgentId);
                 }
 
-                var targetComplexity = engineer.Role switch
+                var complexityPreferences = engineer.Role switch
                 {
-                    AgentRole.SeniorEngineer => "Medium",
-                    AgentRole.JuniorEngineer => "Low",
-                    _ => null
+                    AgentRole.SeniorEngineer => new[] { "Medium", "High", "Low" },
+                    AgentRole.JuniorEngineer => new[] { "Low", "Medium" },
+                    _ => Array.Empty<string>()
                 };
 
-                if (targetComplexity is null)
+                if (complexityPreferences.Length == 0)
                     continue;
 
-                var task = FindNextAssignableTask(targetComplexity);
+                var task = FindNextAssignableTask(complexityPreferences);
                 if (task is null)
                     continue;
 
-                if (task.IssueNumber.HasValue)
+                // Auto-create a GitHub issue for tasks that don't have one
+                if (!task.IssueNumber.HasValue)
                 {
-                    var newTitle = $"{engineer.Name}: {task.Name}";
-                    await GitHub.UpdateIssueTitleAsync(task.IssueNumber.Value, newTitle, ct);
-
-                    _agentAssignments[engineer.AgentId] = task.IssueNumber.Value;
-
-                    var taskIndex = _taskBacklog.FindIndex(t => t.Id == task.Id);
-                    if (taskIndex >= 0)
+                    try
                     {
-                        _taskBacklog[taskIndex] = task with
+                        var issueBody = $"## Task: {task.Name}\n\n{task.Description}\n\n" +
+                            $"**Complexity:** {task.Complexity}\n" +
+                            $"**Task ID:** {task.Id}\n\n" +
+                            $"_Auto-created by Principal Engineer for task assignment._";
+                        var newIssue = await GitHub.CreateIssueAsync(
+                            task.Name,
+                            issueBody,
+                            new[] { "enhancement", task.Complexity.ToLowerInvariant() },
+                            ct);
+
+                        var taskIndex2 = _taskBacklog.FindIndex(t => t.Id == task.Id);
+                        if (taskIndex2 >= 0)
                         {
-                            Status = "Assigned",
-                            AssignedTo = engineer.Name
-                        };
+                            task = task with { IssueNumber = newIssue.Number, IssueUrl = $"#{newIssue.Number}" };
+                            _taskBacklog[taskIndex2] = task;
+                        }
+
+                        Logger.LogInformation(
+                            "Auto-created issue #{IssueNumber} for task {TaskId}: {TaskName}",
+                            newIssue.Number, task.Id, task.Name);
                     }
-
-                    Logger.LogInformation(
-                        "Assigned issue #{IssueNumber} ({TaskName}) to {Engineer}",
-                        task.IssueNumber, task.Name, engineer.Name);
-
-                    // BUG FIX: Route IssueAssignmentMessage to engineer.AgentId (Identity.Id),
-                    // NOT engineer.Name (DisplayName). The message bus delivers to mailboxes
-                    // keyed by Identity.Id. Using DisplayName caused silent message loss.
-                    await MessageBus.PublishAsync(new IssueAssignmentMessage
+                    catch (Exception ex)
                     {
-                        FromAgentId = Identity.Id,
-                        ToAgentId = engineer.AgentId,
-                        MessageType = "IssueAssignment",
-                        IssueNumber = task.IssueNumber.Value,
-                        IssueTitle = task.Name,
-                        Complexity = task.Complexity,
-                        IssueUrl = task.IssueUrl
-                    }, ct);
+                        Logger.LogWarning(ex, "Failed to auto-create issue for task {TaskId}, skipping assignment", task.Id);
+                        continue;
+                    }
                 }
-                else
+
+                // At this point, task is guaranteed to have an IssueNumber (either original or auto-created)
+                var newTitle = $"{engineer.Name}: {task.Name}";
+                await GitHub.UpdateIssueTitleAsync(task.IssueNumber!.Value, newTitle, ct);
+
+                _agentAssignments[engineer.AgentId] = task.IssueNumber.Value;
+
+                var taskIndex = _taskBacklog.FindIndex(t => t.Id == task.Id);
+                if (taskIndex >= 0)
                 {
-                    Logger.LogWarning("Task {TaskId} has no linked issue, cannot assign", task.Id);
+                    _taskBacklog[taskIndex] = task with
+                    {
+                        Status = "Assigned",
+                        AssignedTo = engineer.Name
+                    };
                 }
+
+                Logger.LogInformation(
+                    "Assigned issue #{IssueNumber} ({TaskName}) to {Engineer}",
+                    task.IssueNumber, task.Name, engineer.Name);
+
+                await MessageBus.PublishAsync(new IssueAssignmentMessage
+                {
+                    FromAgentId = Identity.Id,
+                    ToAgentId = engineer.AgentId,
+                    MessageType = "IssueAssignment",
+                    IssueNumber = task.IssueNumber.Value,
+                    IssueTitle = task.Name,
+                    Complexity = task.Complexity,
+                    IssueUrl = task.IssueUrl
+                }, ct);
             }
         }
         catch (Exception ex)
@@ -467,11 +517,72 @@ public class PrincipalEngineerAgent : EngineerAgentBase
     {
         try
         {
-            var task = _taskBacklog.FirstOrDefault(t =>
-                t.Complexity == "High" && t.Status == "Pending" && AreDependenciesMet(t));
+            // Don't start a new task if PE already has a PR in progress
+            if (CurrentPrNumber is not null)
+                return;
+
+            // PE prefers High complexity but falls through to any available work
+            var task = FindNextAssignableTask("High", "Medium", "Low");
 
             if (task is null)
+            {
+                var pending = _taskBacklog.Count(t => t.Status == "Pending");
+                var blocked = _taskBacklog.Count(t => t.Status == "Pending" && !AreDependenciesMet(t));
+                if (pending > 0)
+                    Logger.LogDebug("No assignable tasks: {Pending} pending, {Blocked} blocked by dependencies", pending, blocked);
                 return;
+            }
+
+            // Guard: don't grab non-High tasks if we recently requested an engineer spawn.
+            // Give new engineers time to spin up and claim work before PE takes it.
+            if (!string.Equals(task.Complexity, "High", StringComparison.OrdinalIgnoreCase)
+                && DateTime.UtcNow - _lastResourceRequestTime < SpawnCooldown)
+            {
+                // Check if there are free engineers who could take this instead
+                var freeEngineers = _registry.GetAgentsByRole(AgentRole.SeniorEngineer)
+                    .Concat(_registry.GetAgentsByRole(AgentRole.JuniorEngineer))
+                    .Count(a => !_agentAssignments.ContainsKey(a.Identity.Id));
+
+                if (freeEngineers > 0)
+                {
+                    Logger.LogInformation(
+                        "PE deferring {Complexity} task {TaskId} — {FreeEngineers} engineer(s) available, " +
+                        "spawn cooldown active ({Remaining:F0}s remaining)",
+                        task.Complexity, task.Id, freeEngineers,
+                        (SpawnCooldown - (DateTime.UtcNow - _lastResourceRequestTime)).TotalSeconds);
+                    return;
+                }
+                // No free engineers yet but cooldown active — still wait
+                Logger.LogDebug(
+                    "PE waiting for spawned engineer before taking {Complexity} task {TaskId}",
+                    task.Complexity, task.Id);
+                return;
+            }
+
+            // Auto-create issue if task doesn't have one
+            if (!task.IssueNumber.HasValue)
+            {
+                try
+                {
+                    var issueBody = $"## Task: {task.Name}\n\n{task.Description}\n\n" +
+                        $"**Complexity:** {task.Complexity}\n**Task ID:** {task.Id}\n\n" +
+                        $"_Auto-created by Principal Engineer._";
+                    var newIssue = await GitHub.CreateIssueAsync(
+                        task.Name, issueBody,
+                        new[] { "enhancement", task.Complexity.ToLowerInvariant() }, ct);
+
+                    var idx = _taskBacklog.FindIndex(t => t.Id == task.Id);
+                    if (idx >= 0)
+                    {
+                        task = task with { IssueNumber = newIssue.Number, IssueUrl = $"#{newIssue.Number}" };
+                        _taskBacklog[idx] = task;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogWarning(ex, "Failed to auto-create issue for PE task {TaskId}", task.Id);
+                }
+            }
 
             UpdateStatus(AgentStatus.Working, $"Working on: {task.Name}");
             Logger.LogInformation("Principal Engineer working on task {TaskId}: {TaskName}",
@@ -518,6 +629,13 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                     PullRequestNumber = pr.Number
                 };
             }
+
+            // Track this PR so PE doesn't start another task concurrently
+            CurrentPrNumber = pr.Number;
+            Identity.AssignedPullRequest = pr.Number.ToString();
+
+            // Bind CLI session to this PR for conversational continuity
+            ActivatePrSession(pr.Number);
 
             Logger.LogInformation(
                 "Principal Engineer created PR #{PrNumber} for task {TaskId}, starting implementation",
@@ -648,6 +766,8 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                     await PrWorkflow.CommitCodeFilesToPRAsync(pr.Number, codeFiles, $"Implement {task.Name}", ct);
             }
 
+            // Sync branch with main before marking ready — ensures PR is merge-clean
+            await SyncBranchWithMainAsync(pr.Number, ct);
             await PrWorkflow.MarkReadyForReviewAsync(pr.Number, Identity.DisplayName, ct);
 
             await MessageBus.PublishAsync(new ReviewRequestMessage
@@ -686,7 +806,10 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 if (_reviewedPrNumbers.Contains(prNumber))
                     continue;
 
-                if (!await PrWorkflow.NeedsReviewFromAsync(prNumber, "PrincipalEngineer", ct))
+                // Skip NeedsReviewFromAsync for force-approval — there's no new rework,
+                // but we need to approve to unblock the engineer.
+                if (!_forceApprovalPrs.Contains(prNumber)
+                    && !await PrWorkflow.NeedsReviewFromAsync(prNumber, "PrincipalEngineer", ct))
                 {
                     _reviewedPrNumbers.Add(prNumber);
                     continue;
@@ -838,10 +961,37 @@ public class PrincipalEngineerAgent : EngineerAgentBase
 
                 if (required.All(r => approved.Contains(r, StringComparer.OrdinalIgnoreCase)))
                 {
-                    // All approved — merge
+                    // All approved — try merge (with branch sync fallback)
                     Logger.LogInformation("PE PR #{PrNumber} has all approvals, merging", pr.Number);
-                    await GitHub.MergePullRequestAsync(pr.Number,
-                        $"Merged after dual approval from {string.Join(" and ", approved)}", ct);
+                    try
+                    {
+                        await GitHub.MergePullRequestAsync(pr.Number,
+                            $"Merged after dual approval from {string.Join(" and ", approved)}", ct);
+                    }
+                    catch (Octokit.PullRequestNotMergeableException)
+                    {
+                        Logger.LogWarning("PE PR #{PrNumber} not mergeable, syncing branch with main", pr.Number);
+                        var synced = await GitHub.UpdatePullRequestBranchAsync(pr.Number, ct);
+                        if (synced)
+                        {
+                            await Task.Delay(5000, ct);
+                            try
+                            {
+                                await GitHub.MergePullRequestAsync(pr.Number,
+                                    $"Merged after branch sync and dual approval from {string.Join(" and ", approved)}", ct);
+                            }
+                            catch (Exception retryEx)
+                            {
+                                Logger.LogWarning(retryEx, "PE PR #{PrNumber} still not mergeable after sync", pr.Number);
+                                continue;
+                            }
+                        }
+                        else
+                        {
+                            Logger.LogWarning("PE PR #{PrNumber} has real merge conflicts, needs resolution", pr.Number);
+                            continue;
+                        }
+                    }
                     if (!string.IsNullOrEmpty(pr.HeadBranch))
                         await GitHub.DeleteBranchAsync(pr.HeadBranch, ct);
 
@@ -908,6 +1058,8 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 pr.Number);
             LogActivity("system", $"🔄 Recovering stuck PR #{pr.Number} — marking ready for review");
 
+            // Sync branch with main before marking ready — ensures PR is merge-clean
+            await SyncBranchWithMainAsync(pr.Number, ct);
             await PrWorkflow.MarkReadyForReviewAsync(pr.Number, Identity.DisplayName, ct);
 
             await MessageBus.PublishAsync(new ReviewRequestMessage
@@ -967,7 +1119,16 @@ public class PrincipalEngineerAgent : EngineerAgentBase
 
                 CurrentPrNumber = null;
                 Identity.AssignedPullRequest = null;
-                UpdateStatus(AgentStatus.Idle, "Ready for next task");
+
+                // If the integration PR was merged, signal engineering complete
+                if (wasMerged && _allTasksComplete && _integrationPrCreated)
+                {
+                    await SignalEngineeringCompleteAsync(ct);
+                }
+                else
+                {
+                    UpdateStatus(AgentStatus.Idle, "Ready for next task");
+                }
             }
         }
         catch (Exception ex)
@@ -1087,6 +1248,7 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 }, ct);
 
                 _resourceRequestPending = true;
+                _lastResourceRequestTime = DateTime.UtcNow;
             }
         }
         catch (Exception ex)
@@ -1106,6 +1268,157 @@ public class PrincipalEngineerAgent : EngineerAgentBase
         {
             Logger.LogWarning(ex, "Failed to update engineering plan");
         }
+    }
+
+    private async Task CheckAllTasksCompleteAsync(CancellationToken ct)
+    {
+        if (_taskBacklog.Count == 0)
+            return;
+
+        var allDone = _taskBacklog.All(t => IsTaskDone(t));
+
+        if (!allDone)
+            return;
+
+        _allTasksComplete = true;
+        Logger.LogInformation("🎉 All {Count} engineering tasks are complete!", _taskBacklog.Count);
+        LogActivity("system", $"🎉 All {_taskBacklog.Count} engineering tasks complete — entering integration phase");
+        UpdateStatus(AgentStatus.Working, "All tasks complete — creating integration PR");
+
+        await MessageBus.PublishAsync(new StatusUpdateMessage
+        {
+            FromAgentId = Identity.Id,
+            ToAgentId = "*",
+            MessageType = "AllTasksComplete",
+            NewStatus = AgentStatus.Working,
+            Details = $"All {_taskBacklog.Count} engineering tasks are done"
+        }, ct);
+    }
+
+    private async Task CreateIntegrationPRAsync(CancellationToken ct)
+    {
+        try
+        {
+            UpdateStatus(AgentStatus.Working, "Creating integration PR");
+
+            var pmSpecDoc = await ProjectFiles.GetPMSpecAsync(ct);
+            var architectureDoc = await ProjectFiles.GetArchitectureDocAsync(ct);
+            var engineeringPlan = await ProjectFiles.GetEngineeringPlanAsync(ct);
+            var techStack = Config.Project.TechStack;
+
+            // Get list of all repo files to review against the spec
+            var kernel = Models.GetKernel(Identity.ModelTier, Identity.Id);
+            var chat = kernel.GetRequiredService<IChatCompletionService>();
+
+            var history = new ChatHistory();
+            history.AddSystemMessage(
+                "You are a Principal Engineer performing final integration review. " +
+                $"The project uses {techStack}. " +
+                "All individual task PRs have been merged to main. Your job is to:\n" +
+                "1. Review the architecture and PM spec for any missing wiring, imports, or configuration\n" +
+                "2. Identify integration gaps (broken cross-module references, missing route registration, missing DI wiring)\n" +
+                "3. Generate any integration fix files needed\n\n" +
+                "Output each file using: FILE: path/to/file.ext\n```language\n<content>\n```\n\n" +
+                "If no integration fixes are needed, output ONLY the text: NO_INTEGRATION_FIXES_NEEDED");
+
+            history.AddUserMessage(
+                $"## PM Specification\n{pmSpecDoc}\n\n" +
+                $"## Architecture\n{architectureDoc}\n\n" +
+                $"## Engineering Plan\n{engineeringPlan}\n\n" +
+                "Review the merged work against these documents. " +
+                "Generate any missing integration files (config, wiring, startup registration, etc.).");
+
+            var response = await chat.GetChatMessageContentAsync(history, cancellationToken: ct);
+            var integrationContent = response.Content?.Trim() ?? "";
+
+            var codeFiles = AgentSquad.Core.AI.CodeFileParser.ParseFiles(integrationContent);
+
+            if (codeFiles.Count == 0 ||
+                integrationContent.Contains("NO_INTEGRATION_FIXES_NEEDED", StringComparison.OrdinalIgnoreCase))
+            {
+                Logger.LogInformation("No integration fixes needed — all tasks cleanly integrated");
+                LogActivity("task", "✅ No integration fixes needed — signaling completion");
+                _integrationPrCreated = true;
+
+                // Signal completion directly
+                await SignalEngineeringCompleteAsync(ct);
+                return;
+            }
+
+            // Create integration branch and PR
+            var branchName = await PrWorkflow.CreateTaskBranchAsync(
+                Identity.DisplayName, "final-integration", ct);
+
+            var prBody = $"## Final Integration PR\n\n" +
+                $"All {_taskBacklog.Count} engineering tasks have been completed and merged.\n" +
+                $"This PR addresses integration gaps identified during final review.\n\n" +
+                $"### Files Changed\n" +
+                string.Join("\n", codeFiles.Select(f => $"- `{f.Path}`"));
+
+            var pr = await PrWorkflow.CreateTaskPullRequestAsync(
+                Identity.DisplayName,
+                "Final Integration",
+                prBody,
+                "High",
+                "Architecture.md",
+                "EngineeringPlan.md",
+                branchName,
+                ct);
+
+            await PrWorkflow.CommitCodeFilesToPRAsync(
+                pr.Number, codeFiles, "Integration fixes: wiring, config, and cross-module references", ct);
+
+            CurrentPrNumber = pr.Number;
+            Identity.AssignedPullRequest = pr.Number.ToString();
+            _integrationPrCreated = true;
+
+            // Sync and mark ready for review
+            await SyncBranchWithMainAsync(pr.Number, ct);
+            await PrWorkflow.MarkReadyForReviewAsync(pr.Number, Identity.DisplayName, ct);
+
+            await MessageBus.PublishAsync(new ReviewRequestMessage
+            {
+                FromAgentId = Identity.Id,
+                ToAgentId = "*",
+                MessageType = "ReviewRequest",
+                PrNumber = pr.Number,
+                PrTitle = pr.Title,
+                ReviewType = "Integration"
+            }, ct);
+
+            Logger.LogInformation("Created integration PR #{PrNumber} with {FileCount} fixes",
+                pr.Number, codeFiles.Count);
+            LogActivity("task", $"📦 Created integration PR #{pr.Number} with {codeFiles.Count} fixes");
+
+            await RememberAsync(MemoryType.Action,
+                $"Created integration PR #{pr.Number} with {codeFiles.Count} integration fixes", ct: ct);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to create integration PR");
+            RecordError($"Integration PR failed: {ex.Message}", Microsoft.Extensions.Logging.LogLevel.Error, ex);
+            // Signal completion anyway so the pipeline doesn't get stuck
+            _integrationPrCreated = true;
+            await SignalEngineeringCompleteAsync(ct);
+        }
+    }
+
+    private async Task SignalEngineeringCompleteAsync(CancellationToken ct)
+    {
+        UpdateStatus(AgentStatus.Idle, "Engineering complete");
+        LogActivity("system", "🏁 Engineering phase complete — all tasks done and integrated");
+
+        await MessageBus.PublishAsync(new StatusUpdateMessage
+        {
+            FromAgentId = Identity.Id,
+            ToAgentId = "*",
+            MessageType = "EngineeringComplete",
+            NewStatus = AgentStatus.Idle,
+            Details = $"All {_taskBacklog.Count} tasks complete. Engineering phase finished."
+        }, ct);
+
+        await RememberAsync(MemoryType.Action,
+            $"Engineering phase complete: {_taskBacklog.Count} tasks done", ct: ct);
     }
 
     #endregion
@@ -1265,25 +1578,19 @@ public class PrincipalEngineerAgent : EngineerAgentBase
 
             var history = new ChatHistory();
             history.AddSystemMessage(
-                "You are a Principal Engineer reviewing a pull request for technical quality " +
-                "and alignment with the architecture and engineering plan.\n\n" +
-                "IMPORTANT: This PR is ONE TASK — it is NOT expected to cover the entire project. " +
-                "Review it ONLY against its own stated description and acceptance criteria.\n\n" +
-                "You will be given the architecture, PM spec, engineering plan, the linked user story, " +
-                "AND the actual code files. Review the ACTUAL CODE — not just the PR description.\n\n" +
-                "Evaluate:\n" +
-                "1. Does the code follow the architecture patterns and component boundaries?\n" +
-                "2. Is the implementation complete for this task's scope and acceptance criteria?\n" +
-                "3. Code quality: error handling, edge cases, naming, structure\n" +
-                "4. Are there any bugs, logic errors, or missing validation?\n" +
-                "5. Test coverage: are there tests, and do they cover key scenarios?\n\n" +
-                "REVIEW PHILOSOPHY: Be pragmatic, not pedantic. Only request changes for issues " +
-                "that are both significant AND fixable within a reasonable code change. Minor " +
-                "style preferences or cosmetic issues should be noted as suggestions in an APPROVE " +
-                "verdict. If a problem would require a complete rewrite, APPROVE with caveats.\n\n" +
-                "End your review with exactly one of:\n" +
-                "VERDICT: APPROVE\n" +
-                "VERDICT: REQUEST_CHANGES");
+                "You are a Principal Engineer doing a technical code review.\n\n" +
+                "SCOPE: This PR is ONE task. Review the ACTUAL CODE against its stated scope.\n\n" +
+                "CHECK: architecture compliance, implementation completeness, code quality, " +
+                "bugs/logic errors, missing validation, test coverage.\n\n" +
+                "IMPORTANT: Code may appear truncated in your review context due to length limits — " +
+                "this is a tooling limitation, NOT a code defect. Do NOT flag truncated code.\n\n" +
+                "Only request changes for issues that are significant AND fixable. " +
+                "Minor style preferences → APPROVE. Complete rewrites needed → APPROVE with caveat.\n\n" +
+                "RESPONSE FORMAT:\n" +
+                "- If requesting changes: use a **numbered list** (1. 2. 3.) for each issue, " +
+                "with **bold** file/method names. No praise, no summary of what's good, no executive overview.\n" +
+                "- If approving: one sentence or empty. No recap of what the PR does.\n" +
+                "- End with: VERDICT: APPROVE or VERDICT: REQUEST_CHANGES");
 
             history.AddUserMessage(
                 $"## Architecture\n{architectureDoc}\n\n" +
@@ -1316,11 +1623,25 @@ public class PrincipalEngineerAgent : EngineerAgentBase
 
     #region Helpers
 
-    private EngineeringTask? FindNextAssignableTask(string targetComplexity)
+    /// <summary>
+    /// Find the next assignable task, trying preferred complexity first then falling back.
+    /// Engineers should not sit idle when there's available work at any complexity level.
+    /// </summary>
+    private EngineeringTask? FindNextAssignableTask(params string[] complexityPreferences)
     {
-        return _taskBacklog.FirstOrDefault(t =>
-            t.Complexity == targetComplexity && t.Status == "Pending" && AreDependenciesMet(t));
+        foreach (var complexity in complexityPreferences)
+        {
+            var task = _taskBacklog.FirstOrDefault(t =>
+                string.Equals(t.Complexity, complexity, StringComparison.OrdinalIgnoreCase)
+                && t.Status == "Pending" && AreDependenciesMet(t));
+            if (task is not null)
+                return task;
+        }
+        return null;
     }
+
+    private static bool IsTaskDone(EngineeringTask task) =>
+        task.Status is "Done" or "Complete";
 
     private bool AreDependenciesMet(EngineeringTask task)
     {
@@ -1330,7 +1651,7 @@ public class PrincipalEngineerAgent : EngineerAgentBase
         return task.Dependencies.All(depId =>
         {
             var dep = _taskBacklog.FirstOrDefault(t => t.Id == depId);
-            return dep is null || dep.Status == "Complete";
+            return dep is null || IsTaskDone(dep);
         });
     }
 
@@ -1462,7 +1783,7 @@ public class PrincipalEngineerAgent : EngineerAgentBase
         sb.AppendLine();
 
         var total = _taskBacklog.Count;
-        var completed = _taskBacklog.Count(t => t.Status == "Complete");
+        var completed = _taskBacklog.Count(t => IsTaskDone(t));
         var inProgress = _taskBacklog.Count(t => t.Status is "Assigned" or "InProgress");
         var pending = _taskBacklog.Count(t => t.Status == "Pending");
 

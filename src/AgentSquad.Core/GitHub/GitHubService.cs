@@ -643,6 +643,37 @@ public class GitHubService : IGitHubService
         }
     }
 
+    public async Task<bool> UpdatePullRequestBranchAsync(int prNumber, CancellationToken ct = default)
+    {
+        try
+        {
+            // Use the REST API: PUT /repos/{owner}/{repo}/pulls/{pull_number}/update-branch
+            // Octokit doesn't have a built-in method for this, so use the Connection directly
+            var response = await _client.Connection.Put<object>(
+                new Uri($"repos/{_owner}/{_repo}/pulls/{prNumber}/update-branch", UriKind.Relative),
+                new { expected_head_sha = (string?)null });
+
+            _logger.LogInformation("Updated PR #{PrNumber} branch with latest main", prNumber);
+            return true;
+        }
+        catch (ApiException ex) when (ex.StatusCode == System.Net.HttpStatusCode.UnprocessableEntity)
+        {
+            _logger.LogWarning("PR #{PrNumber} branch update failed — possible merge conflict", prNumber);
+            return false;
+        }
+        catch (ApiException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Accepted)
+        {
+            // 202 Accepted means the update was queued successfully
+            _logger.LogInformation("PR #{PrNumber} branch update accepted (async)", prNumber);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to update PR #{PrNumber} branch", prNumber);
+            return false;
+        }
+    }
+
     // Rate Limiting
 
     public async Task<Models.GitHubRateLimitInfo> GetRateLimitAsync(CancellationToken ct = default)

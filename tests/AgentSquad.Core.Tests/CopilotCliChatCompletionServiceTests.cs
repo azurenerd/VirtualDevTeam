@@ -136,4 +136,23 @@ public class CopilotCliChatCompletionServiceTests
         Assert.DoesNotContain("session-state", stripped);
         Assert.Contains("Content here.", stripped);
     }
+
+    [Theory]
+    [InlineData("Authentication failure: Authentication required", true)]
+    [InlineData("Process error: Authentication failure: Authentication required", true)]
+    [InlineData("unauthorized access", true)]
+    [InlineData("401 Unauthorized", true)]
+    [InlineData("rate limit exceeded", true)]
+    [InlineData("429 Too Many Requests", true)]
+    [InlineData("connection refused", true)]
+    [InlineData("request timed out", true)]
+    [InlineData("503 Service Unavailable", true)]
+    [InlineData("Copilot CLI is not available", false)]
+    [InlineData("Failed to parse response", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void IsTransientError_ClassifiesCorrectly(string? error, bool expected)
+    {
+        Assert.Equal(expected, CopilotCliChatCompletionService.IsTransientError(error));
+    }
 }

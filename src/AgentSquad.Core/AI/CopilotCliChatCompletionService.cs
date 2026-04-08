@@ -54,11 +54,37 @@ public sealed class CopilotCliChatCompletionService : IChatCompletionService
         // FastMode overrides model to a faster one for quick E2E testing
         var modelOverride = _config.FastMode ? _config.FastModeModel : executionSettings?.ModelId;
 
-        var result = await _processManager.ExecutePromptAsync(prompt, modelOverride, cancellationToken);
+        // Pick up CLI session ID from the ambient call context (set by the agent)
+        var sessionId = AgentCallContext.CurrentSessionId;
 
-        if (!result.IsSuccess)
+        // Retry loop for transient errors (auth failures, timeouts)
+        var maxRetries = _config.MaxRetries;
+        CopilotCliResult? result = null;
+        for (var attempt = 0; attempt <= maxRetries; attempt++)
         {
-            _logger.LogWarning("Copilot CLI request failed: {Error}", result.Error);
+            result = await _processManager.ExecutePromptAsync(prompt, modelOverride, sessionId, cancellationToken);
+
+            if (result.IsSuccess)
+                break;
+
+            if (attempt < maxRetries && IsTransientError(result.Error))
+            {
+                var backoffSeconds = attempt switch { 0 => 5, 1 => 15, _ => 30 };
+                _logger.LogWarning(
+                    "Transient error on attempt {Attempt}/{MaxRetries}, retrying in {Backoff}s: {Error}",
+                    attempt + 1, maxRetries, backoffSeconds, result.Error);
+                await Task.Delay(TimeSpan.FromSeconds(backoffSeconds), cancellationToken);
+                continue;
+            }
+
+            // Non-transient error or retries exhausted
+            break;
+        }
+
+        if (!result!.IsSuccess)
+        {
+            _logger.LogWarning("Copilot CLI request failed after {Attempts} attempt(s): {Error}",
+                maxRetries + 1, result.Error);
             throw new CopilotCliException(
                 $"Copilot CLI request failed: {result.Error}");
         }
@@ -262,5 +288,31 @@ public sealed class CopilotCliChatCompletionService : IChatCompletionService
         }
 
         return response;
+    }
+
+    /// <summary>
+    /// Determines if a CLI error is transient and worth retrying.
+    /// Auth token expiry, rate limits, and process timeouts are transient.
+    /// </summary>
+    internal static bool IsTransientError(string? error)
+    {
+        if (string.IsNullOrWhiteSpace(error))
+            return false;
+
+        var lower = error.ToLowerInvariant();
+        return lower.Contains("authentication") ||
+               lower.Contains("unauthorized") ||
+               lower.Contains("401") ||
+               lower.Contains("403") ||
+               lower.Contains("rate limit") ||
+               lower.Contains("too many requests") ||
+               lower.Contains("429") ||
+               lower.Contains("timeout") ||
+               lower.Contains("timed out") ||
+               lower.Contains("connection") ||
+               lower.Contains("network") ||
+               lower.Contains("502") ||
+               lower.Contains("503") ||
+               lower.Contains("504");
     }
 }

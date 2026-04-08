@@ -45,6 +45,12 @@ public interface IGitHubService
     Task<bool> BranchExistsAsync(string branchName, CancellationToken ct = default);
     Task DeleteBranchAsync(string branchName, CancellationToken ct = default);
 
+    /// <summary>
+    /// Merge the base branch (main) into a PR branch to bring it up to date.
+    /// Returns true if the update succeeded, false if there are merge conflicts.
+    /// </summary>
+    Task<bool> UpdatePullRequestBranchAsync(int prNumber, CancellationToken ct = default);
+
     // PR file inspection
     Task<IReadOnlyList<AgentPullRequest>> GetMergedPullRequestsAsync(CancellationToken ct = default);
     Task<IReadOnlyList<string>> GetPullRequestChangedFilesAsync(int prNumber, CancellationToken ct = default);
