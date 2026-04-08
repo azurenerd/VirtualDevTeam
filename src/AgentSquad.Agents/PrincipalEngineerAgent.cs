@@ -443,38 +443,11 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 if (task is null)
                     continue;
 
-                // Auto-create a GitHub issue for tasks that don't have one
-                if (!task.IssueNumber.HasValue)
-                {
-                    try
-                    {
-                        var issueBody = $"## Task: {task.Name}\n\n{task.Description}\n\n" +
-                            $"**Complexity:** {task.Complexity}\n" +
-                            $"**Task ID:** {task.Id}\n\n" +
-                            $"_Auto-created by Principal Engineer for task assignment._";
-                        var newIssue = await GitHub.CreateIssueAsync(
-                            task.Name,
-                            issueBody,
-                            new[] { "enhancement", task.Complexity.ToLowerInvariant() },
-                            ct);
-
-                        var taskIndex2 = _taskBacklog.FindIndex(t => t.Id == task.Id);
-                        if (taskIndex2 >= 0)
-                        {
-                            task = task with { IssueNumber = newIssue.Number, IssueUrl = $"#{newIssue.Number}" };
-                            _taskBacklog[taskIndex2] = task;
-                        }
-
-                        Logger.LogInformation(
-                            "Auto-created issue #{IssueNumber} for task {TaskId}: {TaskName}",
-                            newIssue.Number, task.Id, task.Name);
-                    }
-                    catch (Exception ex)
-                    {
-                        Logger.LogWarning(ex, "Failed to auto-create issue for task {TaskId}, skipping assignment", task.Id);
-                        continue;
-                    }
-                }
+                // Ensure the task has an open issue (create if missing or closed)
+                var updated = await EnsureTaskHasOpenIssueAsync(task, ct);
+                if (updated is null)
+                    continue;
+                task = updated;
 
                 // At this point, task is guaranteed to have an IssueNumber (either original or auto-created)
                 var newTitle = $"{engineer.Name}: {task.Name}";
@@ -560,30 +533,10 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 return;
             }
 
-            // Auto-create issue if task doesn't have one
-            if (!task.IssueNumber.HasValue)
-            {
-                try
-                {
-                    var issueBody = $"## Task: {task.Name}\n\n{task.Description}\n\n" +
-                        $"**Complexity:** {task.Complexity}\n**Task ID:** {task.Id}\n\n" +
-                        $"_Auto-created by Principal Engineer._";
-                    var newIssue = await GitHub.CreateIssueAsync(
-                        task.Name, issueBody,
-                        new[] { "enhancement", task.Complexity.ToLowerInvariant() }, ct);
-
-                    var idx = _taskBacklog.FindIndex(t => t.Id == task.Id);
-                    if (idx >= 0)
-                    {
-                        task = task with { IssueNumber = newIssue.Number, IssueUrl = $"#{newIssue.Number}" };
-                        _taskBacklog[idx] = task;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Logger.LogWarning(ex, "Failed to auto-create issue for PE task {TaskId}", task.Id);
-                }
-            }
+            // Ensure the task has an open issue (create if missing or closed)
+            var updated = await EnsureTaskHasOpenIssueAsync(task, ct);
+            if (updated is not null)
+                task = updated;
 
             UpdateStatus(AgentStatus.Working, $"Working on: {task.Name}");
             Logger.LogInformation("Principal Engineer working on task {TaskId}: {TaskName}",
@@ -1858,6 +1811,62 @@ public class PrincipalEngineerAgent : EngineerAgentBase
             var dep = _taskBacklog.FirstOrDefault(t => t.Id == depId);
             return dep is null || IsTaskDone(dep);
         });
+    }
+
+    /// <summary>
+    /// Ensure a task has its own open GitHub issue. If the task's current issue is
+    /// closed (e.g., shared issue #52 closed by an earlier PR) or missing, create a new one.
+    /// Returns the updated task with valid IssueNumber, or null if issue creation failed.
+    /// </summary>
+    private async Task<EngineeringTask?> EnsureTaskHasOpenIssueAsync(
+        EngineeringTask task, CancellationToken ct)
+    {
+        if (task.IssueNumber.HasValue)
+        {
+            try
+            {
+                var issue = await GitHub.GetIssueAsync(task.IssueNumber.Value, ct);
+                if (issue is not null &&
+                    string.Equals(issue.State, "open", StringComparison.OrdinalIgnoreCase))
+                    return task; // Issue is open, nothing to do
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex, "Failed to check issue #{IssueNumber} state for task {TaskId}",
+                    task.IssueNumber, task.Id);
+            }
+
+            // Issue is closed or gone — need a fresh issue
+            Logger.LogInformation(
+                "Task {TaskId} issue #{IssueNumber} is closed, creating new issue",
+                task.Id, task.IssueNumber);
+        }
+
+        try
+        {
+            var issueBody = $"## Task: {task.Name}\n\n{task.Description}\n\n" +
+                $"**Complexity:** {task.Complexity}\n" +
+                $"**Task ID:** {task.Id}\n\n" +
+                $"_Auto-created by Principal Engineer._";
+            var newIssue = await GitHub.CreateIssueAsync(
+                task.Name, issueBody,
+                new[] { "enhancement", task.Complexity.ToLowerInvariant() }, ct);
+
+            task = task with { IssueNumber = newIssue.Number, IssueUrl = $"#{newIssue.Number}" };
+            var idx = _taskBacklog.FindIndex(t => t.Id == task.Id);
+            if (idx >= 0)
+                _taskBacklog[idx] = task;
+
+            Logger.LogInformation(
+                "Created issue #{IssueNumber} for task {TaskId}: {TaskName}",
+                newIssue.Number, task.Id, task.Name);
+            return task;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to create issue for task {TaskId}", task.Id);
+            return null;
+        }
     }
 
     private async Task<string> GenerateTaskDescriptionAsync(
