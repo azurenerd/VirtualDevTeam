@@ -438,6 +438,10 @@ public class PrincipalEngineerAgent : EngineerAgentBase
             if (assignedTasks.Count == 0)
                 return;
 
+            // Skip tasks that are currently tracked in _agentAssignments — these were
+            // recently assigned by us and the engineer may not have created a PR yet.
+            var trackedIssueNums = new HashSet<int>(_agentAssignments.Values);
+
             // Get all open PRs once to check against
             var openPRs = await GitHub.GetOpenPullRequestsAsync(ct);
             var openPrIssueRefs = new HashSet<int>();
@@ -452,9 +456,28 @@ public class PrincipalEngineerAgent : EngineerAgentBase
 
             foreach (var task in assignedTasks)
             {
+                // Skip tasks we've already assigned to an engineer this session
+                if (trackedIssueNums.Contains(task.IssueNumber!.Value))
+                    continue;
+
                 // Check if there's an open PR that references this task's issue
                 if (openPrIssueRefs.Contains(task.IssueNumber!.Value))
-                    continue; // Active PR exists — assignment is valid
+                {
+                    // Restore to _agentAssignments so PE tracks this assignment
+                    if (task.AssignedTo is not null)
+                    {
+                        var matchingAgent = _registry.GetAgentsByRole(AgentRole.SeniorEngineer)
+                            .Concat(_registry.GetAgentsByRole(AgentRole.JuniorEngineer))
+                            .FirstOrDefault(a => string.Equals(a.Identity.DisplayName, task.AssignedTo, StringComparison.OrdinalIgnoreCase));
+                        if (matchingAgent is not null && !_agentAssignments.ContainsKey(matchingAgent.Identity.Id))
+                        {
+                            _agentAssignments[matchingAgent.Identity.Id] = task.IssueNumber!.Value;
+                            Logger.LogInformation("Restored assignment tracking: {Engineer} → issue #{IssueNumber}",
+                                task.AssignedTo, task.IssueNumber);
+                        }
+                    }
+                    continue;
+                }
 
                 // Also check if there's an open PR with the assigned engineer's name in the title
                 var hasMatchingPr = openPRs.Any(pr =>
