@@ -1282,6 +1282,28 @@ public class PrincipalEngineerAgent : EngineerAgentBase
         {
             // Find the associated task in the backlog
             var taskIdx = _taskBacklog.FindIndex(t => t.PullRequestNumber == pr.Number);
+
+            // Fallback: engineer PRs don't have PullRequestNumber tracked in backlog.
+            // Search by issue number from _agentAssignments or by task name in PR title.
+            if (taskIdx < 0)
+            {
+                var taskTitle = PullRequestWorkflow.ParseTaskTitleFromTitle(pr.Title);
+                if (!string.IsNullOrEmpty(taskTitle))
+                {
+                    taskIdx = _taskBacklog.FindIndex(t =>
+                        t.Name.Contains(taskTitle, StringComparison.OrdinalIgnoreCase)
+                        || taskTitle.Contains(t.Name, StringComparison.OrdinalIgnoreCase));
+                }
+            }
+            if (taskIdx < 0)
+            {
+                // Search by issue number from agent assignments
+                var issueNum = _agentAssignments.Values
+                    .FirstOrDefault(v => _taskBacklog.Any(t => t.IssueNumber == v
+                        && pr.Title.Contains(t.Name, StringComparison.OrdinalIgnoreCase)));
+                if (issueNum > 0)
+                    taskIdx = _taskBacklog.FindIndex(t => t.IssueNumber == issueNum);
+            }
             var task = taskIdx >= 0 ? _taskBacklog[taskIdx] : null;
 
             // Close the conflicted PR with an explanation
