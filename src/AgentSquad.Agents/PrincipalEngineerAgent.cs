@@ -493,13 +493,16 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 return;
             }
 
-            // Guard: don't grab non-High tasks if we recently requested an engineer spawn.
+            // Guard: don't grab non-High tasks if we recently requested an engineer spawn
+            // AND engineers actually exist to handle them. If no engineers exist at all,
+            // the PE should start working immediately rather than sitting idle.
             if (!string.Equals(task.Complexity, "High", StringComparison.OrdinalIgnoreCase)
                 && DateTime.UtcNow - _lastResourceRequestTime < SpawnCooldown)
             {
-                var freeEngineers = _registry.GetAgentsByRole(AgentRole.SeniorEngineer)
+                var allEngineers = _registry.GetAgentsByRole(AgentRole.SeniorEngineer)
                     .Concat(_registry.GetAgentsByRole(AgentRole.JuniorEngineer))
-                    .Count(a => !_agentAssignments.ContainsKey(a.Identity.Id));
+                    .ToList();
+                var freeEngineers = allEngineers.Count(a => !_agentAssignments.ContainsKey(a.Identity.Id));
 
                 if (freeEngineers > 0)
                 {
@@ -510,10 +513,20 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                         (SpawnCooldown - (DateTime.UtcNow - _lastResourceRequestTime)).TotalSeconds);
                     return;
                 }
-                Logger.LogDebug(
-                    "PE waiting for spawned engineer before taking {Complexity} task {TaskId}",
+
+                // Only wait for spawned engineer if at least one engineer is already registered
+                // (meaning the spawn is adding capacity). If zero engineers exist, PE should work.
+                if (allEngineers.Count > 0)
+                {
+                    Logger.LogDebug(
+                        "PE waiting for spawned engineer before taking {Complexity} task {TaskId}",
+                        task.Complexity, task.Id);
+                    return;
+                }
+
+                Logger.LogInformation(
+                    "PE taking {Complexity} task {TaskId} — no engineers registered yet, not waiting",
                     task.Complexity, task.Id);
-                return;
             }
 
             if (!task.IssueNumber.HasValue)

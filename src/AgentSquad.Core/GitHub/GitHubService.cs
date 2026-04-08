@@ -441,9 +441,10 @@ public class GitHubService : IGitHubService
                     ? ItemState.Closed : ItemState.Open;
             if (labels is not null)
             {
-                update.Labels.Clear();
+                // IssueUpdate.Labels starts null; use ClearLabels() then add
+                update.ClearLabels();
                 foreach (var label in labels)
-                    update.Labels.Add(label);
+                    update.AddLabel(label);
             }
 
             await _client.Issue.Update(_owner, _repo, issueNumber, update);
