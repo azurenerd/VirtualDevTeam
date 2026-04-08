@@ -150,6 +150,8 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                     }
                     else
                     {
+                        // Priority 1.5: Recover orphaned assigned tasks with no open PRs
+                        await RecoverOrphanedAssignmentsAsync(ct);
                         // Priority 2: Assign issues to available engineers
                         await AssignTasksToAvailableEngineersAsync(ct);
                         // Priority 3: Work on our own tasks (any complexity)
@@ -417,6 +419,72 @@ public class PrincipalEngineerAgent : EngineerAgentBase
     #endregion
 
     #region Phase 2 — Continuous Development Loop
+
+    /// <summary>
+    /// Detect tasks with status:assigned/in-progress that have no open PR → reset to pending.
+    /// This handles cases where a PR was closed without merging (e.g., rebase wiped changes,
+    /// merge conflict close-and-recreate failed halfway, or app restarted mid-operation).
+    /// </summary>
+    private async Task RecoverOrphanedAssignmentsAsync(CancellationToken ct)
+    {
+        try
+        {
+            var assignedTasks = _taskManager.Tasks
+                .Where(t => t.Status is "Assigned" or "InProgress"
+                         && t.IssueNumber.HasValue
+                         && !EngineeringTaskIssueManager.IsTaskDone(t))
+                .ToList();
+
+            if (assignedTasks.Count == 0)
+                return;
+
+            // Get all open PRs once to check against
+            var openPRs = await GitHub.GetOpenPullRequestsAsync(ct);
+            var openPrIssueRefs = new HashSet<int>();
+            foreach (var pr in openPRs)
+            {
+                // Extract issue number from PR body "Closes #NNN"
+                var closesMatch = System.Text.RegularExpressions.Regex.Match(
+                    pr.Body ?? "", @"Closes\s+#(\d+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (closesMatch.Success && int.TryParse(closesMatch.Groups[1].Value, out var issueNum))
+                    openPrIssueRefs.Add(issueNum);
+            }
+
+            foreach (var task in assignedTasks)
+            {
+                // Check if there's an open PR that references this task's issue
+                if (openPrIssueRefs.Contains(task.IssueNumber!.Value))
+                    continue; // Active PR exists — assignment is valid
+
+                // Also check if there's an open PR with the assigned engineer's name in the title
+                var hasMatchingPr = openPRs.Any(pr =>
+                    task.AssignedTo is not null
+                    && pr.Title.Contains(task.AssignedTo, StringComparison.OrdinalIgnoreCase));
+
+                if (hasMatchingPr)
+                    continue;
+
+                // No open PR found — this assignment is orphaned, reset to pending
+                Logger.LogWarning(
+                    "Task #{IssueNumber} ({TaskName}) is {Status} but has no open PR — resetting to Pending",
+                    task.IssueNumber, task.Name, task.Status);
+
+                await _taskManager.ResetToPendingAsync(task.IssueNumber!.Value, ct);
+
+                // Clear from our assignment tracking if present
+                var orphanedAgent = _agentAssignments
+                    .FirstOrDefault(kvp => kvp.Value == task.IssueNumber!.Value);
+                if (orphanedAgent.Key is not null)
+                    _agentAssignments.Remove(orphanedAgent.Key);
+
+                LogActivity("recovery", $"🔄 Reset orphaned task #{task.IssueNumber} ({task.Name}) to Pending — no open PR found");
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to check for orphaned task assignments");
+        }
+    }
 
     private async Task AssignTasksToAvailableEngineersAsync(CancellationToken ct)
     {

@@ -796,21 +796,12 @@ public class GitHubService : IGitHubService
                 return false;
             }
 
-            // 4. Force-reset the branch to main's HEAD
+            // 4. Get main's HEAD info (but DON'T reset the branch yet)
             var mainRef = await _client.Git.Reference.Get(_owner, _repo, "heads/main");
             var mainCommitSha = mainRef.Object.Sha;
-
-            await _client.Git.Reference.Update(_owner, _repo, $"heads/{branchName}",
-                new ReferenceUpdate(mainCommitSha, true)); // force update
-
-            _logger.LogInformation(
-                "Reset branch {Branch} to main HEAD ({Sha}) for PR #{PrNumber} rebase",
-                branchName, mainCommitSha[..7], prNumber);
-
-            // 5. Re-commit all the PR's files on top of the fresh main
-            //    Use main's tree as the base and overlay the PR's files
             var mainCommit = await _client.Git.Commit.Get(_owner, _repo, mainCommitSha);
 
+            // 5. Build the new tree from main's tree + PR's files (pre-flight check)
             var treeItems = new List<NewTreeItem>();
             foreach (var (path, content) in filesToCommit)
             {
@@ -844,10 +835,30 @@ public class GitHubService : IGitHubService
 
             var treeResult = await _client.Git.Tree.Create(_owner, _repo, newTree);
 
+            // Safety check: if the new tree is identical to main's tree, the PR would have
+            // zero changes (all files already match main). Abort WITHOUT resetting the branch
+            // to avoid creating a zero-diff PR that gets auto-closed.
+            if (treeResult.Sha == mainCommit.Tree.Sha)
+            {
+                _logger.LogWarning(
+                    "PR #{PrNumber} rebase aborted — all {FileCount} files already match main (tree SHA identical). " +
+                    "The PR's changes may have already been incorporated via another merged PR.",
+                    prNumber, filesToCommit.Count);
+                return false;
+            }
+
+            // 6. Now safe to force-reset the branch to main's HEAD
+            await _client.Git.Reference.Update(_owner, _repo, $"heads/{branchName}",
+                new ReferenceUpdate(mainCommitSha, true)); // force update
+
+            _logger.LogInformation(
+                "Reset branch {Branch} to main HEAD ({Sha}) for PR #{PrNumber} rebase",
+                branchName, mainCommitSha[..7], prNumber);
+
+            // 7. Create the commit with our pre-built tree and update branch
             var newCommit = new NewCommit($"Rebase: {pr.Title}", treeResult.Sha, mainCommitSha);
             var commitResult = await _client.Git.Commit.Create(_owner, _repo, newCommit);
 
-            // 6. Update branch to point to the new commit
             await _client.Git.Reference.Update(_owner, _repo, $"heads/{branchName}",
                 new ReferenceUpdate(commitResult.Sha));
 
