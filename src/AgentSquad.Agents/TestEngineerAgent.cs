@@ -90,6 +90,9 @@ public class TestEngineerAgent : AgentBase
         {
             try
             {
+                // Check if our tracked test PR has been closed/merged — clear stale tracking
+                await CheckTrackedTestPrStatusAsync(ct);
+
                 // Priority 1: Process rework feedback on test PRs
                 await ProcessReworkAsync(ct);
 
@@ -117,6 +120,24 @@ public class TestEngineerAgent : AgentBase
                 await Task.Delay(5000, ct);
                 UpdateStatus(AgentStatus.Idle, "Resuming after error");
             }
+        }
+    }
+
+    /// <summary>
+    /// Check if the currently tracked test PR has been closed/merged and clear stale tracking.
+    /// </summary>
+    private async Task CheckTrackedTestPrStatusAsync(CancellationToken ct)
+    {
+        if (_currentTestPrNumber is null)
+            return;
+
+        var pr = await _github.GetPullRequestAsync(_currentTestPrNumber.Value, ct);
+        if (pr is null || !string.Equals(pr.State, "open", StringComparison.OrdinalIgnoreCase))
+        {
+            Logger.LogInformation("Test PR #{PrNumber} is no longer open (state: {State}), clearing tracking",
+                _currentTestPrNumber.Value, pr?.State ?? "not found");
+            _currentTestPrNumber = null;
+            UpdateStatus(AgentStatus.Idle, "Monitoring merged PRs for test coverage");
         }
     }
 
@@ -618,6 +639,7 @@ public class TestEngineerAgent : AgentBase
                     }, ct);
 
                     Logger.LogInformation("TestEngineer submitted rework for PR #{PrNumber}, re-requesting review", pr.Number);
+                    UpdateStatus(AgentStatus.Idle, $"Waiting for review on test PR #{pr.Number}");
                     await RememberAsync(MemoryType.Action,
                         $"Addressed review feedback on test PR #{pr.Number} from {rework.Reviewer}",
                         TruncateForMemory(rework.Feedback), ct);

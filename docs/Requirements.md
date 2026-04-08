@@ -94,13 +94,13 @@ AgentSquad is a multi-agent AI system where 7 specialized agent roles collaborat
 Documents are produced in strict order, each building on the previous:
 
 ```
-Project.Description → Research.md → PMSpec.md → Architecture.md → EngineeringPlan.md → Code PRs
+Project.Description → Research.md → PMSpec.md → Architecture.md → Engineering Task Issues → Code PRs
 ```
 
 - **REQ-WF-001a**: Research.md is produced by the Researcher from the project description and configurable research prompt.
 - **REQ-WF-001b**: PMSpec.md is produced by the PM from Research.md + project description. Contains: Executive Summary, Business Goals, User Stories & Acceptance Criteria, Scope, Non-Functional Requirements, Success Metrics, Constraints.
 - **REQ-WF-001c**: Architecture.md is produced by the Architect from PMSpec.md + Research.md.
-- **REQ-WF-001d**: EngineeringPlan.md is produced by the PE from Architecture.md + PMSpec.md + Enhancement Issues.
+- **REQ-WF-001d**: Engineering Task Issues (labeled `engineering-task`) are created by the PE from Architecture.md + PMSpec.md + Enhancement Issues. Each task is a GitHub Issue linking back to its parent Enhancement Issue. There is NO EngineeringPlan.md file — GitHub Issues are the single source of truth for task tracking.
 
 ### REQ-WF-002: Phase Gating
 
@@ -108,7 +108,7 @@ Each phase has gate conditions that must be met before advancing:
 
 - Research → Architecture: `research.doc.ready` + `research.complete` signals
 - Architecture → EngineeringPlanning: `architecture.doc.ready` + `architecture.complete` signals
-- EngineeringPlanning → ParallelDevelopment: `engineering.plan.ready` + `principal.ready` signals
+- EngineeringPlanning → ParallelDevelopment: `engineering.plan.ready` + `principal.ready` signals (PE has created engineering-task issues)
 
 ### REQ-WF-003: Agent Ordering
 
@@ -124,7 +124,7 @@ Each phase has gate conditions that must be met before advancing:
 3. PM receives ResearchComplete → creates PMSpec.md (2 AI turns) → commits via document PR → auto-merges → sends `PMSpecReady`
 4. PM extracts User Stories from PMSpec → creates Enhancement Issues in GitHub → sends `PlanningCompleteMessage` to PE
 5. Architect receives PMSpecReady → reads PMSpec + Research → creates Architecture.md (5 AI turns) → commits → sends `ArchitectureComplete`
-6. PE receives PlanningCompleteMessage + detects Architecture.md → reads Enhancement Issues → creates EngineeringPlan.md → enters development loop
+6. PE receives PlanningCompleteMessage + detects Architecture.md → reads Enhancement Issues → creates engineering-task Issues in GitHub (each linked to parent Enhancement Issue) → enters development loop
 
 ---
 
@@ -181,6 +181,7 @@ Each phase has gate conditions that must be met before advancing:
 - **REQ-PM-005c**: Review must evaluate: business goal alignment, user story coverage for THIS task, acceptance criteria fulfillment.
 - **REQ-PM-005d**: PM posts approval or changes-requested comment on the PR.
 - **REQ-PM-005e**: If changes requested, PM sends `ChangesRequestedMessage` (broadcast) so the author engineer can rework.
+- **REQ-PM-005f**: After completing all pending PR reviews, PM resets its status to Idle ("Monitoring team progress") so the dashboard accurately reflects current activity.
 
 ### REQ-PM-006: Resource Management
 
@@ -247,23 +248,28 @@ Each phase has gate conditions that must be met before advancing:
 
 ### REQ-PE-001: Two-Phase Loop
 
-- **REQ-PE-001a**: Phase 1: Wait for Architecture.md + PlanningCompleteMessage + Enhancement Issues → create EngineeringPlan.md.
-- **REQ-PE-001b**: Phase 2: Continuous development loop with priorities: rework → assignment → own tasks → review → resource evaluation → plan update.
-- **REQ-PE-001c**: On restart, if EngineeringPlan.md has real content, restore task backlog and skip to Phase 2.
+- **REQ-PE-001a**: Phase 1: Wait for Architecture.md + PlanningCompleteMessage + Enhancement Issues → create engineering-task Issues in GitHub.
+- **REQ-PE-001b**: Phase 2: Continuous development loop with priorities: rework → assignment → own tasks → review → resource evaluation.
+- **REQ-PE-001c**: On restart, if engineering-task Issues already exist, restore task backlog from them and skip to Phase 2.
+- **REQ-PE-001d**: PE can begin working on tasks (Phase 2) even if no other engineers have been spawned yet. It assigns High-complexity tasks to itself and starts immediately.
 
-### REQ-PE-002: Engineering Plan Creation
+### REQ-PE-002: Engineering Task Issue Creation
 
 - **REQ-PE-002a**: PE reads PMSpec.md, Architecture.md, and ALL Enhancement-labeled GitHub Issues.
-- **REQ-PE-002b**: AI maps each Issue to engineering tasks with: ID, Issue number, name, description, complexity (High/Medium/Low), dependencies.
-- **REQ-PE-002c**: EngineeringPlan.md includes a task table with columns: ID, Task, Complexity, Assigned To, Issue #, PR #, Status, Dependencies.
+- **REQ-PE-002b**: AI maps each Enhancement Issue to engineering tasks with: ID, parent Issue number, name, description, complexity (High/Medium/Low), dependencies.
+- **REQ-PE-002c**: Each engineering task is created as a GitHub Issue labeled `engineering-task`. The issue body contains structured metadata: parent issue reference, complexity, dependencies (as issue numbers), and detailed description.
 - **REQ-PE-002d**: Task complexity mapping: High → PE, Medium → Senior Engineers, Low → Junior Engineers.
+- **REQ-PE-002e**: Engineering-task issues link back to their parent Enhancement issue via `Parent: #N` in the body. This replaces the old EngineeringPlan.md file — there is no markdown plan file.
+- **REQ-PE-002f**: Dependencies between tasks are tracked as issue numbers in the body (e.g., `Dependencies: #106, #107`). A task is assignable only when all dependency issues are closed.
+- **REQ-PE-002g**: Task status is tracked by issue state: open = pending/in-progress, closed = done. The `in-progress` label indicates active work.
 
-**Scenario: PE Creates Engineering Plan**
+**Scenario: PE Creates Engineering Tasks as Issues**
 1. PE receives PlanningCompleteMessage + Architecture.md is ready
-2. PE fetches all Enhancement Issues (e.g., 8 Issues)
+2. PE fetches all Enhancement Issues (e.g., 4 Issues)
 3. AI analyzes Issues + PMSpec + Architecture → produces TASK|ID|IssueNum|Name|Desc|Complexity|Deps lines
-4. PE parses into task backlog → builds EngineeringPlan.md markdown table → commits
-5. Enters Phase 2 development loop
+4. PE parses tasks → creates GitHub Issues labeled `engineering-task` for each task, with structured body containing parent issue, complexity, dependencies
+5. Dependencies are resolved to issue numbers (e.g., T1 depends on nothing, T3 depends on T2's issue #107)
+6. Enters Phase 2 development loop — picks first assignable task
 
 ### REQ-PE-003: Task Assignment
 
@@ -292,7 +298,7 @@ Each phase has gate conditions that must be met before advancing:
 
 - **REQ-PE-005a**: PE subscribes to `ReviewRequestMessage` and queues PRs for review.
 - **REQ-PE-005b**: PE skips reviewing its own PRs.
-- **REQ-PE-005c**: PE reviews code PRs against architecture and engineering plan — scoped to the PR's task, NOT the full project.
+- **REQ-PE-005c**: PE reviews code PRs against architecture and engineering-task issue context — scoped to the PR's task, NOT the full project.
 - **REQ-PE-005d**: Review evaluates: architecture patterns, implementation completeness for THIS task, code quality, error handling, test coverage.
 - **REQ-PE-005e**: If changes requested, PE sends `ChangesRequestedMessage` with feedback details.
 
@@ -441,10 +447,11 @@ Each phase has gate conditions that must be met before advancing:
 - **REQ-GH-002d**: Executive escalation Issues are labeled `executive-request`.
 - **REQ-GH-002e**: Blocker Issues are labeled `blocker` + `agent-stuck`.
 - **REQ-GH-002f**: Resource request Issues are labeled `resource-request` + `executive-request`.
+- **REQ-GH-002g**: Engineering Task Issues (created by PE) are labeled `engineering-task`. They also carry complexity labels (`complexity:high`, `complexity:medium`, `complexity:low`) and status labels (`in-progress`) as appropriate.
 
 ### REQ-GH-003: Document PRs
 
-- **REQ-GH-003a**: Document PRs (Research.md, PMSpec.md, Architecture.md, EngineeringPlan.md) use PR-first pattern: create PR before AI work, commit after.
+- **REQ-GH-003a**: Document PRs (Research.md, PMSpec.md, Architecture.md) use PR-first pattern: create PR before AI work, commit after.
 - **REQ-GH-003b**: Document PRs are auto-merged by the authoring agent (no review needed).
 - **REQ-GH-003c**: Stale content from reused branches is cleaned before new commits.
 
@@ -462,7 +469,7 @@ Each phase has gate conditions that must be met before advancing:
 ### REQ-REV-001: Dual-Agent Approval
 
 - **REQ-REV-001a**: Code PRs require approval from BOTH PM ("ProgramManager") and PE ("PrincipalEngineer") before merging.
-- **REQ-REV-001b**: Reviewers post comments with `**[AgentName] APPROVED**` or `**[AgentName] CHANGES REQUESTED**` markers.
+- **REQ-REV-001b**: Reviewers post comments with `**[AgentName] APPROVED**` or `**[AgentName] CHANGES REQUESTED**` markers. Approval comments should be simple — just the APPROVED marker with no additional validation text or context.
 - **REQ-REV-001c**: The last approver (whoever sees both have approved) triggers the merge.
 - **REQ-REV-001d**: All merges use squash-and-merge (`PullRequestMergeMethod.Squash`).
 - **REQ-REV-001e**: Head branch is deleted after merge.
@@ -480,8 +487,8 @@ Each phase has gate conditions that must be met before advancing:
 - **REQ-REV-002.5b**: ALL reviewers MUST read the linked issue (user story + acceptance criteria) parsed from the PR body ("Closes #N") via `ParseLinkedIssueNumber` + `GetIssueAsync`.
 - **REQ-REV-002.5c**: Each reviewer reads the context documents appropriate to their expertise:
   - **Architect**: Architecture.md + PMSpec.md + linked issue + code files
-  - **PM (ProgramManager)**: PMSpec.md + EngineeringPlan.md + linked issue + code files
-  - **PE (PrincipalEngineer)**: Architecture.md + PMSpec.md + EngineeringPlan.md + linked issue + code files
+  - **PM (ProgramManager)**: PMSpec.md + linked issue + code files
+  - **PE (PrincipalEngineer)**: Architecture.md + PMSpec.md + linked issue + code files
 - **REQ-REV-002.5d**: The AI review prompt MUST explicitly instruct the model to evaluate the actual code, not just the PR description.
 - **REQ-REV-002.5e**: Code files are read from the PR's head branch and truncated per-file at 8,000 characters to stay within token budgets. Non-code files (images, binary) are excluded.
 - **REQ-REV-002.5f**: `PullRequestWorkflow.GetPRCodeContextAsync(prNumber, headBranch)` is the shared helper for building code context. It reads changed files, filters to code extensions, and formats them for AI prompts.
@@ -509,7 +516,7 @@ Each phase has gate conditions that must be met before advancing:
 **Scenario: Dual Review and Merge**
 1. Engineer marks PR #35 ready-for-review → broadcasts `ReviewRequestMessage`
 2. PM receives → queues PR #35 → next review loop: reads actual code files from branch + linked issue acceptance criteria + PMSpec → AI evaluates business alignment → APPROVE → posts comment, checks if PE also approved → PE hasn't → waits
-3. PE receives → queues PR #35 → reads actual code files + linked issue + Architecture + PMSpec + EngineeringPlan → AI evaluates technical quality → APPROVE → posts comment, checks if PM approved → PM has → triggers squash merge → deletes branch
+3. PE receives → queues PR #35 → reads actual code files + linked issue + Architecture + PMSpec → AI evaluates technical quality → APPROVE → posts comment, checks if PM approved → PM has → triggers squash merge → deletes branch
 4. Issue #43 auto-closes because PR body contained "Closes #43"
 
 ---
@@ -625,18 +632,18 @@ Each phase has gate conditions that must be met before advancing:
 ### REQ-IDEM-004: Restart Recovery
 
 - **REQ-IDEM-004a**: PM restores previously-spawned engineers from TeamMembers.md on startup.
-- **REQ-IDEM-004b**: PE restores task backlog from existing EngineeringPlan.md and skips to development loop.
+- **REQ-IDEM-004b**: PE restores task backlog from existing engineering-task GitHub Issues (`GetIssuesByLabelAsync("engineering-task")`) and skips to development loop. There is no EngineeringPlan.md to parse.
 - **REQ-IDEM-004c**: Engineers recover open PRs: `in-progress` PRs get re-implemented; `ready-for-review` PRs are tracked for rework but not re-implemented.
 - **REQ-IDEM-004d**: When PE restarts, `_agentAssignments` is empty — PE must re-check which engineers are free and re-assign unfinished tasks.
 - **REQ-IDEM-004e**: PE recovery for own PRs MUST check GitHub comments for unaddressed feedback (CHANGES_REQUESTED) using `GetPendingChangesRequestedAsync`, not just labels. If feedback exists, populate the ReworkQueue directly. If all reviewers approved, auto-merge. Only re-broadcast ReviewRequestMessage if no reviews exist at all.
 - **REQ-IDEM-004f**: The in-process message bus (`InProcessMessageBus`) is volatile — ALL messages are lost on restart. Recovery logic MUST use GitHub API (comments, labels, PR state) as the source of truth, never depend on bus message replay.
-- **REQ-IDEM-004g**: PE reconciles task statuses against merged PRs on startup. Tasks whose PRs are already merged are marked Complete in the backlog (uses `GetMergedPullRequestsAsync`).
+- **REQ-IDEM-004g**: PE reconciles task statuses against merged PRs on startup. Tasks whose PRs are already merged are marked Done (issue closed) using `GetMergedPullRequestsAsync`.
 - **REQ-IDEM-004h**: Test Engineer recovery: scans for open test PRs, checks GitHub comments for unaddressed feedback, re-requests review for PRs with no reviews. Uses `tested` label on source PRs as persistent dedup marker.
 
 **Scenario: System Restart Recovery**
 1. System crashes while Senior Engineer 1 has PR #35 (ready-for-review) and Junior Engineer 1 has PR #36 (in-progress)
 2. On restart: PM reads TeamMembers.md → restores Senior Engineer 1 and Junior Engineer 1
-3. PE reads EngineeringPlan.md → restores task backlog → enters development loop
+3. PE loads engineering-task issues from GitHub → restores task backlog → enters development loop
 4. Senior Engineer 1 starts → CurrentPrNumber is null → finds PR #35 with "ready-for-review" → re-tracks it (CurrentPrNumber = 35) but does NOT re-implement
 5. Junior Engineer 1 starts → CurrentPrNumber is null → finds PR #36 with "in-progress" → calls `WorkOnExistingPrAsync` → re-implements
 6. PE loop: finds Senior Engineer 1 not in `_agentAssignments` → checks if their Issue is still open → Issue #43 is open → re-assigns to them
@@ -728,17 +735,17 @@ Each phase has gate conditions that must be met before advancing:
 3. PM receives ResearchComplete → creates PMSpec.md (2 turns) → document PR → auto-merge → broadcasts PMSpecReady
 4. PM extracts 6 User Stories → creates 6 Enhancement Issues → sends PlanningCompleteMessage
 5. Architect receives PMSpecReady → creates Architecture.md (5 turns) → document PR → auto-merge
-6. PE receives PlanningComplete + Architecture.md → reads 6 Enhancement Issues → creates EngineeringPlan.md
-7. PE assigns T1 (Low) to Junior Engineer, T2 (Medium) to Senior Engineer, starts T3 (High) itself
+6. PE receives PlanningComplete + Architecture.md → reads 6 Enhancement Issues → creates 14 engineering-task Issues in GitHub
+7. PE starts T1 (High) itself (no engineers spawned yet), assigns T2 (Medium) to Senior Engineer when available
 8. Junior reads Issue → creates PR → implements → marks ready-for-review
 9. Senior reads Issue → creates PR → implements → self-reviews → marks ready-for-review
-10. PE implements T3 → marks ready-for-review
-11. PM reviews Junior's PR (reads code, linked issue, PMSpec) → approves; PE reviews (reads code, architecture, plan) → approves → squash merge → branch deleted
+10. PE implements T1 → marks ready-for-review
+11. PM reviews Junior's PR (reads code, linked issue, PMSpec) → approves; PE reviews (reads code, architecture) → approves → squash merge → branch deleted
 12. Senior's PR: PM approves, PE requests changes → Senior reworks → re-review → both approve → merge
 13. PE's PR: PM + Architect review (PE can't self-review) → both read actual code against PMSpec + Architecture → both approve → squash merge
-14. T1 complete → T4 depends on T1 → now assignable → PE assigns T4 to Junior
+14. T1 complete (issue closed) → T4 depends on T1 → dependency met → PE assigns T4 to Junior
 15. Test Engineer scans merged PRs → generates tests for Junior's PR with full business context (linked issue + PMSpec + Architecture) → creates test PR → PE reviews test PR → approve → merge
-16. All tasks complete → PE creates integration PR → PM + Architect review → merge → Completion phase
+16. All engineering-task issues closed → PE creates integration PR → PM + Architect review → merge → Completion phase
 ```
 
 ### Scenario B: Clarification Loop with Multiple Rounds
@@ -770,10 +777,10 @@ Each phase has gate conditions that must be met before advancing:
 ### Scenario D: System Restart Mid-Work
 
 ```
-1. State before crash: PE has plan with 5 tasks, T1 assigned to Junior (PR #36 in-progress),
+1. State before crash: PE has 5 engineering-task issues, T1 assigned to Junior (PR #36 in-progress),
    T2 assigned to Senior (PR #35 ready-for-review, PM CHANGES_REQUESTED), T3 PE working (PR #37 in-progress)
 2. System restarts → PM reads TeamMembers.md → spawns Junior + Senior
-3. PE reads EngineeringPlan.md → restores 5 tasks → reconciles against merged PRs → enters dev loop
+3. PE loads engineering-task issues from GitHub → restores 5 tasks → reconciles against merged PRs → enters dev loop
 4. Junior starts → finds PR #36 (in-progress, no ready-for-review label) → calls WorkOnExistingPrAsync → re-implements
 5. Senior starts → finds PR #35 (ready-for-review) → re-tracks it (CurrentPrNumber=35) → waits for rework/new assignment
 6. PE starts → recovers own PRs: finds PR #37 (in-progress) → continues work on it
@@ -800,11 +807,11 @@ Each phase has gate conditions that must be met before advancing:
 ### Scenario E: Resource Scaling Under Load
 
 ```
-1. PE creates plan: 8 tasks (2 High, 3 Medium, 3 Low)
-2. Initial team: 1 Senior, 1 Junior
-3. PE assigns T1(Low) to Junior, T2(Medium) to Senior, starts T3(High) itself
+1. PE creates engineering-task issues: 8 tasks (2 High, 3 Medium, 3 Low)
+2. Initial team: PE only (no engineers yet)
+3. PE starts T1 (High) itself — works solo even without engineers
 4. PE evaluates: 5 parallelizable tasks remaining, 0 free engineers → sends ResourceRequest for Junior
-5. PM approves → spawns Junior Engineer 2 → updates TeamMembers.md
+5. PM approves → spawns Junior Engineer 1 → updates TeamMembers.md
 6. PE detects new Junior in registry → assigns T4(Low) to Junior 2
 7. Still 3 parallelizable tasks, 0 free → PE sends ResourceRequest for Senior
 8. PM approves → spawns Senior Engineer 2
@@ -895,7 +902,7 @@ Each phase has gate conditions that must be met before advancing:
 3. PM checks PMSpec.md → has content → skips PMSpec creation → still broadcasts PMSpecReady
 4. PM checks Enhancement Issues → exist → skips Issue creation → re-sends PlanningCompleteMessage
 5. Architect checks Architecture.md → has content → skips design → enters review mode
-6. PE checks EngineeringPlan.md → has content → restores task backlog → enters development loop
+6. PE checks for existing engineering-task issues → found → restores task backlog → enters development loop
 7. ALL downstream signals are still sent even when skipping creation, so dependent agents proceed
 ```
 
@@ -905,7 +912,7 @@ Each phase has gate conditions that must be met before advancing:
 
 ### REQ-INTEG-001: PE Integration PR (Final Glue Phase)
 
-- **REQ-INTEG-001a**: When the PE detects ALL engineering plan tasks are "Done" (PRs merged), it creates a final integration PR that verifies the combined result works as a whole.
+- **REQ-INTEG-001a**: When the PE detects ALL engineering-task issues are closed (PRs merged), it creates a final integration PR that verifies the combined result works as a whole.
 - **REQ-INTEG-001b**: The integration PR is created from a new branch off latest main.
 - **REQ-INTEG-001c**: AI reviews the full codebase against PMSpec + Architecture + all merged PRs and generates integration fixes: missing wiring, broken imports, config/route registration, cross-module references.
 - **REQ-INTEG-001d**: The integration PR goes through the normal review cycle (PM + Architect review and approve).
@@ -920,8 +927,8 @@ Each phase has gate conditions that must be met before advancing:
 
 **Scenario: Integration PR After All Tasks Complete**
 ```
-1. PE plan has 6 tasks (T1-T6). All assigned, implemented, reviewed, and merged.
-2. PE detects all tasks Complete → creates integration branch from latest main
+1. PE has 6 engineering-task issues (T1-T6). All assigned, implemented, reviewed, and merged (issues closed).
+2. PE detects all engineering-task issues are closed → creates integration branch from latest main
 3. AI reads full codebase + PMSpec + Architecture → finds: missing route registration for T3's controller, T5 imports a module from T2 using wrong path
 4. AI generates fixes → commits to integration branch → creates PR "PrincipalEngineer: Integration — Final Assembly"
 5. PM reviews integration PR → APPROVE (all user stories covered)
@@ -951,3 +958,6 @@ These bugs were discovered during scenario analysis and fixed. Listed here as re
 | PM review missing linked issue | MODERATE | PM couldn't validate acceptance criteria | No issue lookup in PM review prompt | Added `ParseLinkedIssueNumber` + `GetIssueAsync` to PM review |
 | Architect review missing PMSpec | MODERATE | Architect couldn't validate business alignment | Only Architecture.md included in prompt | Added PMSpec.md + linked issue to Architect review |
 | PE task reconciliation crash | MODERATE | Used non-existent method | Called `GetClosedPullRequestsAsync` which didn't exist | Changed to `GetMergedPullRequestsAsync` |
+| Octokit UpdateIssue NullRef | CRITICAL | `UpdateIssueAsync` crashes on every call | `IssueUpdate.Labels` is null by default; calling `.Clear()` throws NullRef | Use `ClearLabels()` + `AddLabel()` which safely initializes the collection |
+| PE spawn cooldown blocks solo work | CRITICAL | PE sits idle despite pending tasks when no engineers exist | When `allEngineers.Count == 0` and spawn requested, PE deferred ALL tasks | Only defer when engineers exist but are busy; PE takes tasks itself when solo |
+| PM stale dashboard status | MODERATE | PM shows "Reviewing PR #X" for already-merged PR | `ReviewPullRequestsAsync` sets Working status but never resets after reviews complete | Added `UpdateStatus(AgentStatus.Idle, "Monitoring team progress")` after review foreach loop |
