@@ -511,27 +511,86 @@ public class ProgramManagerAgent : AgentBase
                     && latestComment.CreatedAt <= GetLastProcessedTime(issue.Number))
                     continue;
 
+                // Skip comments made by the bot itself (only respond to human comments)
+                if (latestComment.Body.StartsWith("⚠️") || latestComment.Body.StartsWith("✅") ||
+                    latestComment.Body.StartsWith("🚀") || latestComment.Body.StartsWith("❌"))
+                    continue;
+
                 Logger.LogInformation(
-                    "Executive response on issue #{Number}: {Title}",
-                    issue.Number, issue.Title);
+                    "Executive response on issue #{Number}: {Comment}",
+                    issue.Number, latestComment.Body);
 
                 _processedIssueIds.Add(issue.Number);
+                var body = latestComment.Body;
 
-                // If the issue contains a resource request approval, track it
-                if (issue.Labels.Contains(IssueWorkflow.Labels.ResourceRequest,
-                        StringComparer.OrdinalIgnoreCase))
+                if (body.Contains("approved", StringComparison.OrdinalIgnoreCase))
                 {
-                    var body = latestComment.Body;
-                    if (body.Contains("approved", StringComparison.OrdinalIgnoreCase))
+                    // Parse optional quantity: "approved for 2" or "approved for 3 more engineers"
+                    var count = ParseApprovalCount(body);
+
+                    // Check if this is a resource-limit override (title contains "Resource Limit")
+                    var isResourceOverride = issue.Title.Contains("Resource Limit", StringComparison.OrdinalIgnoreCase)
+                        || issue.Labels.Contains(IssueWorkflow.Labels.ResourceRequest, StringComparer.OrdinalIgnoreCase);
+
+                    if (isResourceOverride)
                     {
                         Logger.LogInformation(
-                            "Resource request approved via issue #{Number}", issue.Number);
+                            "Executive approved resource override on #{Number} for {Count} engineer(s)",
+                            issue.Number, count);
+
+                        var spawned = 0;
+                        for (int i = 0; i < count; i++)
+                        {
+                            var spawnedIdentity = await _spawnManager.SpawnAgentAsync(AgentRole.JuniorEngineer, ct);
+                            if (spawnedIdentity is not null)
+                            {
+                                _additionalEngineersHired++;
+                                spawned++;
+                                await _projectFiles.AddTeamMemberAsync(spawnedIdentity, "Online", ct: ct);
+                                Logger.LogInformation(
+                                    "Executive override: spawned {Role} '{Name}' ({N}/{Count})",
+                                    AgentRole.JuniorEngineer, spawnedIdentity.DisplayName, spawned, count);
+                            }
+                        }
+
+                        await _github.AddIssueCommentAsync(issue.Number,
+                            $"✅ **Executive approval processed.** Spawned {spawned} additional engineer(s). " +
+                            $"Team now has {_additionalEngineersHired} additional engineers.", ct);
                     }
-                    else if (body.Contains("denied", StringComparison.OrdinalIgnoreCase))
+                    else
                     {
-                        Logger.LogInformation(
-                            "Resource request denied via issue #{Number}", issue.Number);
+                        await _github.AddIssueCommentAsync(issue.Number,
+                            "✅ **Executive approval acknowledged.** Request has been processed.", ct);
                     }
+
+                    // Close this executive request issue
+                    await _github.CloseIssueAsync(issue.Number, ct);
+
+                    // Also close linked resource-request issues referenced in the title
+                    var linkedNum = ParseLinkedIssueFromTitle(issue.Title);
+                    if (linkedNum.HasValue)
+                    {
+                        try
+                        {
+                            await _github.AddIssueCommentAsync(linkedNum.Value,
+                                $"✅ Executive approved override via #{issue.Number}. Request fulfilled.", ct);
+                            await _github.CloseIssueAsync(linkedNum.Value, ct);
+                        }
+                        catch (Exception ex)
+                        {
+                            Logger.LogDebug(ex, "Could not close linked issue #{Number}", linkedNum.Value);
+                        }
+                    }
+                }
+                else if (body.Contains("denied", StringComparison.OrdinalIgnoreCase) ||
+                         body.Contains("rejected", StringComparison.OrdinalIgnoreCase))
+                {
+                    Logger.LogInformation(
+                        "Executive denied request on issue #{Number}", issue.Number);
+
+                    await _github.AddIssueCommentAsync(issue.Number,
+                        "❌ **Executive denied this request.** Closing.", ct);
+                    await _github.CloseIssueAsync(issue.Number, ct);
                 }
             }
         }
@@ -539,6 +598,26 @@ public class ProgramManagerAgent : AgentBase
         {
             Logger.LogWarning(ex, "Failed to check executive responses");
         }
+    }
+
+    /// <summary>
+    /// Parse "approved for N" from executive comment. Returns 1 if no quantity specified.
+    /// Supports: "approved", "approved for 2", "approved for 2 more engineers", "approved, add 3"
+    /// </summary>
+    private static int ParseApprovalCount(string comment)
+    {
+        var match = System.Text.RegularExpressions.Regex.Match(
+            comment, @"(?:approved\s+(?:for|,?\s*add)\s+)(\d+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        return match.Success && int.TryParse(match.Groups[1].Value, out var count) ? count : 1;
+    }
+
+    /// <summary>
+    /// Parse "request from issue #N" from executive request title.
+    /// </summary>
+    private static int? ParseLinkedIssueFromTitle(string title)
+    {
+        var match = System.Text.RegularExpressions.Regex.Match(title, @"#(\d+)");
+        return match.Success && int.TryParse(match.Groups[1].Value, out var num) ? num : null;
     }
 
     private async Task MonitorTeamStatusAsync(CancellationToken ct)
