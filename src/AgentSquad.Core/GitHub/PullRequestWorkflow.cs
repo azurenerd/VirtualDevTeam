@@ -6,6 +6,16 @@ using Microsoft.Extensions.Logging;
 namespace AgentSquad.Core.GitHub;
 
 /// <summary>
+/// Result of an approve-and-merge attempt.
+/// </summary>
+public enum MergeAttemptResult
+{
+    Merged,
+    AwaitingApprovals,
+    ConflictBlocked
+}
+
+/// <summary>
 /// Manages the PR-based task assignment pattern where PRs are titled "[AgentName]: Task Title".
 /// </summary>
 public partial class PullRequestWorkflow
@@ -525,7 +535,7 @@ public partial class PullRequestWorkflow
     /// The required reviewer list is dynamic — when the PR author is a default reviewer,
     /// the Architect substitutes in. Returns true if the PR was merged.
     /// </summary>
-    public async Task<bool> ApproveAndMaybeMergeAsync(
+    public async Task<MergeAttemptResult> ApproveAndMaybeMergeAsync(
         int prNumber, string approverAgent, string reason, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(approverAgent);
@@ -586,7 +596,7 @@ public partial class PullRequestWorkflow
                         await _github.AddPullRequestCommentAsync(prNumber,
                             $"⚠️ **Merge blocked** — PR has conflicts with `main` that could not be auto-resolved. " +
                             $"Branch update was attempted but merge still failed.", ct);
-                        return false;
+                        return MergeAttemptResult.ConflictBlocked;
                     }
                 }
                 else
@@ -595,7 +605,7 @@ public partial class PullRequestWorkflow
                     await _github.AddPullRequestCommentAsync(prNumber,
                         $"⚠️ **Merge blocked** — PR has conflicts with `main` that require resolution. " +
                         $"The engineer should rebase and resolve conflicts.", ct);
-                    return false;
+                    return MergeAttemptResult.ConflictBlocked;
                 }
             }
 
@@ -603,13 +613,13 @@ public partial class PullRequestWorkflow
             if (pr is not null && !string.IsNullOrEmpty(pr.HeadBranch))
                 await _github.DeleteBranchAsync(pr.HeadBranch, ct);
 
-            return true;
+            return MergeAttemptResult.Merged;
         }
 
         _logger.LogInformation("PR #{Number} still needs approval from: {Missing}",
             prNumber,
             string.Join(", ", requiredReviewers.Except(approvedReviewers, StringComparer.OrdinalIgnoreCase)));
-        return false;
+        return MergeAttemptResult.AwaitingApprovals;
     }
 
     /// <summary>

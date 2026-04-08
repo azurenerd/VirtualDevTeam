@@ -251,6 +251,21 @@ public class GitHubService : IGitHubService
         }
     }
 
+    public async Task ClosePullRequestAsync(int prNumber, CancellationToken ct = default)
+    {
+        try
+        {
+            await _client.PullRequest.Update(_owner, _repo, prNumber,
+                new PullRequestUpdate { State = ItemState.Closed });
+            _logger.LogInformation("Closed PR #{Number}", prNumber);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to close PR #{Number}", prNumber);
+            throw;
+        }
+    }
+
     public async Task MergePullRequestAsync(int prNumber, string? commitMessage = null, CancellationToken ct = default)
     {
         try

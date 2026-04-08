@@ -14,6 +14,7 @@ public interface IGitHubService
     Task AddPullRequestReviewAsync(int prNumber, string body, string eventType, CancellationToken ct = default);
     Task UpdatePullRequestAsync(int prNumber, string? title = null, string? body = null, string[]? labels = null, CancellationToken ct = default);
     Task MergePullRequestAsync(int prNumber, string? commitMessage = null, CancellationToken ct = default);
+    Task ClosePullRequestAsync(int prNumber, CancellationToken ct = default);
 
     // Issues
     Task<AgentIssue> CreateIssueAsync(string title, string body, string[] labels, CancellationToken ct = default);

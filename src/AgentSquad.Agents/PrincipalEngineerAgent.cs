@@ -37,6 +37,7 @@ public class PrincipalEngineerAgent : EngineerAgentBase
     private readonly HashSet<int> _reviewedPrNumbers = new();
     private readonly HashSet<int> _forceApprovalPrs = new();
     private readonly ConcurrentQueue<int> _reviewQueue = new();
+    private readonly Dictionary<int, int> _conflictRetryCount = new();
 
     public PrincipalEngineerAgent(
         AgentIdentity identity,
@@ -849,15 +850,21 @@ public class PrincipalEngineerAgent : EngineerAgentBase
 
                 if (approved)
                 {
-                    var merged = await PrWorkflow.ApproveAndMaybeMergeAsync(
+                    var result = await PrWorkflow.ApproveAndMaybeMergeAsync(
                         pr.Number, "PrincipalEngineer", reviewBody, ct);
-                    if (merged)
+                    if (result == MergeAttemptResult.Merged)
                     {
                         Logger.LogInformation("PE approved and merged PR #{Number}", pr.Number);
                         LogActivity("task", $"✅ Approved and merged PR #{pr.Number}: {pr.Title}");
 
                         await RememberAsync(MemoryType.Action,
                             $"Reviewed and approved+merged PR #{pr.Number}: {pr.Title}", ct: ct);
+                    }
+                    else if (result == MergeAttemptResult.ConflictBlocked)
+                    {
+                        Logger.LogWarning("PE approved PR #{Number} but merge blocked by conflicts, attempting close-and-recreate", pr.Number);
+                        LogActivity("task", $"⚠️ PR #{pr.Number} blocked by merge conflicts — closing and recreating");
+                        await TryCloseAndRecreatePRAsync(pr, ct);
                     }
                     else
                     {
@@ -983,12 +990,14 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                             catch (Exception retryEx)
                             {
                                 Logger.LogWarning(retryEx, "PE PR #{PrNumber} still not mergeable after sync", pr.Number);
+                                await TryCloseAndRecreatePRAsync(pr, ct);
                                 continue;
                             }
                         }
                         else
                         {
-                            Logger.LogWarning("PE PR #{PrNumber} has real merge conflicts, needs resolution", pr.Number);
+                            Logger.LogWarning("PE PR #{PrNumber} has real merge conflicts, attempting close-and-recreate", pr.Number);
+                            await TryCloseAndRecreatePRAsync(pr, ct);
                             continue;
                         }
                     }
@@ -1267,6 +1276,170 @@ public class PrincipalEngineerAgent : EngineerAgentBase
         catch (Exception ex)
         {
             Logger.LogWarning(ex, "Failed to update engineering plan");
+        }
+    }
+
+    /// <summary>
+    /// Close a PR that has unresolvable merge conflicts and reset the associated task
+    /// so it can be re-implemented from a clean branch off latest main.
+    /// Max 1 retry per task to prevent infinite close-and-recreate loops.
+    /// </summary>
+    private async Task TryCloseAndRecreatePRAsync(AgentPullRequest pr, CancellationToken ct)
+    {
+        const int MaxConflictRetries = 1;
+
+        _conflictRetryCount.TryGetValue(pr.Number, out var retries);
+        if (retries >= MaxConflictRetries)
+        {
+            Logger.LogWarning(
+                "PR #{PrNumber} already retried {Retries} time(s) for conflicts — giving up",
+                pr.Number, retries);
+            await GitHub.AddPullRequestCommentAsync(pr.Number,
+                $"⛔ **Permanently blocked** — This PR has been closed and recreated {retries} time(s) " +
+                $"but continues to hit merge conflicts. Requires manual intervention.", ct);
+            return;
+        }
+
+        try
+        {
+            // Find the associated task in the backlog
+            var taskIdx = _taskBacklog.FindIndex(t => t.PullRequestNumber == pr.Number);
+            var task = taskIdx >= 0 ? _taskBacklog[taskIdx] : null;
+
+            // Close the conflicted PR with an explanation
+            var closeComment =
+                $"🔄 **Closing due to unresolvable merge conflicts.**\n\n" +
+                $"This PR's branch has conflicts with `main` that cannot be auto-resolved. " +
+                $"The task will be re-implemented on a fresh branch from latest `main`.";
+
+            await GitHub.AddPullRequestCommentAsync(pr.Number, closeComment, ct);
+            await GitHub.ClosePullRequestAsync(pr.Number, ct);
+
+            Logger.LogInformation(
+                "Closed conflicted PR #{PrNumber} ({Title}), will recreate from clean main",
+                pr.Number, pr.Title);
+            LogActivity("task", $"🔄 Closed conflicted PR #{pr.Number} — will recreate from clean branch");
+
+            // Delete the old branch to avoid naming conflicts
+            if (!string.IsNullOrEmpty(pr.HeadBranch))
+            {
+                try { await GitHub.DeleteBranchAsync(pr.HeadBranch, ct); }
+                catch (Exception ex)
+                {
+                    Logger.LogDebug(ex, "Could not delete old branch {Branch}", pr.HeadBranch);
+                }
+            }
+
+            // Track the retry count under the task (keyed by original PR number)
+            _conflictRetryCount[pr.Number] = retries + 1;
+
+            // Reset PE tracking state
+            if (CurrentPrNumber == pr.Number)
+            {
+                CurrentPrNumber = null;
+                Identity.AssignedPullRequest = null;
+            }
+
+            if (task is null)
+            {
+                Logger.LogWarning("No task found for conflicted PR #{PrNumber} — cannot recreate", pr.Number);
+                return;
+            }
+
+            // Determine who owned the PR to decide how to reassign
+            var isPeOwned = pr.Title.StartsWith(Identity.DisplayName + ":", StringComparison.OrdinalIgnoreCase);
+
+            // Reset task to Pending so it gets picked up again with a fresh branch
+            _taskBacklog[taskIdx] = task with
+            {
+                Status = "Pending",
+                PullRequestNumber = null,
+                AssignedTo = isPeOwned ? null : task.AssignedTo
+            };
+
+            if (isPeOwned)
+            {
+                // PE-owned: it will be picked up by WorkOnOwnTasksAsync on the next cycle
+                Logger.LogInformation(
+                    "PE task {TaskId} reset to Pending — will re-implement on next cycle", task.Id);
+                UpdateStatus(AgentStatus.Idle, "Ready for next task");
+            }
+            else if (task.AssignedTo is not null && task.IssueNumber.HasValue)
+            {
+                // Engineer-owned: find the engineer and re-send the assignment
+                var engineerAgentId = _agentAssignments
+                    .FirstOrDefault(kv => kv.Value == task.IssueNumber.Value).Key;
+
+                if (engineerAgentId is not null)
+                {
+                    // Remove old assignment so the engineer starts fresh
+                    _agentAssignments.Remove(engineerAgentId);
+
+                    // Re-assign: update the issue title back and send new assignment
+                    var engineer = _registry.GetAgentsByRole(AgentRole.SeniorEngineer)
+                        .Concat(_registry.GetAgentsByRole(AgentRole.JuniorEngineer))
+                        .FirstOrDefault(a => a.Identity.Id == engineerAgentId);
+
+                    if (engineer is not null)
+                    {
+                        _agentAssignments[engineerAgentId] = task.IssueNumber.Value;
+                        _taskBacklog[taskIdx] = _taskBacklog[taskIdx] with
+                        {
+                            Status = "Assigned",
+                            AssignedTo = engineer.Identity.DisplayName
+                        };
+
+                        await MessageBus.PublishAsync(new IssueAssignmentMessage
+                        {
+                            FromAgentId = Identity.Id,
+                            ToAgentId = engineerAgentId,
+                            MessageType = "IssueAssignment",
+                            IssueNumber = task.IssueNumber.Value,
+                            IssueTitle = task.Name,
+                            Complexity = task.Complexity,
+                            IssueUrl = task.IssueUrl
+                        }, ct);
+
+                        Logger.LogInformation(
+                            "Re-assigned task {TaskId} (issue #{IssueNumber}) to {Engineer} after conflict recovery",
+                            task.Id, task.IssueNumber, engineer.Identity.DisplayName);
+                    }
+                    else
+                    {
+                        // Engineer not found — leave as Pending for PE to pick up
+                        Logger.LogWarning(
+                            "Original engineer {AgentId} not found for task {TaskId} — will be reassigned",
+                            engineerAgentId, task.Id);
+                        _agentAssignments.Remove(engineerAgentId);
+                        _taskBacklog[taskIdx] = _taskBacklog[taskIdx] with
+                        {
+                            Status = "Pending",
+                            AssignedTo = null
+                        };
+                    }
+                }
+                else
+                {
+                    // Can't find the engineer by issue — leave as Pending
+                    Logger.LogWarning(
+                        "Could not find engineer for issue #{IssueNumber} — task {TaskId} set to Pending",
+                        task.IssueNumber, task.Id);
+                    _taskBacklog[taskIdx] = _taskBacklog[taskIdx] with
+                    {
+                        Status = "Pending",
+                        AssignedTo = null
+                    };
+                }
+            }
+            else
+            {
+                // No assignment info — just leave as Pending
+                Logger.LogInformation("Task {TaskId} reset to Pending for reassignment", task.Id);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to close-and-recreate PR #{PrNumber}", pr.Number);
         }
     }
 

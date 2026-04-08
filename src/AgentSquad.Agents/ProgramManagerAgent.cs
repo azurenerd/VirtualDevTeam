@@ -793,15 +793,20 @@ public class ProgramManagerAgent : AgentBase
 
                 if (approved)
                 {
-                    var merged = await _prWorkflow.ApproveAndMaybeMergeAsync(
+                    var result = await _prWorkflow.ApproveAndMaybeMergeAsync(
                         pr.Number, "ProgramManager", reviewBody, ct);
-                    if (merged)
+                    if (result == MergeAttemptResult.Merged)
                     {
                         Logger.LogInformation("PM approved and merged PR #{Number}", pr.Number);
                         LogActivity("task", $"✅ Approved and merged PR #{pr.Number}: {pr.Title}");
                         await RememberAsync(MemoryType.Decision,
                             $"Approved and merged PR #{pr.Number}: {pr.Title}",
                             TruncateForMemory(reviewBody), ct);
+                    }
+                    else if (result == MergeAttemptResult.ConflictBlocked)
+                    {
+                        Logger.LogWarning("PM approved PR #{Number} but merge blocked by conflicts", pr.Number);
+                        LogActivity("task", $"⚠️ Approved PR #{pr.Number} but merge blocked by conflicts — PE will handle");
                     }
                     else
                     {
