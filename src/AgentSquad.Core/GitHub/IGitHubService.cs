@@ -22,7 +22,9 @@ public interface IGitHubService
     Task<IReadOnlyList<AgentIssue>> GetOpenIssuesAsync(CancellationToken ct = default);
     Task<IReadOnlyList<AgentIssue>> GetIssuesForAgentAsync(string agentName, CancellationToken ct = default);
     Task<IReadOnlyList<AgentIssue>> GetIssuesByLabelAsync(string label, CancellationToken ct = default);
+    Task<IReadOnlyList<AgentIssue>> GetIssuesByLabelAsync(string label, string state, CancellationToken ct = default);
     Task AddIssueCommentAsync(int issueNumber, string comment, CancellationToken ct = default);
+    Task UpdateIssueAsync(int issueNumber, string? title = null, string? body = null, string[]? labels = null, string? state = null, CancellationToken ct = default);
     Task UpdateIssueTitleAsync(int issueNumber, string newTitle, CancellationToken ct = default);
     Task CloseIssueAsync(int issueNumber, CancellationToken ct = default);
 

@@ -429,6 +429,63 @@ public class GitHubService : IGitHubService
         }
     }
 
+    public async Task UpdateIssueAsync(int issueNumber, string? title = null, string? body = null, string[]? labels = null, string? state = null, CancellationToken ct = default)
+    {
+        try
+        {
+            var update = new IssueUpdate();
+            if (title is not null) update.Title = title;
+            if (body is not null) update.Body = body;
+            if (state is not null)
+                update.State = string.Equals(state, "closed", StringComparison.OrdinalIgnoreCase)
+                    ? ItemState.Closed : ItemState.Open;
+            if (labels is not null)
+            {
+                update.Labels.Clear();
+                foreach (var label in labels)
+                    update.Labels.Add(label);
+            }
+
+            await _client.Issue.Update(_owner, _repo, issueNumber, update);
+            _logger.LogInformation("Updated issue #{Number}", issueNumber);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to update issue #{Number}", issueNumber);
+            throw;
+        }
+    }
+
+    public async Task<IReadOnlyList<AgentIssue>> GetIssuesByLabelAsync(string label, string state, CancellationToken ct = default)
+    {
+        try
+        {
+            var stateFilter = string.Equals(state, "closed", StringComparison.OrdinalIgnoreCase)
+                ? ItemStateFilter.Closed
+                : string.Equals(state, "all", StringComparison.OrdinalIgnoreCase)
+                    ? ItemStateFilter.All
+                    : ItemStateFilter.Open;
+
+            var request = new RepositoryIssueRequest
+            {
+                State = stateFilter,
+                Filter = IssueFilter.All
+            };
+            request.Labels.Add(label);
+
+            var issues = await _client.Issue.GetAllForRepository(_owner, _repo, request);
+            return issues
+                .Where(i => i.PullRequest is null)
+                .Select(i => MapIssue(i))
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to get issues with label {Label} state {State}", label, state);
+            throw;
+        }
+    }
+
     // File Management
 
     public async Task<string?> GetFileContentAsync(string path, string? branch = null, CancellationToken ct = default)

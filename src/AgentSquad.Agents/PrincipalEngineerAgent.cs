@@ -22,6 +22,7 @@ namespace AgentSquad.Agents;
 public class PrincipalEngineerAgent : EngineerAgentBase
 {
     private readonly AgentRegistry _registry;
+    private readonly EngineeringTaskIssueManager _taskManager;
 
     private bool _planningComplete;
     private bool _planningSignalReceived;
@@ -32,7 +33,6 @@ public class PrincipalEngineerAgent : EngineerAgentBase
     private static readonly TimeSpan SpawnCooldown = TimeSpan.FromSeconds(45);
     private bool _allTasksComplete;
     private bool _integrationPrCreated;
-    private readonly List<EngineeringTask> _taskBacklog = new();
     private readonly Dictionary<string, int> _agentAssignments = new();
     private readonly HashSet<int> _reviewedPrNumbers = new();
     private readonly HashSet<int> _forceApprovalPrs = new();
@@ -56,6 +56,7 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                projectFiles, modelRegistry, stateStore, config.Value, memoryStore, logger)
     {
         _registry = registry ?? throw new ArgumentNullException(nameof(registry));
+        _taskManager = new EngineeringTaskIssueManager(github, logger);
     }
 
     protected override string GetRoleDisplayName() => "Principal Engineer";
@@ -78,10 +79,11 @@ public class PrincipalEngineerAgent : EngineerAgentBase
         "an updated implementation that addresses ALL the feedback points. " +
         "Be thorough and produce production-quality fixes.";
 
-    protected override async Task<string> GetAdditionalReworkContextAsync(CancellationToken ct)
+    protected override Task<string> GetAdditionalReworkContextAsync(CancellationToken ct)
     {
-        var planDoc = await ProjectFiles.GetEngineeringPlanAsync(ct);
-        return $"## Engineering Plan\n{planDoc}\n\n";
+        var taskSummary = string.Join("\n", _taskManager.Tasks.Select(t =>
+            $"- [{t.Id}] {t.Name} ({t.Complexity}, {t.Status})"));
+        return Task.FromResult($"## Engineering Tasks\n{taskSummary}\n\n");
     }
 
     #region Lifecycle Overrides
@@ -156,8 +158,6 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                         await EvaluateResourceNeedsAsync(ct);
                     }
 
-                    // Persist state
-                    await UpdateEngineeringPlanAsync(ct);
                 }
 
                 await Task.Delay(
@@ -246,23 +246,16 @@ public class PrincipalEngineerAgent : EngineerAgentBase
 
     private async Task CreateEngineeringPlanAsync(CancellationToken ct)
     {
-        var existingPlan = await ProjectFiles.GetEngineeringPlanAsync(ct);
-        if (!string.IsNullOrWhiteSpace(existingPlan) &&
-            !existingPlan.Contains("No engineering plan has been created yet"))
+        // Recovery: check for existing engineering-task issues from a prior run
+        await _taskManager.LoadTasksAsync(ct);
+        if (_taskManager.TotalCount > 0)
         {
-            RestoreTaskBacklogFromPlan(existingPlan);
-            if (_taskBacklog.Count > 0)
-            {
-                Logger.LogInformation("Restored {Count} tasks from existing engineering plan", _taskBacklog.Count);
+            Logger.LogInformation("Restored {Count} tasks from existing engineering-task issues ({Done} done, {Pending} pending)",
+                _taskManager.TotalCount, _taskManager.DoneCount, _taskManager.PendingCount);
 
-                // Reconcile task statuses against actual GitHub PR state
-                await ReconcileTaskStatusesAsync(ct);
-
-                _planningComplete = true;
-                UpdateStatus(AgentStatus.Working, $"Recovered {_taskBacklog.Count} tasks from engineering plan");
-                return;
-            }
-            Logger.LogWarning("Existing EngineeringPlan.md has no tasks — regenerating");
+            _planningComplete = true;
+            UpdateStatus(AgentStatus.Working, $"Recovered {_taskManager.TotalCount} tasks from issues");
+            return;
         }
 
         UpdateStatus(AgentStatus.Working, "Creating engineering plan from Issues");
@@ -279,7 +272,7 @@ public class PrincipalEngineerAgent : EngineerAgentBase
         {
             Logger.LogWarning("No open enhancement issues found — PM may not have created them yet, will retry");
             UpdateStatus(AgentStatus.Idle, "Waiting for PM to create User Story Issues");
-            _planningComplete = false; // Force re-check on next loop
+            _planningComplete = false;
             return;
         }
 
@@ -321,7 +314,7 @@ public class PrincipalEngineerAgent : EngineerAgentBase
             history, cancellationToken: ct);
         var structuredText = response.Content ?? "";
 
-        _taskBacklog.Clear();
+        var parsedTasks = new List<EngineeringTask>();
         var issueMap = enhancementIssues.ToDictionary(i => i.Number);
 
         foreach (var line in structuredText.Split('\n', StringSplitOptions.RemoveEmptyEntries))
@@ -339,48 +332,69 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 : parts[6].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
 
             int.TryParse(parts[2].Trim().TrimStart('#'), out var issueNum);
-            var issueUrl = issueMap.TryGetValue(issueNum, out var iss) ? iss.Url : null;
 
-            _taskBacklog.Add(new EngineeringTask
+            parsedTasks.Add(new EngineeringTask
             {
                 Id = parts[1].Trim(),
                 Name = parts[3].Trim(),
                 Description = parts[4].Trim(),
                 Complexity = NormalizeComplexity(parts[5].Trim()),
                 Dependencies = deps,
-                IssueNumber = issueNum > 0 ? issueNum : null,
-                IssueUrl = issueUrl
+                ParentIssueNumber = issueNum > 0 ? issueNum : null
             });
         }
 
-        if (_taskBacklog.Count == 0)
+        if (parsedTasks.Count == 0)
         {
             Logger.LogWarning("No tasks parsed from AI response, creating a fallback task per issue");
             foreach (var issue in enhancementIssues)
             {
-                _taskBacklog.Add(new EngineeringTask
+                parsedTasks.Add(new EngineeringTask
                 {
                     Id = $"T-{issue.Number}",
                     Name = issue.Title,
                     Description = issue.Body,
                     Complexity = "Medium",
-                    IssueNumber = issue.Number,
-                    IssueUrl = issue.Url
+                    ParentIssueNumber = issue.Number
                 });
             }
         }
 
+        // Create GitHub issues for each task (the single source of truth)
+        var createdTasks = await _taskManager.CreateTaskIssuesAsync(parsedTasks, ct);
+
+        // Now resolve dependency task IDs (T1, T2) to actual issue numbers
+        // Build a map from task ID → issue number
+        var taskIdToIssue = createdTasks.ToDictionary(t => t.Id, t => t.IssueNumber ?? 0);
+        foreach (var task in createdTasks)
+        {
+            if (task.Dependencies.Count == 0 || !task.IssueNumber.HasValue)
+                continue;
+
+            var depIssueNumbers = task.Dependencies
+                .Where(d => taskIdToIssue.ContainsKey(d) && taskIdToIssue[d] > 0)
+                .Select(d => taskIdToIssue[d])
+                .ToList();
+
+            if (depIssueNumbers.Count > 0)
+            {
+                // Update the issue body with dependency issue numbers
+                var updatedBody = EngineeringTaskIssueManager.BuildIssueBodyWithDeps(task, depIssueNumbers);
+                await GitHub.UpdateIssueAsync(task.IssueNumber.Value, body: updatedBody, ct: ct);
+            }
+        }
+
+        // Reload to pick up dependency info from updated issue bodies
+        await _taskManager.LoadTasksAsync(ct);
+
         Logger.LogInformation("Engineering plan created with {Count} tasks from {IssueCount} issues",
-            _taskBacklog.Count, enhancementIssues.Count);
-        LogActivity("task", $"📋 Engineering plan created: {_taskBacklog.Count} tasks from {enhancementIssues.Count} issues");
+            _taskManager.TotalCount, enhancementIssues.Count);
+        LogActivity("task", $"📋 Engineering plan created: {_taskManager.TotalCount} tasks from {enhancementIssues.Count} issues");
 
-        var taskSummary = string.Join(", ", _taskBacklog.Select(t => $"{t.Id}:{t.Name}({t.Complexity})"));
+        var taskSummary = string.Join(", ", _taskManager.Tasks.Select(t => $"{t.Id}:{t.Name}({t.Complexity})"));
         await RememberAsync(MemoryType.Decision,
-            $"Created engineering plan with {_taskBacklog.Count} tasks from {enhancementIssues.Count} issues",
+            $"Created engineering plan with {_taskManager.TotalCount} tasks from {enhancementIssues.Count} issues",
             $"Tasks: {TruncateForMemory(taskSummary)}", ct);
-
-        var planDoc = BuildEngineeringPlanMarkdown();
-        await ProjectFiles.UpdateEngineeringPlanAsync(planDoc, ct);
 
         await MessageBus.PublishAsync(new StatusUpdateMessage
         {
@@ -389,7 +403,7 @@ public class PrincipalEngineerAgent : EngineerAgentBase
             MessageType = "EngineeringPlanReady",
             NewStatus = AgentStatus.Working,
             CurrentTask = "Engineering Planning",
-            Details = $"Engineering plan created with {_taskBacklog.Count} tasks. " +
+            Details = $"Engineering plan created with {_taskManager.TotalCount} tasks. " +
                       "Ready to assign work to engineers."
         }, ct);
 
@@ -405,10 +419,6 @@ public class PrincipalEngineerAgent : EngineerAgentBase
         try
         {
             var registeredEngineers = new List<EngineerInfo>();
-            // BUG FIX: Collect both AgentId and DisplayName for each engineer.
-            // Previously, only DisplayName was stored and used for message routing, but
-            // the message bus routes by Identity.Id (e.g., "seniorengineer-abc123"), not
-            // DisplayName (e.g., "Senior Engineer 1"). Messages were never delivered.
             foreach (var agent in _registry.GetAgentsByRole(AgentRole.SeniorEngineer))
                 registeredEngineers.Add(new EngineerInfo { AgentId = agent.Identity.Id, Name = agent.Identity.DisplayName, Role = AgentRole.SeniorEngineer });
             foreach (var agent in _registry.GetAgentsByRole(AgentRole.JuniorEngineer))
@@ -416,15 +426,11 @@ public class PrincipalEngineerAgent : EngineerAgentBase
 
             foreach (var engineer in registeredEngineers)
             {
-                // BUG FIX: Key assignments by agent.AgentId (Identity.Id), not DisplayName.
-                // Previously keyed by DisplayName, but StatusUpdate.FromAgentId uses Identity.Id,
-                // so completed tasks were never matched and engineers were never freed.
                 if (_agentAssignments.ContainsKey(engineer.AgentId))
                 {
                     var assignedIssueNum = _agentAssignments[engineer.AgentId];
-                    var assignedIssue = await GitHub.GetIssueAsync(assignedIssueNum, ct);
-                    if (assignedIssue is not null &&
-                        string.Equals(assignedIssue.State, "open", StringComparison.OrdinalIgnoreCase))
+                    var assignedTask = _taskManager.FindByIssueNumber(assignedIssueNum);
+                    if (assignedTask is not null && !EngineeringTaskIssueManager.IsTaskDone(assignedTask))
                         continue;
                     _agentAssignments.Remove(engineer.AgentId);
                 }
@@ -439,31 +445,12 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 if (complexityPreferences.Length == 0)
                     continue;
 
-                var task = FindNextAssignableTask(complexityPreferences);
-                if (task is null)
+                var task = _taskManager.FindNextAssignableTask(complexityPreferences);
+                if (task is null || !task.IssueNumber.HasValue)
                     continue;
 
-                // Ensure the task has an open issue (create if missing or closed)
-                var updated = await EnsureTaskHasOpenIssueAsync(task, ct);
-                if (updated is null)
-                    continue;
-                task = updated;
-
-                // At this point, task is guaranteed to have an IssueNumber (either original or auto-created)
-                var newTitle = $"{engineer.Name}: {task.Name}";
-                await GitHub.UpdateIssueTitleAsync(task.IssueNumber!.Value, newTitle, ct);
-
+                await _taskManager.AssignTaskAsync(task.IssueNumber.Value, engineer.Name, ct);
                 _agentAssignments[engineer.AgentId] = task.IssueNumber.Value;
-
-                var taskIndex = _taskBacklog.FindIndex(t => t.Id == task.Id);
-                if (taskIndex >= 0)
-                {
-                    _taskBacklog[taskIndex] = task with
-                    {
-                        Status = "Assigned",
-                        AssignedTo = engineer.Name
-                    };
-                }
 
                 Logger.LogInformation(
                     "Assigned issue #{IssueNumber} ({TaskName}) to {Engineer}",
@@ -496,23 +483,20 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 return;
 
             // PE prefers High complexity but falls through to any available work
-            var task = FindNextAssignableTask("High", "Medium", "Low");
+            var task = _taskManager.FindNextAssignableTask("High", "Medium", "Low");
 
             if (task is null)
             {
-                var pending = _taskBacklog.Count(t => t.Status == "Pending");
-                var blocked = _taskBacklog.Count(t => t.Status == "Pending" && !AreDependenciesMet(t));
-                if (pending > 0)
-                    Logger.LogDebug("No assignable tasks: {Pending} pending, {Blocked} blocked by dependencies", pending, blocked);
+                if (_taskManager.PendingCount > 0)
+                    Logger.LogDebug("No assignable tasks: {Pending} pending, some blocked by dependencies",
+                        _taskManager.PendingCount);
                 return;
             }
 
             // Guard: don't grab non-High tasks if we recently requested an engineer spawn.
-            // Give new engineers time to spin up and claim work before PE takes it.
             if (!string.Equals(task.Complexity, "High", StringComparison.OrdinalIgnoreCase)
                 && DateTime.UtcNow - _lastResourceRequestTime < SpawnCooldown)
             {
-                // Check if there are free engineers who could take this instead
                 var freeEngineers = _registry.GetAgentsByRole(AgentRole.SeniorEngineer)
                     .Concat(_registry.GetAgentsByRole(AgentRole.JuniorEngineer))
                     .Count(a => !_agentAssignments.ContainsKey(a.Identity.Id));
@@ -526,31 +510,24 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                         (SpawnCooldown - (DateTime.UtcNow - _lastResourceRequestTime)).TotalSeconds);
                     return;
                 }
-                // No free engineers yet but cooldown active — still wait
                 Logger.LogDebug(
                     "PE waiting for spawned engineer before taking {Complexity} task {TaskId}",
                     task.Complexity, task.Id);
                 return;
             }
 
-            // Ensure the task has an open issue (create if missing or closed)
-            var updated = await EnsureTaskHasOpenIssueAsync(task, ct);
-            if (updated is not null)
-                task = updated;
+            if (!task.IssueNumber.HasValue)
+            {
+                Logger.LogWarning("Task {TaskId} has no issue number — skipping", task.Id);
+                return;
+            }
+
+            // Mark as assigned to self via the task manager
+            await _taskManager.AssignTaskAsync(task.IssueNumber.Value, Identity.DisplayName, ct);
 
             UpdateStatus(AgentStatus.Working, $"Working on: {task.Name}");
             Logger.LogInformation("Principal Engineer working on task {TaskId}: {TaskName}",
                 task.Id, task.Name);
-            LogActivity("task", $"🔨 Working on task {task.Id}: {task.Name}");
-
-            // Assign Issue to self
-            if (task.IssueNumber.HasValue)
-            {
-                await GitHub.UpdateIssueTitleAsync(
-                    task.IssueNumber.Value,
-                    $"{Identity.DisplayName}: {task.Name}",
-                    ct);
-            }
 
             UpdateStatus(AgentStatus.Working, $"Planning: {task.Name}");
             var prDescription = await GenerateTaskDescriptionAsync(task, ct);
@@ -569,20 +546,13 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 prDescription,
                 task.Complexity,
                 "Architecture.md",
-                "EngineeringPlan.md",
+                "",
                 branchName,
                 ct);
 
-            var taskIndex = _taskBacklog.FindIndex(t => t.Id == task.Id);
-            if (taskIndex >= 0)
-            {
-                _taskBacklog[taskIndex] = task with
-                {
-                    Status = "InProgress",
-                    AssignedTo = Identity.DisplayName,
-                    PullRequestNumber = pr.Number
-                };
-            }
+            // Mark task in-progress via the task manager
+            if (task.IssueNumber.HasValue)
+                await _taskManager.MarkInProgressAsync(task.IssueNumber.Value, pr.Number, ct);
 
             // Track this PR so PE doesn't start another task concurrently
             CurrentPrNumber = pr.Number;
@@ -810,9 +780,9 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                         Logger.LogInformation("PE approved and merged PR #{Number}", pr.Number);
                         LogActivity("task", $"✅ Approved and merged PR #{pr.Number}: {pr.Title}");
 
-                        // Only mark engineering tasks Done — skip test PRs
+                        // Mark the engineering task Done via issue manager (skip test PRs)
                         if (!pr.Title.StartsWith("TestEngineer:", StringComparison.OrdinalIgnoreCase))
-                            MarkEngineerTaskDone(pr);
+                            await MarkEngineerTaskDoneAsync(pr, ct);
 
                         await RememberAsync(MemoryType.Action,
                             $"Reviewed and approved+merged PR #{pr.Number}: {pr.Title}", ct: ct);
@@ -961,9 +931,10 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                     if (!string.IsNullOrEmpty(pr.HeadBranch))
                         await GitHub.DeleteBranchAsync(pr.HeadBranch, ct);
 
-                    var taskIdx = _taskBacklog.FindIndex(t => t.PullRequestNumber == pr.Number);
-                    if (taskIdx >= 0)
-                        _taskBacklog[taskIdx] = _taskBacklog[taskIdx] with { Status = "Done" };
+                    var taskTitle2 = PullRequestWorkflow.ParseTaskTitleFromTitle(pr.Title);
+                    var task2 = taskTitle2 is not null ? _taskManager.FindByName(taskTitle2) : null;
+                    if (task2?.IssueNumber.HasValue == true)
+                        await _taskManager.MarkDoneAsync(task2.IssueNumber.Value, pr.Number, ct);
 
                     CurrentPrNumber = null;
                     Identity.AssignedPullRequest = null;
@@ -1064,29 +1035,30 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 Logger.LogInformation("PE own PR #{PrNumber} is no longer open ({State}, merged={Merged}), clearing tracking",
                     CurrentPrNumber.Value, pr?.State ?? "unknown", wasMerged);
 
-                // Mark the backlog task as Done if merged, or reset to Pending if closed without merge
-                var taskIdx = _taskBacklog.FindIndex(t => t.PullRequestNumber == CurrentPrNumber.Value);
-                if (taskIdx >= 0)
+                // Find the task by matching the PR title or the task manager cache
+                var taskTitle = PullRequestWorkflow.ParseTaskTitleFromTitle(pr?.Title ?? "");
+                var task = taskTitle is not null ? _taskManager.FindByName(taskTitle) : null;
+
+                if (task?.IssueNumber.HasValue == true)
                 {
                     if (wasMerged)
                     {
-                        _taskBacklog[taskIdx] = _taskBacklog[taskIdx] with { Status = "Done" };
+                        await _taskManager.MarkDoneAsync(task.IssueNumber.Value, CurrentPrNumber.Value, ct);
                         Logger.LogInformation("PE task {TaskId} marked Done (PR #{PrNumber} merged)",
-                            _taskBacklog[taskIdx].Id, CurrentPrNumber.Value);
-                        LogActivity("task", $"✅ Task {_taskBacklog[taskIdx].Id}: {_taskBacklog[taskIdx].Name} completed (PR #{CurrentPrNumber.Value} merged)");
+                            task.Id, CurrentPrNumber.Value);
+                        LogActivity("task", $"✅ Task {task.Id}: {task.Name} completed (PR #{CurrentPrNumber.Value} merged)");
                     }
                     else
                     {
-                        _taskBacklog[taskIdx] = _taskBacklog[taskIdx] with { Status = "Pending", PullRequestNumber = null };
+                        await _taskManager.ResetToPendingAsync(task.IssueNumber.Value, ct);
                         Logger.LogInformation("PE task {TaskId} reset to Pending (PR #{PrNumber} closed without merge)",
-                            _taskBacklog[taskIdx].Id, CurrentPrNumber.Value);
+                            task.Id, CurrentPrNumber.Value);
                     }
                 }
 
                 CurrentPrNumber = null;
                 Identity.AssignedPullRequest = null;
 
-                // If the integration PR was merged, signal engineering complete
                 if (wasMerged && _allTasksComplete && _integrationPrCreated)
                 {
                     await SignalEngineeringCompleteAsync(ct);
@@ -1103,93 +1075,6 @@ public class PrincipalEngineerAgent : EngineerAgentBase
         }
     }
 
-    /// <summary>
-    /// After restoring the task backlog from the engineering plan, reconcile task statuses
-    /// against actual GitHub PR state. InProgress tasks whose PRs are merged → Done.
-    /// InProgress tasks with no PR → reset to Pending.
-    /// </summary>
-    private async Task ReconcileTaskStatusesAsync(CancellationToken ct)
-    {
-        try
-        {
-            // Get all PRs (open + merged) to reconcile
-            var openPrs = await PrWorkflow.GetAgentTasksAsync(Identity.DisplayName, ct);
-            var mergedPrs = await GitHub.GetMergedPullRequestsAsync(ct);
-            var myMergedPrs = mergedPrs
-                .Where(pr => pr.Title.StartsWith(Identity.DisplayName + ":", StringComparison.OrdinalIgnoreCase))
-                .ToList();
-
-            var mergedPrTitles = myMergedPrs
-                .Select(pr => PullRequestWorkflow.ParseTaskTitleFromTitle(pr.Title))
-                .Where(t => !string.IsNullOrEmpty(t))
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-            var mergedPrNumbers = myMergedPrs.Select(pr => pr.Number).ToHashSet();
-            var openPrNumbers = openPrs.Select(pr => pr.Number).ToHashSet();
-
-            var reconciled = 0;
-            for (var i = 0; i < _taskBacklog.Count; i++)
-            {
-                var task = _taskBacklog[i];
-
-                // Handle "Assigned" tasks whose engineers haven't started (no PR yet)
-                // Reset to Pending so the PE can re-assign or self-assign
-                if (string.Equals(task.Status, "Assigned", StringComparison.OrdinalIgnoreCase)
-                    && !task.PullRequestNumber.HasValue)
-                {
-                    _taskBacklog[i] = task with { Status = "Pending", AssignedTo = null };
-                    Logger.LogInformation("Reconciled task {TaskId} '{TaskName}' to Pending (was Assigned, no PR)",
-                        task.Id, task.Name);
-                    reconciled++;
-                    continue;
-                }
-
-                if (!string.Equals(task.Status, "InProgress", StringComparison.OrdinalIgnoreCase))
-                    continue;
-
-                // Match by PR number or by task name in PR title
-                var isMerged = (task.PullRequestNumber.HasValue && mergedPrNumbers.Contains(task.PullRequestNumber.Value))
-                    || mergedPrTitles.Contains(task.Name);
-
-                if (isMerged)
-                {
-                    _taskBacklog[i] = task with { Status = "Done" };
-                    Logger.LogInformation("Reconciled task {TaskId} '{TaskName}' to Done (PR merged)",
-                        task.Id, task.Name);
-                    reconciled++;
-                }
-                // PR number set but PR is closed (not merged) and not open — reset to Pending
-                else if (task.PullRequestNumber.HasValue
-                    && !openPrNumbers.Contains(task.PullRequestNumber.Value)
-                    && !mergedPrNumbers.Contains(task.PullRequestNumber.Value))
-                {
-                    _taskBacklog[i] = task with { Status = "Pending", PullRequestNumber = null, AssignedTo = null };
-                    Logger.LogInformation(
-                        "Reconciled task {TaskId} '{TaskName}' to Pending (PR #{PrNumber} closed without merge)",
-                        task.Id, task.Name, task.PullRequestNumber);
-                    reconciled++;
-                }
-                else if (!task.PullRequestNumber.HasValue
-                    && !openPrs.Any(pr => pr.Title.Contains(task.Name, StringComparison.OrdinalIgnoreCase)))
-                {
-                    _taskBacklog[i] = task with { Status = "Pending" };
-                    Logger.LogInformation("Reconciled task {TaskId} '{TaskName}' to Pending (no PR found)", task.Id, task.Name);
-                    reconciled++;
-                }
-            }
-
-            if (reconciled > 0)
-            {
-                Logger.LogInformation("Reconciled {Count} task statuses against GitHub PR state", reconciled);
-                LogActivity("system", $"🔄 Reconciled {reconciled} task statuses from GitHub");
-            }
-        }
-        catch (Exception ex)
-        {
-            Logger.LogWarning(ex, "Failed to reconcile task statuses against GitHub");
-        }
-    }
-
     private async Task EvaluateResourceNeedsAsync(CancellationToken ct)
     {
         try
@@ -1203,8 +1088,8 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 return;
             }
 
-            var parallelizable = _taskBacklog.Count(t =>
-                t.Status == "Pending" && AreDependenciesMet(t) && t.Complexity != "High");
+            var parallelizable = _taskManager.Tasks.Count(t =>
+                t.Status == "Pending" && _taskManager.AreDependenciesMet(t) && t.Complexity != "High");
 
             if (parallelizable < 2)
                 return;
@@ -1219,8 +1104,8 @@ public class PrincipalEngineerAgent : EngineerAgentBase
 
             if (parallelizable > freeEngineers + 1)
             {
-                var neededRole = _taskBacklog.Any(t =>
-                    t.Status == "Pending" && t.Complexity == "Low" && AreDependenciesMet(t))
+                var neededRole = _taskManager.Tasks.Any(t =>
+                    t.Status == "Pending" && t.Complexity == "Low" && _taskManager.AreDependenciesMet(t))
                     ? AgentRole.JuniorEngineer
                     : AgentRole.SeniorEngineer;
 
@@ -1248,19 +1133,6 @@ public class PrincipalEngineerAgent : EngineerAgentBase
         }
     }
 
-    private async Task UpdateEngineeringPlanAsync(CancellationToken ct)
-    {
-        try
-        {
-            var planDoc = BuildEngineeringPlanMarkdown();
-            await ProjectFiles.UpdateEngineeringPlanAsync(planDoc, ct);
-        }
-        catch (Exception ex)
-        {
-            Logger.LogWarning(ex, "Failed to update engineering plan");
-        }
-    }
-
     /// <summary>
     /// Close a PR that has unresolvable merge conflicts and reset the associated task
     /// so it can be re-implemented from a clean branch off latest main.
@@ -1284,31 +1156,32 @@ public class PrincipalEngineerAgent : EngineerAgentBase
 
         try
         {
-            // Find the associated task in the backlog
-            var taskIdx = _taskBacklog.FindIndex(t => t.PullRequestNumber == pr.Number);
+            // Find the associated task via the task manager
+            EngineeringTask? task = null;
 
-            // Fallback: engineer PRs don't have PullRequestNumber tracked in backlog.
-            // Search by issue number from _agentAssignments or by task name in PR title.
-            if (taskIdx < 0)
+            // Search by task name from PR title
+            var taskTitle = PullRequestWorkflow.ParseTaskTitleFromTitle(pr.Title);
+            if (taskTitle is not null)
             {
-                var taskTitle = PullRequestWorkflow.ParseTaskTitleFromTitle(pr.Title);
-                if (!string.IsNullOrEmpty(taskTitle))
+                // Handle doubled agent prefix: "Agent: Agent: TaskName"
+                var innerName = PullRequestWorkflow.ParseTaskTitleFromTitle(taskTitle);
+                if (innerName is not null) taskTitle = innerName;
+                task = _taskManager.FindByName(taskTitle);
+            }
+
+            // Fallback: search by issue number from agent assignments
+            if (task is null)
+            {
+                foreach (var issueNum in _agentAssignments.Values)
                 {
-                    taskIdx = _taskBacklog.FindIndex(t =>
-                        t.Name.Contains(taskTitle, StringComparison.OrdinalIgnoreCase)
-                        || taskTitle.Contains(t.Name, StringComparison.OrdinalIgnoreCase));
+                    var candidate = _taskManager.FindByIssueNumber(issueNum);
+                    if (candidate is not null && pr.Title.Contains(candidate.Name, StringComparison.OrdinalIgnoreCase))
+                    {
+                        task = candidate;
+                        break;
+                    }
                 }
             }
-            if (taskIdx < 0)
-            {
-                // Search by issue number from agent assignments
-                var issueNum = _agentAssignments.Values
-                    .FirstOrDefault(v => _taskBacklog.Any(t => t.IssueNumber == v
-                        && pr.Title.Contains(t.Name, StringComparison.OrdinalIgnoreCase)));
-                if (issueNum > 0)
-                    taskIdx = _taskBacklog.FindIndex(t => t.IssueNumber == issueNum);
-            }
-            var task = taskIdx >= 0 ? _taskBacklog[taskIdx] : null;
 
             // Close the conflicted PR with an explanation
             var closeComment =
@@ -1324,7 +1197,6 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 pr.Number, pr.Title);
             LogActivity("task", $"🔄 Closed conflicted PR #{pr.Number} — will recreate from clean branch");
 
-            // Delete the old branch to avoid naming conflicts
             if (!string.IsNullOrEmpty(pr.HeadBranch))
             {
                 try { await GitHub.DeleteBranchAsync(pr.HeadBranch, ct); }
@@ -1334,41 +1206,32 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 }
             }
 
-            // Track the retry count under the task (keyed by original PR number)
             _conflictRetryCount[pr.Number] = retries + 1;
 
-            // Reset PE tracking state
             if (CurrentPrNumber == pr.Number)
             {
                 CurrentPrNumber = null;
                 Identity.AssignedPullRequest = null;
             }
 
-            if (task is null)
+            if (task is null || !task.IssueNumber.HasValue)
             {
                 Logger.LogWarning("No task found for conflicted PR #{PrNumber} — cannot recreate", pr.Number);
                 return;
             }
 
-            // Determine who owned the PR to decide how to reassign
             var isPeOwned = pr.Title.StartsWith(Identity.DisplayName + ":", StringComparison.OrdinalIgnoreCase);
 
-            // Reset task to Pending so it gets picked up again with a fresh branch
-            _taskBacklog[taskIdx] = task with
-            {
-                Status = "Pending",
-                PullRequestNumber = null,
-                AssignedTo = isPeOwned ? null : task.AssignedTo
-            };
+            // Reset task to Pending via the task manager
+            await _taskManager.ResetToPendingAsync(task.IssueNumber.Value, ct);
 
             if (isPeOwned)
             {
-                // PE-owned: it will be picked up by WorkOnOwnTasksAsync on the next cycle
                 Logger.LogInformation(
                     "PE task {TaskId} reset to Pending — will re-implement on next cycle", task.Id);
                 UpdateStatus(AgentStatus.Idle, "Ready for next task");
             }
-            else if (task.AssignedTo is not null && task.IssueNumber.HasValue)
+            else if (task.IssueNumber.HasValue)
             {
                 // Engineer-owned: find the engineer and re-send the assignment
                 var engineerAgentId = _agentAssignments
@@ -1376,22 +1239,16 @@ public class PrincipalEngineerAgent : EngineerAgentBase
 
                 if (engineerAgentId is not null)
                 {
-                    // Remove old assignment so the engineer starts fresh
                     _agentAssignments.Remove(engineerAgentId);
 
-                    // Re-assign: update the issue title back and send new assignment
                     var engineer = _registry.GetAgentsByRole(AgentRole.SeniorEngineer)
                         .Concat(_registry.GetAgentsByRole(AgentRole.JuniorEngineer))
                         .FirstOrDefault(a => a.Identity.Id == engineerAgentId);
 
                     if (engineer is not null)
                     {
+                        await _taskManager.AssignTaskAsync(task.IssueNumber.Value, engineer.Identity.DisplayName, ct);
                         _agentAssignments[engineerAgentId] = task.IssueNumber.Value;
-                        _taskBacklog[taskIdx] = _taskBacklog[taskIdx] with
-                        {
-                            Status = "Assigned",
-                            AssignedTo = engineer.Identity.DisplayName
-                        };
 
                         await MessageBus.PublishAsync(new IssueAssignmentMessage
                         {
@@ -1410,35 +1267,15 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                     }
                     else
                     {
-                        // Engineer not found — leave as Pending for PE to pick up
                         Logger.LogWarning(
                             "Original engineer {AgentId} not found for task {TaskId} — will be reassigned",
                             engineerAgentId, task.Id);
-                        _agentAssignments.Remove(engineerAgentId);
-                        _taskBacklog[taskIdx] = _taskBacklog[taskIdx] with
-                        {
-                            Status = "Pending",
-                            AssignedTo = null
-                        };
                     }
                 }
                 else
                 {
-                    // Can't find the engineer by issue — leave as Pending
-                    Logger.LogWarning(
-                        "Could not find engineer for issue #{IssueNumber} — task {TaskId} set to Pending",
-                        task.IssueNumber, task.Id);
-                    _taskBacklog[taskIdx] = _taskBacklog[taskIdx] with
-                    {
-                        Status = "Pending",
-                        AssignedTo = null
-                    };
+                    Logger.LogInformation("Task {TaskId} reset to Pending for reassignment", task.Id);
                 }
-            }
-            else
-            {
-                // No assignment info — just leave as Pending
-                Logger.LogInformation("Task {TaskId} reset to Pending for reassignment", task.Id);
             }
         }
         catch (Exception ex)
@@ -1449,17 +1286,18 @@ public class PrincipalEngineerAgent : EngineerAgentBase
 
     private async Task CheckAllTasksCompleteAsync(CancellationToken ct)
     {
-        if (_taskBacklog.Count == 0)
+        if (_taskManager.TotalCount == 0)
             return;
 
-        var allDone = _taskBacklog.All(t => IsTaskDone(t));
+        // Refresh from GitHub to get latest state
+        await _taskManager.LoadTasksAsync(ct);
 
-        if (!allDone)
+        if (!_taskManager.AreAllTasksDone())
             return;
 
         _allTasksComplete = true;
-        Logger.LogInformation("🎉 All {Count} engineering tasks are complete!", _taskBacklog.Count);
-        LogActivity("system", $"🎉 All {_taskBacklog.Count} engineering tasks complete — entering integration phase");
+        Logger.LogInformation("🎉 All {Count} engineering tasks are complete!", _taskManager.TotalCount);
+        LogActivity("system", $"🎉 All {_taskManager.TotalCount} engineering tasks complete — entering integration phase");
         UpdateStatus(AgentStatus.Working, "All tasks complete — creating integration PR");
 
         await MessageBus.PublishAsync(new StatusUpdateMessage
@@ -1468,7 +1306,7 @@ public class PrincipalEngineerAgent : EngineerAgentBase
             ToAgentId = "*",
             MessageType = "AllTasksComplete",
             NewStatus = AgentStatus.Working,
-            Details = $"All {_taskBacklog.Count} engineering tasks are done"
+            Details = $"All {_taskManager.TotalCount} engineering tasks are done"
         }, ct);
     }
 
@@ -1480,10 +1318,12 @@ public class PrincipalEngineerAgent : EngineerAgentBase
 
             var pmSpecDoc = await ProjectFiles.GetPMSpecAsync(ct);
             var architectureDoc = await ProjectFiles.GetArchitectureDocAsync(ct);
-            var engineeringPlan = await ProjectFiles.GetEngineeringPlanAsync(ct);
             var techStack = Config.Project.TechStack;
 
-            // Get list of all repo files to review against the spec
+            // Build a task summary from issues instead of engineering plan file
+            var taskSummary = string.Join("\n", _taskManager.Tasks.Select(t =>
+                $"- [{t.Id}] {t.Name} ({t.Complexity}, {t.Status})"));
+
             var kernel = Models.GetKernel(Identity.ModelTier, Identity.Id);
             var chat = kernel.GetRequiredService<IChatCompletionService>();
 
@@ -1501,7 +1341,7 @@ public class PrincipalEngineerAgent : EngineerAgentBase
             history.AddUserMessage(
                 $"## PM Specification\n{pmSpecDoc}\n\n" +
                 $"## Architecture\n{architectureDoc}\n\n" +
-                $"## Engineering Plan\n{engineeringPlan}\n\n" +
+                $"## Completed Tasks\n{taskSummary}\n\n" +
                 "Review the merged work against these documents. " +
                 "Generate any missing integration files (config, wiring, startup registration, etc.).");
 
@@ -1527,7 +1367,7 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 Identity.DisplayName, "final-integration", ct);
 
             var prBody = $"## Final Integration PR\n\n" +
-                $"All {_taskBacklog.Count} engineering tasks have been completed and merged.\n" +
+                $"All {_taskManager.TotalCount} engineering tasks have been completed and merged.\n" +
                 $"This PR addresses integration gaps identified during final review.\n\n" +
                 $"### Files Changed\n" +
                 string.Join("\n", codeFiles.Select(f => $"- `{f.Path}`"));
@@ -1538,7 +1378,7 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 prBody,
                 "High",
                 "Architecture.md",
-                "EngineeringPlan.md",
+                "",
                 branchName,
                 ct);
 
@@ -1591,11 +1431,11 @@ public class PrincipalEngineerAgent : EngineerAgentBase
             ToAgentId = "*",
             MessageType = "EngineeringComplete",
             NewStatus = AgentStatus.Idle,
-            Details = $"All {_taskBacklog.Count} tasks complete. Engineering phase finished."
+            Details = $"All {_taskManager.TotalCount} tasks complete. Engineering phase finished."
         }, ct);
 
         await RememberAsync(MemoryType.Action,
-            $"Engineering phase complete: {_taskBacklog.Count} tasks done", ct: ct);
+            $"Engineering phase complete: {_taskManager.TotalCount} tasks done", ct: ct);
     }
 
     #endregion
@@ -1628,18 +1468,8 @@ public class PrincipalEngineerAgent : EngineerAgentBase
         {
             _agentAssignments.Remove(message.FromAgentId);
 
-            if (message.CurrentTask is not null)
-            {
-                var task = _taskBacklog.FirstOrDefault(t =>
-                    string.Equals(t.Name, message.CurrentTask, StringComparison.OrdinalIgnoreCase)
-                    || t.Id == message.CurrentTask);
-                if (task is not null)
-                {
-                    var idx = _taskBacklog.FindIndex(t => t.Id == task.Id);
-                    if (idx >= 0)
-                        _taskBacklog[idx] = task with { Status = "Complete" };
-                }
-            }
+            // Task completion is tracked via issue state (closed = Done)
+            // No need to update an in-memory backlog
         }
 
         return Task.CompletedTask;
@@ -1658,18 +1488,10 @@ public class PrincipalEngineerAgent : EngineerAgentBase
             "Received task assignment from {From}: {Title}",
             message.FromAgentId, message.Title);
 
-        if (!_taskBacklog.Any(t =>
+        if (!_taskManager.Tasks.Any(t =>
                 string.Equals(t.Name, message.Title, StringComparison.OrdinalIgnoreCase)))
         {
-            _taskBacklog.Add(new EngineeringTask
-            {
-                Id = $"TX-{_taskBacklog.Count + 1}",
-                Name = message.Title,
-                Description = message.Description,
-                Complexity = NormalizeComplexity(message.Complexity)
-            });
-
-            Logger.LogInformation("Added externally-assigned task to backlog: {Title}", message.Title);
+            Logger.LogInformation("Received externally-assigned task: {Title} — will be handled via issues", message.Title);
         }
 
         return Task.CompletedTask;
@@ -1693,9 +1515,8 @@ public class PrincipalEngineerAgent : EngineerAgentBase
 
     protected override Task HandleChangesRequestedAsync(ChangesRequestedMessage message, CancellationToken ct)
     {
-        var isOurPr = _taskBacklog.Any(t =>
-            t.PullRequestNumber == message.PrNumber && t.Status == "InProgress" &&
-            string.Equals(t.AssignedTo, Identity.DisplayName, StringComparison.OrdinalIgnoreCase));
+        // Check if this is our own PR (PE is working on it)
+        var isOurPr = CurrentPrNumber == message.PrNumber;
 
         if (!isOurPr)
             return Task.CompletedTask;
@@ -1808,55 +1629,28 @@ public class PrincipalEngineerAgent : EngineerAgentBase
     #region Helpers
 
     /// <summary>
-    /// Find the next assignable task, trying preferred complexity first then falling back.
-    /// Engineers should not sit idle when there's available work at any complexity level.
+    /// After merging an engineer's PR, find the corresponding task issue and close it.
+    /// Searches by task name from PR title, then by issue number from agent assignments.
     /// </summary>
-    private EngineeringTask? FindNextAssignableTask(params string[] complexityPreferences)
+    private async Task MarkEngineerTaskDoneAsync(AgentPullRequest pr, CancellationToken ct)
     {
-        foreach (var complexity in complexityPreferences)
+        // Search by task name from PR title (strip agent prefix, handle double-prefix)
+        var taskName = PullRequestWorkflow.ParseTaskTitleFromTitle(pr.Title);
+        EngineeringTask? task = null;
+
+        if (taskName is not null)
         {
-            var task = _taskBacklog.FirstOrDefault(t =>
-                string.Equals(t.Complexity, complexity, StringComparison.OrdinalIgnoreCase)
-                && t.Status == "Pending" && AreDependenciesMet(t));
-            if (task is not null)
-                return task;
-        }
-        return null;
-    }
-
-    /// <summary>
-    /// After merging an engineer's PR, find the corresponding backlog task and mark it Done.
-    /// Searches by PR number, then by task name parsed from the PR title, then by issue number
-    /// for the specific engineer who authored the PR.
-    /// </summary>
-    private void MarkEngineerTaskDone(AgentPullRequest pr)
-    {
-        // Try by PR number first
-        var idx = _taskBacklog.FindIndex(t => t.PullRequestNumber == pr.Number);
-
-        // Fallback: match by task name from PR title (strip agent prefix, handle double-prefix)
-        if (idx < 0)
-        {
-            var taskName = PullRequestWorkflow.ParseTaskTitleFromTitle(pr.Title);
-            if (taskName is not null)
-            {
-                // Handle doubled agent prefix: "Agent: Agent: TaskName" → strip again
-                var innerName = PullRequestWorkflow.ParseTaskTitleFromTitle(taskName);
-                if (innerName is not null)
-                    taskName = innerName;
-
-                idx = _taskBacklog.FindIndex(t =>
-                    string.Equals(t.Name, taskName, StringComparison.OrdinalIgnoreCase));
-            }
+            var innerName = PullRequestWorkflow.ParseTaskTitleFromTitle(taskName);
+            if (innerName is not null) taskName = innerName;
+            task = _taskManager.FindByName(taskName);
         }
 
-        // Fallback: match by issue number for the specific PR author's assignment
-        if (idx < 0)
+        // Fallback: match by issue number from the specific PR author's assignment
+        if (task is null)
         {
             var agentName = PullRequestWorkflow.ParseAgentNameFromTitle(pr.Title);
             if (agentName is not null)
             {
-                // Find the agent ID for this display name
                 var authorEntry = _agentAssignments.FirstOrDefault(kv =>
                 {
                     var agent = _registry.GetAgentsByRole(AgentRole.SeniorEngineer)
@@ -1867,97 +1661,20 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 });
 
                 if (authorEntry.Key is not null)
-                {
-                    var taskIdx = _taskBacklog.FindIndex(t =>
-                        t.IssueNumber == authorEntry.Value && !IsTaskDone(t));
-                    if (taskIdx >= 0)
-                        idx = taskIdx;
-                }
+                    task = _taskManager.FindByIssueNumber(authorEntry.Value);
             }
         }
 
-        if (idx >= 0)
+        if (task?.IssueNumber.HasValue == true)
         {
-            var task = _taskBacklog[idx];
-            _taskBacklog[idx] = task with { Status = "Done", PullRequestNumber = pr.Number };
+            await _taskManager.MarkDoneAsync(task.IssueNumber.Value, pr.Number, ct);
             Logger.LogInformation("Marked engineer task {TaskId} '{TaskName}' as Done (PR #{PrNumber} merged)",
                 task.Id, task.Name, pr.Number);
         }
         else
         {
-            Logger.LogWarning("Could not find backlog task for merged PR #{PrNumber} ({Title})",
+            Logger.LogWarning("Could not find task issue for merged PR #{PrNumber} ({Title})",
                 pr.Number, pr.Title);
-        }
-    }
-
-    private static bool IsTaskDone(EngineeringTask task) =>
-        task.Status is "Done" or "Complete";
-
-    private bool AreDependenciesMet(EngineeringTask task)
-    {
-        if (task.Dependencies.Count == 0)
-            return true;
-
-        return task.Dependencies.All(depId =>
-        {
-            var dep = _taskBacklog.FirstOrDefault(t => t.Id == depId);
-            return dep is null || IsTaskDone(dep);
-        });
-    }
-
-    /// <summary>
-    /// Ensure a task has its own open GitHub issue. If the task's current issue is
-    /// closed (e.g., shared issue #52 closed by an earlier PR) or missing, create a new one.
-    /// Returns the updated task with valid IssueNumber, or null if issue creation failed.
-    /// </summary>
-    private async Task<EngineeringTask?> EnsureTaskHasOpenIssueAsync(
-        EngineeringTask task, CancellationToken ct)
-    {
-        if (task.IssueNumber.HasValue)
-        {
-            try
-            {
-                var issue = await GitHub.GetIssueAsync(task.IssueNumber.Value, ct);
-                if (issue is not null &&
-                    string.Equals(issue.State, "open", StringComparison.OrdinalIgnoreCase))
-                    return task; // Issue is open, nothing to do
-            }
-            catch (Exception ex)
-            {
-                Logger.LogWarning(ex, "Failed to check issue #{IssueNumber} state for task {TaskId}",
-                    task.IssueNumber, task.Id);
-            }
-
-            // Issue is closed or gone — need a fresh issue
-            Logger.LogInformation(
-                "Task {TaskId} issue #{IssueNumber} is closed, creating new issue",
-                task.Id, task.IssueNumber);
-        }
-
-        try
-        {
-            var issueBody = $"## Task: {task.Name}\n\n{task.Description}\n\n" +
-                $"**Complexity:** {task.Complexity}\n" +
-                $"**Task ID:** {task.Id}\n\n" +
-                $"_Auto-created by Principal Engineer._";
-            var newIssue = await GitHub.CreateIssueAsync(
-                task.Name, issueBody,
-                new[] { "enhancement", task.Complexity.ToLowerInvariant() }, ct);
-
-            task = task with { IssueNumber = newIssue.Number, IssueUrl = $"#{newIssue.Number}" };
-            var idx = _taskBacklog.FindIndex(t => t.Id == task.Id);
-            if (idx >= 0)
-                _taskBacklog[idx] = task;
-
-            Logger.LogInformation(
-                "Created issue #{IssueNumber} for task {TaskId}: {TaskName}",
-                newIssue.Number, task.Id, task.Name);
-            return task;
-        }
-        catch (Exception ex)
-        {
-            Logger.LogWarning(ex, "Failed to create issue for task {TaskId}", task.Id);
-            return null;
         }
     }
 
@@ -2026,103 +1743,6 @@ public class PrincipalEngineerAgent : EngineerAgentBase
         };
     }
 
-    private void RestoreTaskBacklogFromPlan(string planMarkdown)
-    {
-        _taskBacklog.Clear();
-
-        var lines = planMarkdown.Split('\n');
-        var inTaskTable = false;
-
-        foreach (var line in lines)
-        {
-            var trimmed = line.Trim();
-
-            if (trimmed.StartsWith("| ID") || trimmed.StartsWith("|ID"))
-            {
-                inTaskTable = true;
-                continue;
-            }
-
-            if (inTaskTable && trimmed.StartsWith("|---"))
-                continue;
-
-            if (inTaskTable && trimmed.StartsWith('|'))
-            {
-                var cells = trimmed.Split('|', StringSplitOptions.RemoveEmptyEntries)
-                    .Select(c => c.Trim())
-                    .ToArray();
-
-                if (cells.Length >= 7)
-                {
-                    var deps = cells[7 < cells.Length ? 7 : cells.Length - 1] == "—"
-                        ? new List<string>()
-                        : cells[cells.Length - 1].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
-
-                    var prNum = cells.Length > 5 && cells[5].StartsWith('#') && int.TryParse(cells[5][1..], out var pr) ? (int?)pr : null;
-                    var issueNum = cells.Length > 4 && cells[4].StartsWith('#') && int.TryParse(cells[4][1..], out var iss) ? (int?)iss : null;
-                    var assignedTo = cells[3] == "—" ? null : cells[3];
-
-                    _taskBacklog.Add(new EngineeringTask
-                    {
-                        Id = cells[0],
-                        Name = cells[1],
-                        Complexity = NormalizeComplexity(cells[2]),
-                        AssignedTo = assignedTo,
-                        IssueNumber = issueNum,
-                        PullRequestNumber = prNum,
-                        Status = cells.Length > 6 ? cells[6] : "Pending",
-                        Dependencies = deps
-                    });
-                }
-            }
-            else if (inTaskTable && !trimmed.StartsWith('|'))
-            {
-                break;
-            }
-        }
-    }
-
-    private string BuildEngineeringPlanMarkdown()
-    {
-        var sb = new StringBuilder();
-        sb.AppendLine("# Engineering Plan");
-        sb.AppendLine();
-
-        var total = _taskBacklog.Count;
-        var completed = _taskBacklog.Count(t => IsTaskDone(t));
-        var inProgress = _taskBacklog.Count(t => t.Status is "Assigned" or "InProgress");
-        var pending = _taskBacklog.Count(t => t.Status == "Pending");
-
-        sb.AppendLine("## Overview");
-        sb.AppendLine();
-        sb.AppendLine($"**Total Tasks:** {total} | " +
-                       $"**Completed:** {completed} | " +
-                       $"**In Progress:** {inProgress} | " +
-                       $"**Pending:** {pending}");
-        sb.AppendLine();
-
-        sb.AppendLine("## Tasks");
-        sb.AppendLine();
-        sb.AppendLine("| ID | Task | Complexity | Assigned To | Issue | PR | Status | Dependencies |");
-        sb.AppendLine("|----|------|-----------|-------------|-------|-----|--------|-------------|");
-
-        foreach (var task in _taskBacklog)
-        {
-            var assignedTo = task.AssignedTo ?? "—";
-            var issueLink = task.IssueNumber.HasValue ? $"#{task.IssueNumber}" : "—";
-            var prLink = task.PullRequestNumber.HasValue ? $"#{task.PullRequestNumber}" : "—";
-            var deps = task.Dependencies.Count > 0
-                ? string.Join(", ", task.Dependencies)
-                : "—";
-
-            sb.AppendLine($"| {task.Id} | {task.Name} | {task.Complexity} | " +
-                          $"{assignedTo} | {issueLink} | {prLink} | {task.Status} | {deps} |");
-        }
-
-        sb.AppendLine();
-        return sb.ToString();
-    }
-
     #endregion
 }
 
@@ -2138,6 +1758,12 @@ internal record EngineeringTask
     public int? IssueNumber { get; init; }
     public string? IssueUrl { get; init; }
     public List<string> Dependencies { get; init; } = new();
+    /// <summary>Issue numbers this task depends on (parsed from issue body "Depends On").</summary>
+    public List<int> DependencyIssueNumbers { get; init; } = new();
+    /// <summary>Parent PM issue number (parsed from issue body "Parent Issue").</summary>
+    public int? ParentIssueNumber { get; init; }
+    /// <summary>Current GitHub labels on this issue (for status label management).</summary>
+    public List<string> Labels { get; init; } = new();
 }
 
 // BUG FIX: Added AgentId field. Previously only Name (DisplayName) was stored, but
