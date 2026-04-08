@@ -1459,12 +1459,14 @@ public class ProgramManagerAgent : AgentBase
                 "truncated code or incomplete-looking files.\n\n" +
                 "Only request changes when a user story acceptance criterion is clearly unmet or " +
                 "the feature contradicts the PM Spec.\n\n" +
-                "RESPONSE FORMAT:\n" +
-                "- If requesting changes: use a **numbered list** (1. 2. 3.) for each issue. " +
-                "Reference acceptance criteria by name, not code files. " +
-                "No praise, no summary of what works.\n" +
-                "- If approving: one sentence or empty. No recap.\n" +
-                "- End with: VERDICT: APPROVE or VERDICT: REQUEST_CHANGES");
+                "RESPONSE FORMAT — your ENTIRE response must be ONLY:\n" +
+                "- If requesting changes: a **numbered list** (1. 2. 3.) starting on the FIRST line. " +
+                "Each item references an acceptance criterion by name. Nothing before the list. " +
+                "No preamble, no thinking, no analysis narration.\n" +
+                "- If approving: one sentence only.\n" +
+                "- Last line: VERDICT: APPROVE or VERDICT: REQUEST_CHANGES\n\n" +
+                "WRONG: 'Let me review... Based on the PMSpec... 1. Missing feature'\n" +
+                "RIGHT: '1. Acceptance criterion \"PDF export\" is not implemented'");
 
             history.AddUserMessage(
                 $"## PM Specification\n{pmSpec}\n\n" +
@@ -1482,6 +1484,9 @@ public class ProgramManagerAgent : AgentBase
                 .Replace("VERDICT: APPROVE", "", StringComparison.OrdinalIgnoreCase)
                 .Replace("VERDICT: REQUEST_CHANGES", "", StringComparison.OrdinalIgnoreCase)
                 .Trim();
+
+            // Strip any preamble/thinking the AI may have included before the numbered list
+            reviewBody = PullRequestWorkflow.StripReviewPreamble(reviewBody);
 
             return (approved, reviewBody);
         }

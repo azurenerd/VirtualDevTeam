@@ -559,7 +559,10 @@ public class TestEngineerAgent : AgentBase
                 history.AddSystemMessage(
                     $"You are an expert test engineer maintaining tests for a {techStack} project.\n" +
                     "A reviewer requested changes on your test PR. Update the test files to address all feedback.\n\n" +
-                    "Output each corrected file using this exact format:\n" +
+                    "CRITICAL: Your response MUST start with a CHANGES SUMMARY that addresses EACH numbered " +
+                    "feedback item from the reviewer using the SAME numbers (1. 2. 3.). For each item, state " +
+                    "in one sentence what you changed or why no change was needed.\n\n" +
+                    "After the CHANGES SUMMARY, output each corrected file using this exact format:\n" +
                     "FILE: tests/path/to/TestFile.ext\n```language\n<complete file content>\n```\n\n" +
                     "Include the COMPLETE content of each changed file.");
 
@@ -567,9 +570,11 @@ public class TestEngineerAgent : AgentBase
                     $"## Test PR #{rework.PrNumber}: {rework.PrTitle}\n\n" +
                     $"## Original PR Description\n{pr.Body}\n\n" +
                     $"## Review Feedback from {rework.Reviewer}\n{rework.Feedback}\n\n" +
-                    "First, output a CHANGES SUMMARY that addresses each numbered feedback item " +
-                    "from the reviewer. Use the same numbers (1. 2. 3.) and briefly state what you " +
-                    "changed or why no change was needed. Keep each response to one sentence.\n\n" +
+                    "REQUIRED: Start your response with CHANGES SUMMARY that addresses each numbered " +
+                    "feedback item using the SAME numbers. Example:\n" +
+                    "CHANGES SUMMARY\n" +
+                    "1. Added missing error handling test as requested\n" +
+                    "2. Fixed assertion to check return type\n\n" +
                     "Then output the corrected test files.");
 
                 var response = await chat.GetChatMessageContentAsync(history, cancellationToken: ct);
@@ -577,11 +582,7 @@ public class TestEngineerAgent : AgentBase
 
                 if (!string.IsNullOrWhiteSpace(updatedContent))
                 {
-                    // Extract the changes summary (everything before first FILE: block)
-                    var summaryEnd = updatedContent.IndexOf("FILE:", StringComparison.OrdinalIgnoreCase);
-                    var changesSummary = summaryEnd > 0
-                        ? updatedContent[..summaryEnd].Trim()
-                        : null;
+                    var changesSummary = PullRequestWorkflow.ExtractChangesSummary(updatedContent);
 
                     var codeFiles = CodeFileParser.ParseFiles(updatedContent);
                     if (codeFiles.Count > 0)

@@ -1007,6 +1007,99 @@ public partial class PullRequestWorkflow
         return slug.Trim('-');
     }
 
+    /// <summary>
+    /// Strips preamble/thinking from AI review responses. The Copilot CLI sometimes returns
+    /// the model's reasoning ("Let me examine...", "Let me check...", "Based on my analysis...")
+    /// before the actual review content. This extracts only the numbered feedback list or
+    /// approval sentence.
+    /// </summary>
+    public static string StripReviewPreamble(string reviewBody)
+    {
+        if (string.IsNullOrWhiteSpace(reviewBody))
+            return reviewBody;
+
+        var lines = reviewBody.Split('\n');
+
+        // Find the first line that starts a numbered list item (e.g., "1.", "1)")
+        // or a horizontal rule (---, ___), which separates thinking from content.
+        int contentStart = -1;
+        for (int i = 0; i < lines.Length; i++)
+        {
+            var trimmed = lines[i].Trim();
+
+            // Horizontal rule — content starts on the next non-empty line
+            if (trimmed.Length >= 3 && (trimmed.All(c => c == '-') || trimmed.All(c => c == '_') || trimmed.All(c => c == '*')))
+            {
+                for (int j = i + 1; j < lines.Length; j++)
+                {
+                    if (!string.IsNullOrWhiteSpace(lines[j]))
+                    {
+                        contentStart = j;
+                        break;
+                    }
+                }
+                if (contentStart >= 0) break;
+            }
+
+            // First numbered list item
+            if (NumberedItemPattern().IsMatch(trimmed))
+            {
+                contentStart = i;
+                break;
+            }
+        }
+
+        if (contentStart > 0)
+            return string.Join('\n', lines[contentStart..]).Trim();
+
+        return reviewBody;
+    }
+
+    /// <summary>
+    /// Extracts a numbered changes summary from an AI rework response.
+    /// Only extracts content following an explicit "CHANGES SUMMARY" header to avoid
+    /// picking up AI reasoning steps that happen to be numbered.
+    /// Returns null if no explicit summary header found.
+    /// </summary>
+    public static string? ExtractChangesSummary(string aiResponse)
+    {
+        if (string.IsNullOrWhiteSpace(aiResponse))
+            return null;
+
+        var lines = aiResponse.Split('\n');
+
+        // Find the CHANGES SUMMARY header and the first FILE: block
+        int summaryHeaderIdx = -1;
+        int firstFileIdx = -1;
+
+        for (int i = 0; i < lines.Length; i++)
+        {
+            var trimmed = lines[i].Trim();
+
+            if (trimmed.StartsWith("CHANGES SUMMARY", StringComparison.OrdinalIgnoreCase))
+                summaryHeaderIdx = i;
+
+            if (firstFileIdx < 0 && trimmed.StartsWith("FILE:", StringComparison.OrdinalIgnoreCase))
+                firstFileIdx = i;
+        }
+
+        // Only extract when the AI included the explicit header we asked for
+        if (summaryHeaderIdx >= 0)
+        {
+            int end = firstFileIdx > summaryHeaderIdx ? firstFileIdx : lines.Length;
+            var summaryLines = lines[(summaryHeaderIdx + 1)..end]
+                .Where(l => !string.IsNullOrWhiteSpace(l))
+                .ToArray();
+            if (summaryLines.Length > 0)
+                return string.Join('\n', summaryLines).Trim();
+        }
+
+        return null;
+    }
+
+    [GeneratedRegex(@"^\d+[\.\)]\s")]
+    private static partial Regex NumberedItemPattern();
+
     [GeneratedRegex(@"^(.+?):\s*(.+)$")]
     private static partial Regex AgentTitlePattern();
 

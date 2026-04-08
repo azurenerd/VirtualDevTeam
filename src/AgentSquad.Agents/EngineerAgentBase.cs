@@ -959,9 +959,12 @@ public abstract class EngineerAgentBase : AgentBase
                 $"## PM Specification\n{pmSpecDoc}\n\n" +
                 await GetAdditionalReworkContextAsync(ct) +
                 $"## Review Feedback\n{combinedFeedback}\n\n" +
-                "First, output a CHANGES SUMMARY section that addresses each numbered feedback item " +
-                "from the reviewer. Use the same numbers (1. 2. 3.) and briefly state what you " +
-                "changed or why no change was needed. Keep each response to one sentence.\n\n" +
+                "REQUIRED: Start your response with CHANGES SUMMARY that addresses each numbered " +
+                "feedback item using the SAME numbers. Example:\n" +
+                "CHANGES SUMMARY\n" +
+                "1. Fixed the null check in AuthController.cs\n" +
+                "2. Added validation for empty strings as requested\n" +
+                "3. No change needed — the test already covers this case\n\n" +
                 "Then output the corrected files using this exact format:\n\n" +
                 "FILE: path/to/file.ext\n```language\n<file content>\n```\n\n" +
                 "Include the COMPLETE content of each changed file.");
@@ -971,11 +974,7 @@ public abstract class EngineerAgentBase : AgentBase
 
             if (!string.IsNullOrWhiteSpace(updatedImpl))
             {
-                // Extract the changes summary (everything before first FILE: block)
-                var summaryEnd = updatedImpl.IndexOf("FILE:", StringComparison.OrdinalIgnoreCase);
-                var changesSummary = summaryEnd > 0
-                    ? updatedImpl[..summaryEnd].Trim()
-                    : null;
+                var changesSummary = PullRequestWorkflow.ExtractChangesSummary(updatedImpl);
 
                 var codeFiles = AgentSquad.Core.AI.CodeFileParser.ParseFiles(updatedImpl);
                 if (codeFiles.Count > 0)
@@ -1410,7 +1409,12 @@ public abstract class EngineerAgentBase : AgentBase
             $"The project uses {techStack}. " +
             "Carefully read the feedback, understand what needs to be fixed, and produce " +
             "an updated implementation that addresses ALL the feedback points. " +
-            "Be thorough — every feedback item must be resolved.";
+            "Be thorough — every feedback item must be resolved.\n\n" +
+            "CRITICAL: Your response MUST start with a CHANGES SUMMARY that addresses EACH numbered " +
+            "feedback item from the reviewer using the SAME numbers (1. 2. 3.). For each item, state " +
+            "in one sentence what you changed or why no change was needed. This summary is posted as " +
+            "a PR comment so reviewers can verify their feedback was addressed point-by-point.\n\n" +
+            "After the CHANGES SUMMARY, output corrected files using FILE: format.";
     }
 
     /// <summary>

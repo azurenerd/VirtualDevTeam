@@ -1586,11 +1586,15 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 "this is a tooling limitation, NOT a code defect. Do NOT flag truncated code.\n\n" +
                 "Only request changes for issues that are significant AND fixable. " +
                 "Minor style preferences → APPROVE. Complete rewrites needed → APPROVE with caveat.\n\n" +
-                "RESPONSE FORMAT:\n" +
-                "- If requesting changes: use a **numbered list** (1. 2. 3.) for each issue, " +
-                "with **bold** file/method names. No praise, no summary of what's good, no executive overview.\n" +
-                "- If approving: one sentence or empty. No recap of what the PR does.\n" +
-                "- End with: VERDICT: APPROVE or VERDICT: REQUEST_CHANGES");
+                "RESPONSE FORMAT — your ENTIRE response must be ONLY:\n" +
+                "- If requesting changes: a **numbered list** (1. 2. 3.) starting on the FIRST line. " +
+                "Each item states the issue with **bold** file/method names. Nothing before the list. " +
+                "No preamble, no thinking, no analysis narration, no 'Let me check', no descriptions of " +
+                "what you examined.\n" +
+                "- If approving: one sentence only.\n" +
+                "- Last line: VERDICT: APPROVE or VERDICT: REQUEST_CHANGES\n\n" +
+                "WRONG: 'Let me review the code... Based on my analysis... 1. Issue'\n" +
+                "RIGHT: '1. **AuthController.cs** — missing null check on user parameter'");
 
             history.AddUserMessage(
                 $"## Architecture\n{architectureDoc}\n\n" +
@@ -1609,6 +1613,9 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 .Replace("VERDICT: APPROVE", "", StringComparison.OrdinalIgnoreCase)
                 .Replace("VERDICT: REQUEST_CHANGES", "", StringComparison.OrdinalIgnoreCase)
                 .Trim();
+
+            // Strip any preamble/thinking the AI may have included before the numbered list
+            reviewBody = PullRequestWorkflow.StripReviewPreamble(reviewBody);
 
             return (approved, reviewBody);
         }

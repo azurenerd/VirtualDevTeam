@@ -609,11 +609,14 @@ public class ArchitectAgent : AgentBase
                 "this is a tooling limitation, NOT a code defect. Do NOT flag truncated code.\n\n" +
                 "Only request REWORK for real architectural violations (wrong boundaries, wrong tech stack, " +
                 "wrong patterns). Minor issues → APPROVE.\n\n" +
-                "RESPONSE FORMAT:\n" +
+                "RESPONSE FORMAT — your ENTIRE response must be ONLY:\n" +
                 "- First line: APPROVED or REWORK\n" +
-                "- If REWORK: use a **numbered list** (1. 2. 3.) for each violation. " +
-                "No praise, no summary of what's correct.\n" +
-                "- If APPROVED: one sentence or empty. No recap.");
+                "- If REWORK: a **numbered list** (1. 2. 3.) starting on the SECOND line. " +
+                "Each item states the architectural violation. Nothing else. " +
+                "No preamble, no thinking, no analysis narration.\n" +
+                "- If APPROVED: one sentence or empty after the verdict. No recap.\n\n" +
+                "WRONG: 'Let me review the architecture... 1. Violation'\n" +
+                "RIGHT: 'REWORK\\n1. **Services/** folder violates layered boundary'");
 
             history.AddUserMessage(
                 $"## Architecture Document\n{architectureDoc}\n\n" +
@@ -626,6 +629,9 @@ public class ArchitectAgent : AgentBase
                 history, cancellationToken: ct);
 
             var text = response.Content?.Trim() ?? "";
+
+            // Strip any preamble/thinking before the actual verdict
+            text = PullRequestWorkflow.StripReviewPreamble(text);
 
             // Parse verdict from first line
             var firstLine = text.Split('\n', 2)[0].Trim();
@@ -653,6 +659,9 @@ public class ArchitectAgent : AgentBase
                 reasoning = text;
                 Logger.LogWarning("Architect AI didn't start with APPROVED/REWORK, inferred {Verdict}", verdict);
             }
+
+            // Strip any remaining preamble from the reasoning body
+            reasoning = PullRequestWorkflow.StripReviewPreamble(reasoning);
 
             return (verdict, reasoning);
         }
