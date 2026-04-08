@@ -15,7 +15,46 @@
 
 <body>
     <Routes @rendermode="InteractiveServer" />
-    <script src="_framework/blazor.web.js"></script>
+    <script src="_framework/blazor.web.js" autostart="false"></script>
+    <script>
+        Blazor.start({
+            circuit: {
+                reconnectionOptions: {
+                    maxRetries: 2147483647,
+                    retryIntervalMilliseconds: 2000,
+                    dialogId: 'components-reconnect-modal'
+                }
+            },
+            reconnectionHandler: {
+                onConnectionDown: function (options, error) {
+                    var overlay = document.getElementById('components-reconnect-modal');
+                    if (overlay) overlay.style.display = 'flex';
+                    tryReconnect(0);
+                },
+                onConnectionUp: function () {
+                    var overlay = document.getElementById('components-reconnect-modal');
+                    if (overlay) overlay.style.display = 'none';
+                    location.reload();
+                }
+            }
+        });
+
+        function tryReconnect(attempt) {
+            var statusEl = document.getElementById('reconnect-status');
+            if (statusEl) statusEl.textContent = 'Reconnecting... attempt ' + (attempt + 1);
+            setTimeout(function () {
+                Blazor.reconnect().then(function (success) {
+                    if (!success) tryReconnect(attempt + 1);
+                });
+            }, Math.min(2000 * Math.pow(1.2, attempt), 10000));
+        }
+    </script>
+    <div id="components-reconnect-modal" style="display:none; position:fixed; inset:0; z-index:9999; background:rgba(15,17,23,0.92); align-items:center; justify-content:center; flex-direction:column; gap:1rem;">
+        <div style="color:#00d4ff; font-size:1.5rem; font-weight:600;">⟳ Reconnecting to server...</div>
+        <div id="reconnect-status" style="color:#8b949e; font-size:0.95rem;">Reconnecting...</div>
+        <div style="width:40px; height:40px; border:3px solid rgba(0,212,255,0.2); border-top-color:#00d4ff; border-radius:50%; animation:spin 1s linear infinite;"></div>
+    </div>
+    <style>@@keyframes spin { to { transform: rotate(360deg); } }</style>
 </body>
 
 </html>

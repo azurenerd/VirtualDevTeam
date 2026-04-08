@@ -1,0 +1,170 @@
+@page "/pullrequests"
+@using AgentSquad.Core.GitHub.Models
+@using AgentSquad.Dashboard.Services
+@inject DashboardDataService DataService
+@rendermode InteractiveServer
+@implements IDisposable
+
+<div class="page-header">
+    <h1 class="page-title">🔀 Pull Requests</h1>
+    <div class="header-badges">
+        <span class="badge badge-success">@_openCount Open</span>
+        <span class="badge badge-purple">@_mergedCount Merged</span>
+        <span class="badge badge-error">@_closedCount Closed</span>
+    </div>
+</div>
+
+<div class="pr-filter-bar">
+    <button class="pr-filter-btn @(_filter == "open" ? "active" : "")" @onclick='() => SetFilter("open")'>
+        <span class="pr-state-icon pr-state-open">●</span> Open <span class="pr-filter-count">@_openCount</span>
+    </button>
+    <button class="pr-filter-btn @(_filter == "merged" ? "active" : "")" @onclick='() => SetFilter("merged")'>
+        <span class="pr-state-icon pr-state-merged">●</span> Merged <span class="pr-filter-count">@_mergedCount</span>
+    </button>
+    <button class="pr-filter-btn @(_filter == "closed" ? "active" : "")" @onclick='() => SetFilter("closed")'>
+        <span class="pr-state-icon pr-state-closed">●</span> Closed <span class="pr-filter-count">@_closedCount</span>
+    </button>
+    <button class="pr-filter-btn @(_filter == "all" ? "active" : "")" @onclick='() => SetFilter("all")'>
+        All <span class="pr-filter-count">@_allPrs.Count</span>
+    </button>
+</div>
+
+@if (_loading)
+{
+    <div class="pr-loading">Loading pull requests...</div>
+}
+else if (_filteredPrs.Count == 0)
+{
+    <div class="pr-empty">No pull requests match this filter.</div>
+}
+else
+{
+    <div class="pr-list">
+        @foreach (var pr in _filteredPrs)
+        {
+            var stateClass = pr.IsMerged ? "merged" : pr.State == "open" ? "open" : "closed";
+            <div class="pr-card">
+                <div class="pr-state-indicator pr-state-@stateClass"></div>
+                <div class="pr-content">
+                    <div class="pr-title-row">
+                        <span class="pr-state-badge pr-state-@stateClass">
+                            @if (pr.IsMerged) { <span>⬤ Merged</span> }
+                            else if (pr.State == "open") { <span>⬤ Open</span> }
+                            else { <span>⬤ Closed</span> }
+                        </span>
+                        <a class="pr-title" href="@pr.Url" target="_blank" rel="noopener">@pr.Title</a>
+                        <span class="pr-number">#@pr.Number</span>
+                    </div>
+                    <div class="pr-meta">
+                        <span class="pr-branch" title="@pr.HeadBranch → @pr.BaseBranch">
+                            🌿 @pr.HeadBranch → @pr.BaseBranch
+                        </span>
+                        @if (!string.IsNullOrEmpty(pr.AssignedAgent))
+                        {
+                            <span class="pr-author">👤 @pr.AssignedAgent</span>
+                        }
+                        <span class="pr-date">
+                            @if (pr.IsMerged && pr.MergedAt.HasValue)
+                            {
+                                <span>merged @FormatTimeAgo(DateTime.UtcNow - pr.MergedAt.Value)</span>
+                            }
+                            else
+                            {
+                                <span>opened @FormatTimeAgo(DateTime.UtcNow - pr.CreatedAt)</span>
+                            }
+                        </span>
+                    </div>
+                    @if (pr.Labels.Count > 0)
+                    {
+                        <div class="pr-labels">
+                            @foreach (var label in pr.Labels)
+                            {
+                                <span class="pr-label @GetLabelClass(label)">@label</span>
+                            }
+                        </div>
+                    }
+                </div>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    private List<AgentPullRequest> _allPrs = new();
+    private List<AgentPullRequest> _filteredPrs = new();
+    private string _filter = "all";
+    private bool _loading = true;
+
+    private int _openCount => _allPrs.Count(p => p.State == "open" && !p.IsMerged);
+    private int _mergedCount => _allPrs.Count(p => p.IsMerged);
+    private int _closedCount => _allPrs.Count(p => p.State != "open" && !p.IsMerged);
+
+    protected override async Task OnInitializedAsync()
+    {
+        DataService.OnChange += OnDataChanged;
+        await LoadPullRequests();
+    }
+
+    private async Task LoadPullRequests()
+    {
+        try
+        {
+            var prs = await DataService.GetPullRequestsAsync();
+            _allPrs = prs.ToList();
+            ApplyFilter();
+        }
+        catch
+        {
+            // Graceful degradation
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void SetFilter(string filter)
+    {
+        _filter = filter;
+        ApplyFilter();
+    }
+
+    private void ApplyFilter()
+    {
+        _filteredPrs = _filter switch
+        {
+            "open" => _allPrs.Where(p => p.State == "open" && !p.IsMerged).ToList(),
+            "merged" => _allPrs.Where(p => p.IsMerged).ToList(),
+            "closed" => _allPrs.Where(p => p.State != "open" && !p.IsMerged).ToList(),
+            _ => _allPrs.ToList()
+        };
+    }
+
+    private async void OnDataChanged()
+    {
+        await LoadPullRequests();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private static string FormatTimeAgo(TimeSpan ts)
+    {
+        if (ts.TotalDays >= 1) return $"{(int)ts.TotalDays}d ago";
+        if (ts.TotalHours >= 1) return $"{(int)ts.TotalHours}h ago";
+        if (ts.TotalMinutes >= 1) return $"{(int)ts.TotalMinutes}m ago";
+        return "just now";
+    }
+
+    private static string GetLabelClass(string label) => label switch
+    {
+        "in-progress" => "label-progress",
+        "ready-for-review" => "label-review",
+        "blocker" => "label-blocker",
+        "agent-stuck" => "label-stuck",
+        _ => "label-default"
+    };
+
+    public void Dispose()
+    {
+        DataService.OnChange -= OnDataChanged;
+    }
+}

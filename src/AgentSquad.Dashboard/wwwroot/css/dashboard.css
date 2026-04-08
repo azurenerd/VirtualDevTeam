@@ -2881,3 +2881,213 @@ main {
     background: rgba(255, 152, 0, 0.08);
     border-radius: var(--radius-sm);
 }
+
+/* ===== Pull Requests Page ===== */
+
+.pr-filter-bar {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 1.5rem;
+    padding: 0.5rem;
+    background: var(--bg-card);
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--border-primary);
+}
+
+.pr-filter-btn {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.5rem 1rem;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 0.85rem;
+    transition: all 0.2s ease;
+}
+
+.pr-filter-btn:hover {
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text-primary);
+}
+
+.pr-filter-btn.active {
+    background: rgba(0, 212, 255, 0.1);
+    border-color: var(--accent-cyan);
+    color: var(--accent-cyan);
+}
+
+.pr-filter-count {
+    font-size: 0.75rem;
+    padding: 0.1rem 0.4rem;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 10px;
+    min-width: 1.4rem;
+    text-align: center;
+}
+
+.pr-state-icon {
+    font-size: 0.6rem;
+}
+
+.pr-state-open { color: #3fb950; }
+.pr-state-merged { color: #a371f7; }
+.pr-state-closed { color: #f85149; }
+
+.pr-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.pr-card {
+    display: flex;
+    background: var(--bg-card);
+    border: 1px solid var(--border-primary);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.pr-card:hover {
+    border-color: var(--accent-cyan);
+    background: rgba(28, 33, 48, 0.9);
+}
+
+.pr-state-indicator {
+    width: 4px;
+    flex-shrink: 0;
+}
+
+.pr-state-indicator.pr-state-open { background: #3fb950; }
+.pr-state-indicator.pr-state-merged { background: #a371f7; }
+.pr-state-indicator.pr-state-closed { background: #f85149; }
+
+.pr-content {
+    flex: 1;
+    padding: 0.85rem 1rem;
+    min-width: 0;
+}
+
+.pr-title-row {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+}
+
+.pr-state-badge {
+    font-size: 0.7rem;
+    padding: 0.15rem 0.5rem;
+    border-radius: 10px;
+    font-weight: 600;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.pr-state-badge.pr-state-open {
+    background: rgba(63, 185, 80, 0.15);
+    color: #3fb950;
+}
+
+.pr-state-badge.pr-state-merged {
+    background: rgba(163, 113, 247, 0.15);
+    color: #a371f7;
+}
+
+.pr-state-badge.pr-state-closed {
+    background: rgba(248, 81, 73, 0.15);
+    color: #f85149;
+}
+
+.pr-title {
+    font-weight: 600;
+    color: var(--text-primary);
+    text-decoration: none;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.pr-title:hover {
+    color: var(--accent-cyan);
+    text-decoration: underline;
+}
+
+.pr-number {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    font-family: 'JetBrains Mono', monospace;
+    flex-shrink: 0;
+}
+
+.pr-meta {
+    display: flex;
+    gap: 1rem;
+    margin-top: 0.35rem;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    flex-wrap: wrap;
+}
+
+.pr-branch {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    max-width: 350px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.pr-labels {
+    display: flex;
+    gap: 0.35rem;
+    margin-top: 0.4rem;
+    flex-wrap: wrap;
+}
+
+.pr-label {
+    font-size: 0.68rem;
+    padding: 0.1rem 0.45rem;
+    border-radius: 10px;
+    font-weight: 500;
+}
+
+.pr-label.label-progress {
+    background: rgba(0, 212, 255, 0.12);
+    color: #00d4ff;
+}
+
+.pr-label.label-review {
+    background: rgba(255, 193, 7, 0.12);
+    color: #ffc107;
+}
+
+.pr-label.label-blocker {
+    background: rgba(248, 81, 73, 0.12);
+    color: #f85149;
+}
+
+.pr-label.label-stuck {
+    background: rgba(255, 152, 0, 0.12);
+    color: #ff9800;
+}
+
+.pr-label.label-default {
+    background: rgba(139, 148, 158, 0.12);
+    color: #8b949e;
+}
+
+.pr-loading, .pr-empty {
+    text-align: center;
+    padding: 3rem;
+    color: var(--text-muted);
+    font-size: 0.95rem;
+}
+
+.badge-purple {
+    background: rgba(163, 113, 247, 0.15);
+    color: #a371f7;
+}

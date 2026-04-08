@@ -1,6 +1,8 @@
 using AgentSquad.Core.Agents;
 using AgentSquad.Core.Configuration;
 using AgentSquad.Core.Diagnostics;
+using AgentSquad.Core.GitHub;
+using AgentSquad.Core.GitHub.Models;
 using AgentSquad.Core.Persistence;
 using AgentSquad.Dashboard.Hubs;
 using AgentSquad.Orchestrator;
@@ -99,6 +101,7 @@ public sealed class DashboardDataService : BackgroundService
     private readonly AgentStateStore _stateStore;
     private readonly AgentChatService _chatService;
     private readonly IHubContext<AgentHub> _hubContext;
+    private readonly IGitHubService _github;
     private readonly ILogger<DashboardDataService> _logger;
 
     private readonly Dictionary<string, AgentSnapshot> _agentCache = new();
@@ -113,6 +116,9 @@ public sealed class DashboardDataService : BackgroundService
     private const int MaxDiagnosticHistory = 500;
 
     private AgentHealthSnapshot? _lastHealthSnapshot;
+    private IReadOnlyList<AgentPullRequest> _cachedPullRequests = Array.Empty<AgentPullRequest>();
+    private DateTime _lastPrFetchUtc = DateTime.MinValue;
+    private static readonly TimeSpan PrCacheExpiry = TimeSpan.FromSeconds(30);
 
     public DashboardDataService(
         AgentRegistry registry,
@@ -123,6 +129,7 @@ public sealed class DashboardDataService : BackgroundService
         AgentStateStore stateStore,
         AgentChatService chatService,
         IHubContext<AgentHub> hubContext,
+        IGitHubService github,
         ILogger<DashboardDataService> logger)
     {
         _registry = registry;
@@ -133,6 +140,7 @@ public sealed class DashboardDataService : BackgroundService
         _stateStore = stateStore;
         _chatService = chatService;
         _hubContext = hubContext;
+        _github = github;
         _logger = logger;
     }
 
@@ -812,6 +820,26 @@ public sealed class DashboardDataService : BackgroundService
         if (ts.TotalHours >= 1) return $"{(int)ts.TotalHours}h {ts.Minutes}m";
         if (ts.TotalMinutes >= 1) return $"{ts.Minutes}m {ts.Seconds}s";
         return $"{ts.Seconds}s";
+    }
+
+    // --- Pull Request data for dashboard ---
+
+    public async Task<IReadOnlyList<AgentPullRequest>> GetPullRequestsAsync()
+    {
+        if (DateTime.UtcNow - _lastPrFetchUtc < PrCacheExpiry && _cachedPullRequests.Count > 0)
+            return _cachedPullRequests;
+
+        try
+        {
+            _cachedPullRequests = await _github.GetAllPullRequestsAsync();
+            _lastPrFetchUtc = DateTime.UtcNow;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to fetch PRs for dashboard");
+        }
+
+        return _cachedPullRequests;
     }
 
     // Observable event for Blazor components to subscribe to for re-rendering
