@@ -777,58 +777,110 @@ public class PrincipalEngineerAgent : EngineerAgentBase
             if (CurrentPrNumber is not null)
                 return;
 
-            // PE prefers High complexity but falls through to any available work
-            var task = _taskManager.FindNextAssignableTask("High", "Medium", "Low");
+            EngineeringTask? task;
 
-            if (task is null)
+            if (!IsLeader())
             {
-                if (_taskManager.PendingCount > 0)
-                    Logger.LogDebug("No assignable tasks: {Pending} pending, some blocked by dependencies",
-                        _taskManager.PendingCount);
-                return;
-            }
-
-            // Non-leader PEs skip the deferral logic — they are workers and should always pick up work.
-            // Leader PE: guard against grabbing non-High tasks if we recently requested a PE spawn
-            // AND workers (other PEs, SEs, JEs) actually exist to handle them.
-            if (IsLeader()
-                && !string.Equals(task.Complexity, "High", StringComparison.OrdinalIgnoreCase)
-                && DateTime.UtcNow - _lastResourceRequestTime < SpawnCooldown)
-            {
-                var allWorkers = _registry.GetAgentsByRole(AgentRole.PrincipalEngineer)
-                    .Where(a => a.Identity.Id != Identity.Id) // other PE workers
-                    .Concat(_registry.GetAgentsByRole(AgentRole.SeniorEngineer))
-                    .Concat(_registry.GetAgentsByRole(AgentRole.JuniorEngineer))
-                    .ToList();
-                var freeWorkers = allWorkers.Count(a => !_agentAssignments.ContainsKey(a.Identity.Id));
-
-                if (freeWorkers > 0)
+                // ── WORKER PE: only work on tasks explicitly assigned by the leader ──
+                // Check for pending assignments delivered via IssueAssignmentMessage
+                if (AssignmentQueue.TryDequeue(out var assignment))
                 {
+                    // Refresh cache from GitHub to get the latest status after leader's assignment
+                    await _taskManager.LoadTasksAsync(ct);
+                    task = _taskManager.FindByIssueNumber(assignment.IssueNumber);
+                    if (task is null || EngineeringTaskIssueManager.IsTaskDone(task))
+                    {
+                        Logger.LogWarning(
+                            "Worker PE: assigned task #{IssueNumber} not found or already done, skipping",
+                            assignment.IssueNumber);
+                        return;
+                    }
                     Logger.LogInformation(
-                        "PE leader deferring {Complexity} task {TaskId} — {FreeWorkers} worker(s) available, " +
-                        "spawn cooldown active ({Remaining:F0}s remaining)",
-                        task.Complexity, task.Id, freeWorkers,
-                        (SpawnCooldown - (DateTime.UtcNow - _lastResourceRequestTime)).TotalSeconds);
-                    return;
+                        "Worker PE picking up assigned task #{IssueNumber}: {Name}",
+                        assignment.IssueNumber, task.Name);
                 }
-
-                // Only wait for spawned worker if at least one worker is already registered
-                if (allWorkers.Count > 0)
+                else
                 {
-                    Logger.LogDebug(
-                        "PE leader waiting for spawned worker before taking {Complexity} task {TaskId}",
-                        task.Complexity, task.Id);
+                    // No pending message — refresh from GitHub and look for tasks assigned to us
+                    await _taskManager.LoadTasksAsync(ct);
+                    task = _taskManager.FindAssignedTo(Identity.DisplayName);
+                    if (task is null)
+                    {
+                        Logger.LogDebug("Worker PE: no task assigned to {Name}, waiting for leader",
+                            Identity.DisplayName);
+                        return;
+                    }
+                    Logger.LogInformation(
+                        "Worker PE recovered assigned task #{IssueNumber}: {Name}",
+                        task.IssueNumber, task.Name);
+                }
+            }
+            else
+            {
+                // ── LEADER PE: refresh cache from GitHub to see latest assignments, then pick ──
+                await _taskManager.LoadTasksAsync(ct);
+                task = _taskManager.FindNextAssignableTask("High", "Medium", "Low");
+
+                if (task is null)
+                {
+                    if (_taskManager.PendingCount > 0)
+                        Logger.LogDebug("No assignable tasks: {Pending} pending, some blocked by dependencies",
+                            _taskManager.PendingCount);
                     return;
                 }
 
-                Logger.LogInformation(
-                    "PE leader taking {Complexity} task {TaskId} — no workers registered yet, not waiting",
-                    task.Complexity, task.Id);
+                // Leader PE: guard against grabbing non-High tasks if we recently requested a PE spawn
+                // AND workers (other PEs, SEs, JEs) actually exist to handle them.
+                if (!string.Equals(task.Complexity, "High", StringComparison.OrdinalIgnoreCase)
+                    && DateTime.UtcNow - _lastResourceRequestTime < SpawnCooldown)
+                {
+                    var allWorkers = _registry.GetAgentsByRole(AgentRole.PrincipalEngineer)
+                        .Where(a => a.Identity.Id != Identity.Id) // other PE workers
+                        .Concat(_registry.GetAgentsByRole(AgentRole.SeniorEngineer))
+                        .Concat(_registry.GetAgentsByRole(AgentRole.JuniorEngineer))
+                        .ToList();
+                    var freeWorkers = allWorkers.Count(a => !_agentAssignments.ContainsKey(a.Identity.Id));
+
+                    if (freeWorkers > 0)
+                    {
+                        Logger.LogInformation(
+                            "PE leader deferring {Complexity} task {TaskId} — {FreeWorkers} worker(s) available, " +
+                            "spawn cooldown active ({Remaining:F0}s remaining)",
+                            task.Complexity, task.Id, freeWorkers,
+                            (SpawnCooldown - (DateTime.UtcNow - _lastResourceRequestTime)).TotalSeconds);
+                        return;
+                    }
+
+                    // Only wait for spawned worker if at least one worker is already registered
+                    if (allWorkers.Count > 0)
+                    {
+                        Logger.LogDebug(
+                            "PE leader waiting for spawned worker before taking {Complexity} task {TaskId}",
+                            task.Complexity, task.Id);
+                        return;
+                    }
+
+                    Logger.LogInformation(
+                        "PE leader taking {Complexity} task {TaskId} — no workers registered yet, not waiting",
+                        task.Complexity, task.Id);
+                }
             }
 
             if (!task.IssueNumber.HasValue)
             {
                 Logger.LogWarning("Task {TaskId} has no issue number — skipping", task.Id);
+                return;
+            }
+
+            // Claim validation: re-check GitHub to prevent race if another PE claimed it
+            // between our cache load and now
+            var freshTask = _taskManager.FindByIssueNumber(task.IssueNumber.Value);
+            if (freshTask is not null && freshTask.Status is "InProgress"
+                && !string.Equals(freshTask.AssignedTo, Identity.DisplayName, StringComparison.OrdinalIgnoreCase))
+            {
+                Logger.LogInformation(
+                    "Task #{IssueNumber} already in-progress by {Other}, skipping",
+                    task.IssueNumber, freshTask.AssignedTo);
                 return;
             }
 

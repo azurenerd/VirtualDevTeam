@@ -267,6 +267,16 @@ internal sealed partial class EngineeringTaskIssueManager
         _cache.FirstOrDefault(t => string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
+    /// Find the first non-done task assigned to a specific engineer.
+    /// Used by worker PEs to discover tasks assigned to them by the leader.
+    /// </summary>
+    public EngineeringTask? FindAssignedTo(string engineerName) =>
+        _cache.FirstOrDefault(t =>
+            !IsTaskDone(t)
+            && t.Status is "Assigned" or "InProgress"
+            && string.Equals(t.AssignedTo, engineerName, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
     /// Close any remaining open engineering task issues. Called during pipeline completion
     /// to ensure no task issues are left open (catches edge cases where MarkDoneAsync
     /// wasn't called or GitHub auto-close via "Closes #N" didn't fire).
