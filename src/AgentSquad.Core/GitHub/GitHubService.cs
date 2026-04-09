@@ -1126,4 +1126,26 @@ public class GitHubService : IGitHubService
         var colonIndex = title.IndexOf(':');
         return colonIndex > 0 ? title[..colonIndex].Trim() : null;
     }
+
+    public async Task<IReadOnlyList<string>> GetRepositoryTreeAsync(string branch = "main", CancellationToken ct = default)
+    {
+        try
+        {
+            var branchRef = await _client.Git.Reference.Get(_owner, _repo, $"heads/{branch}");
+            var commitSha = branchRef.Object.Sha;
+            var commit = await _client.Git.Commit.Get(_owner, _repo, commitSha);
+            var tree = await _client.Git.Tree.GetRecursive(_owner, _repo, commit.Tree.Sha);
+
+            return tree.Tree
+                .Where(item => item.Type.Value == TreeType.Blob)
+                .Select(item => item.Path)
+                .OrderBy(p => p)
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to get repository tree for branch {Branch}", branch);
+            return Array.Empty<string>();
+        }
+    }
 }

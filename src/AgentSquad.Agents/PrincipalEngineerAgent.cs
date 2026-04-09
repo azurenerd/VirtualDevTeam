@@ -349,6 +349,9 @@ public class PrincipalEngineerAgent : EngineerAgentBase
         var issuesSummary = string.Join("\n\n", enhancementIssues.Select(i =>
             $"### Issue #{i.Number}: {i.Title}\n{i.Body}"));
 
+        // Fetch repo structure so PE can include file path guidance in tasks
+        var repoStructure = await GetRepoStructureForContextAsync(ct);
+
         var kernel = Models.GetKernel(Identity.ModelTier, Identity.Id);
         var chat = kernel.GetRequiredService<IChatCompletionService>();
 
@@ -362,23 +365,44 @@ public class PrincipalEngineerAgent : EngineerAgentBase
             "2. Map each Issue to one or more engineering tasks\n" +
             "3. Classify each task by complexity (High/Medium/Low)\n" +
             "4. Identify dependencies between tasks\n" +
-            "5. Reference the source GitHub Issue number for each task\n\n" +
+            "5. Reference the source GitHub Issue number for each task\n" +
+            "6. For each task, specify which files to create/modify and the namespace to use\n\n" +
+            "CRITICAL: Review the existing repository structure carefully. " +
+            "Tasks MUST reference existing files when appropriate (modify, not recreate). " +
+            "New files should follow the existing directory structure and naming conventions. " +
+            "Each task should specify exact file paths and namespaces to prevent engineers from " +
+            "creating duplicate or conflicting code.\n\n" +
             "Task complexity mapping:\n" +
             "- **High**: Complex tasks requiring deep expertise → Principal Engineer\n" +
             "- **Medium**: Moderate tasks → Senior Engineers\n" +
             "- **Low**: Straightforward tasks → Junior Engineers");
 
-        history.AddUserMessage(
-            $"## PM Specification\n{pmSpec}\n\n" +
-            $"## Architecture Document\n{architectureDoc}\n\n" +
-            $"## GitHub Issues (User Stories)\n{issuesSummary}\n\n" +
+        var userPromptBuilder = new System.Text.StringBuilder();
+        userPromptBuilder.AppendLine($"## PM Specification\n{pmSpec}\n");
+        userPromptBuilder.AppendLine($"## Architecture Document\n{architectureDoc}\n");
+
+        if (!string.IsNullOrEmpty(repoStructure))
+        {
+            userPromptBuilder.AppendLine("## Existing Repository Structure (main branch)");
+            userPromptBuilder.AppendLine(repoStructure);
+            userPromptBuilder.AppendLine();
+        }
+
+        userPromptBuilder.AppendLine($"## GitHub Issues (User Stories)\n{issuesSummary}\n");
+        userPromptBuilder.AppendLine(
             "Create an engineering plan mapping these Issues to tasks. " +
             "Output ONLY structured lines in this format:\n" +
-            "TASK|<ID>|<IssueNumber>|<Name>|<Description>|<Complexity>|<Dependencies or NONE>\n\n" +
+            "TASK|<ID>|<IssueNumber>|<Name>|<Description>|<Complexity>|<Dependencies or NONE>|<FilePlan>\n\n" +
+            "The FilePlan field should contain semicolon-separated file operations:\n" +
+            "  CREATE:path/to/file.ext(namespace);MODIFY:path/to/existing.ext;USE:ExistingType(namespace)\n\n" +
             "Example:\n" +
-            "TASK|T1|42|Set up project structure|Create solution, projects, and folder layout|Low|NONE\n" +
-            "TASK|T2|43|Implement auth module|Build JWT authentication with refresh tokens|High|T1\n\n" +
+            "TASK|T1|42|Set up project structure|Create solution, projects, and folder layout|Low|NONE|" +
+            "CREATE:src/Models/AppConfig.cs(MyApp.Models);CREATE:src/Program.cs(MyApp)\n" +
+            "TASK|T2|43|Implement auth module|Build JWT authentication with refresh tokens|High|T1|" +
+            "CREATE:src/Services/AuthService.cs(MyApp.Services);MODIFY:src/Program.cs;USE:User(MyApp.Models)\n\n" +
             "Only output TASK lines, nothing else.");
+
+        history.AddUserMessage(userPromptBuilder.ToString());
 
         var response = await chat.GetChatMessageContentAsync(
             history, cancellationToken: ct);
@@ -403,11 +427,15 @@ public class PrincipalEngineerAgent : EngineerAgentBase
 
             int.TryParse(parts[2].Trim().TrimStart('#'), out var issueNum);
 
+            // Parse optional FilePlan field (8th field) for file/namespace guidance
+            var filePlan = parts.Length >= 8 ? parts[7].Trim() : "";
+
             parsedTasks.Add(new EngineeringTask
             {
                 Id = parts[1].Trim(),
                 Name = parts[3].Trim(),
-                Description = parts[4].Trim(),
+                Description = parts[4].Trim() + (string.IsNullOrEmpty(filePlan) ? "" :
+                    $"\n\n### File Plan\n{FormatFilePlan(filePlan)}"),
                 Complexity = NormalizeComplexity(parts[5].Trim()),
                 Dependencies = deps,
                 ParentIssueNumber = issueNum > 0 ? issueNum : null
@@ -2132,12 +2160,22 @@ public class PrincipalEngineerAgent : EngineerAgentBase
             // Read actual code files from the PR branch
             var codeContext = await PrWorkflow.GetPRCodeContextAsync(pr.Number, pr.HeadBranch, ct: ct);
 
+            // Tier 4: Get repo structure for duplicate detection during review
+            var repoStructure = await GetRepoStructureForContextAsync(ct);
+
             var history = new ChatHistory();
             history.AddSystemMessage(
                 "You are a Principal Engineer doing a technical code review.\n\n" +
                 "SCOPE: This PR is ONE task. Review the ACTUAL CODE against its stated scope.\n\n" +
                 "CHECK: architecture compliance, implementation completeness, code quality, " +
                 "bugs/logic errors, missing validation, test coverage.\n\n" +
+                "DUPLICATE/CONFLICT CHECKS (critical for multi-agent projects):\n" +
+                "- Does this PR create types/classes that ALREADY EXIST in the main branch file listing?\n" +
+                "- Does this PR use the CORRECT namespace consistent with existing code structure?\n" +
+                "- Should any new files instead be MODIFICATIONS to existing files?\n" +
+                "- Are there naming conflicts (e.g., a class named 'Task' that collides with System.Threading.Tasks.Task)?\n" +
+                "- Do all using/import statements reference namespaces that actually exist?\n" +
+                "If you detect duplication or namespace conflicts, mark as REQUEST_CHANGES with specific fix instructions.\n\n" +
                 "CRITICAL RULE: NEVER mention truncated code, incomplete code display, or " +
                 "inability to see full implementations. If you cannot see a method body, " +
                 "ASSUME it is correctly implemented. Do NOT request changes based on code you " +
@@ -2155,13 +2193,23 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 "WRONG: '2. **Dashboard.razor** — helper methods truncated, cannot verify'\n" +
                 "RIGHT: '1. **AuthController.cs** — missing null check on user parameter'");
 
-            history.AddUserMessage(
-                $"## Architecture\n{architectureDoc}\n\n" +
-                $"## PM Specification\n{pmSpec}\n\n" +
-                $"## Engineering Plan\n{engineeringPlan}\n\n" +
-                issueContext +
-                $"## Pull Request #{pr.Number}: {pr.Title}\n{pr.Body}\n\n" +
-                codeContext);
+            var reviewContextBuilder = new System.Text.StringBuilder();
+            reviewContextBuilder.AppendLine($"## Architecture\n{architectureDoc}\n");
+            reviewContextBuilder.AppendLine($"## PM Specification\n{pmSpec}\n");
+            reviewContextBuilder.AppendLine($"## Engineering Plan\n{engineeringPlan}\n");
+
+            if (!string.IsNullOrEmpty(repoStructure))
+            {
+                reviewContextBuilder.AppendLine("## Existing Repository Structure (main branch)");
+                reviewContextBuilder.AppendLine(repoStructure);
+                reviewContextBuilder.AppendLine();
+            }
+
+            reviewContextBuilder.Append(issueContext);
+            reviewContextBuilder.AppendLine($"## Pull Request #{pr.Number}: {pr.Title}\n{pr.Body}\n");
+            reviewContextBuilder.Append(codeContext);
+
+            history.AddUserMessage(reviewContextBuilder.ToString());
 
             var response = await chat.GetChatMessageContentAsync(history, cancellationToken: ct);
 
@@ -2410,6 +2458,40 @@ public class PrincipalEngineerAgent : EngineerAgentBase
             "low" or "simple" or "easy" => "Low",
             _ => "Medium"
         };
+    }
+
+    /// <summary>
+    /// Formats a semicolon-separated file plan string into readable markdown.
+    /// Input: "CREATE:src/Services/Auth.cs(MyApp.Services);MODIFY:src/Program.cs;USE:User(MyApp.Models)"
+    /// Output: markdown bullet list with file operations
+    /// </summary>
+    private static string FormatFilePlan(string filePlan)
+    {
+        if (string.IsNullOrWhiteSpace(filePlan)) return "";
+
+        var sb = new System.Text.StringBuilder();
+        var ops = filePlan.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        foreach (var op in ops)
+        {
+            var colonIdx = op.IndexOf(':');
+            if (colonIdx <= 0) continue;
+
+            var action = op[..colonIdx].Trim().ToUpperInvariant();
+            var detail = op[(colonIdx + 1)..].Trim();
+
+            var icon = action switch
+            {
+                "CREATE" => "➕ **Create:**",
+                "MODIFY" => "✏️ **Modify:**",
+                "USE" => "📎 **Reference (do not recreate):**",
+                _ => $"**{action}:**"
+            };
+
+            sb.AppendLine($"- {icon} `{detail}`");
+        }
+
+        return sb.ToString();
     }
 
     #endregion

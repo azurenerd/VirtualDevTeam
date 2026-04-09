@@ -74,6 +74,7 @@ AgentSquad is a multi-agent AI system where 7 specialized agent roles collaborat
 - **REQ-ROLE-002a**: Senior and Junior engineers share identical workflow logic. They differ only in AI model tier, role display name, and minor behavioral overrides (Senior does self-review, Junior truncates context for budget models).
 - **REQ-ROLE-002b**: All three engineer types (Senior, Junior, PE) extend `EngineerAgentBase` which contains shared logic for issue-driven work, rework handling, clarification loops, and message subscriptions.
 - **REQ-ROLE-002c**: The PE has additional orchestration capabilities (planning, assignment, review, resource evaluation) on top of the base engineer functionality.
+- **REQ-ROLE-002d**: Multiple PE agents can run simultaneously via the engineer pool. The lowest-rank online PE is the "leader" (handles orchestration-only tasks); additional PEs are "workers" who pick up tasks and review PRs but do not plan, assign, or evaluate resources. See §7 for details.
 
 **Scenario: Engineer Creates PR from Issue**
 1. PE assigns GitHub Issue #42 to "Senior Engineer 1" by updating issue title and sending `IssueAssignmentMessage`
@@ -248,20 +249,22 @@ Each phase has gate conditions that must be met before advancing:
 
 ### REQ-PE-001: Two-Phase Loop
 
-- **REQ-PE-001a**: Phase 1: Wait for Architecture.md + PlanningCompleteMessage + Enhancement Issues → create engineering-task Issues in GitHub.
+- **REQ-PE-001a**: Phase 1: Wait for Architecture.md + PlanningCompleteMessage + Enhancement Issues → create engineering-task Issues in GitHub. **(Leader only)**
 - **REQ-PE-001b**: Phase 2: Continuous development loop with priorities: rework → assignment → own tasks → review → resource evaluation.
 - **REQ-PE-001c**: On restart, if engineering-task Issues already exist, restore task backlog from them and skip to Phase 2.
 - **REQ-PE-001d**: PE can begin working on tasks (Phase 2) even if no other engineers have been spawned yet. It assigns High-complexity tasks to itself and starts immediately.
+- **REQ-PE-001e**: Non-leader PEs entering Phase 1 sync task state from existing GitHub engineering-task issues rather than creating the plan. They wait for the leader to create tasks before entering Phase 2.
 
 ### REQ-PE-002: Engineering Task Issue Creation
 
 - **REQ-PE-002a**: PE reads PMSpec.md, Architecture.md, and ALL Enhancement-labeled GitHub Issues.
 - **REQ-PE-002b**: AI maps each Enhancement Issue to engineering tasks with: ID, parent Issue number, name, description, complexity (High/Medium/Low), dependencies.
 - **REQ-PE-002c**: Each engineering task is created as a GitHub Issue labeled `engineering-task`. The issue body contains structured metadata: parent issue reference, complexity, dependencies (as issue numbers), and detailed description.
-- **REQ-PE-002d**: Task complexity mapping: High → PE, Medium → Senior Engineers, Low → Junior Engineers.
+- **REQ-PE-002d**: Task complexity mapping: High → PE, Medium → Senior Engineers, Low → Junior Engineers. When the pool is PE-only (SE=0, JE=0), all complexity levels are handled by PE agents.
 - **REQ-PE-002e**: Engineering-task issues link back to their parent Enhancement issue via `Parent: #N` in the body. This replaces the old EngineeringPlan.md file — there is no markdown plan file.
 - **REQ-PE-002f**: Dependencies between tasks are tracked as issue numbers in the body (e.g., `Dependencies: #106, #107`). A task is assignable only when all dependency issues are closed.
 - **REQ-PE-002g**: Task status is tracked by issue state: open = pending/in-progress, closed = done. The `in-progress` label indicates active work.
+- **REQ-PE-002h**: Only the leader PE creates engineering-task issues. This is idempotent — if issues already exist (e.g., from a prior run), the leader loads them instead of recreating.
 
 **Scenario: PE Creates Engineering Tasks as Issues**
 1. PE receives PlanningCompleteMessage + Architecture.md is ready
@@ -273,11 +276,12 @@ Each phase has gate conditions that must be met before advancing:
 
 ### REQ-PE-003: Task Assignment
 
-- **REQ-PE-003a**: PE checks registered engineers via `AgentRegistry` (not TeamMembers.md).
-- **REQ-PE-003b**: For each free engineer: find next unassigned task matching their complexity tier.
+- **REQ-PE-003a**: PE checks registered engineers via `AgentRegistry` (not TeamMembers.md). **(Leader only)**
+- **REQ-PE-003b**: For each free engineer (including non-leader PEs, SEs, and JEs): find next unassigned task matching their complexity tier.
 - **REQ-PE-003c**: Assignment process: update GitHub Issue title to `{EngineerName}: {TaskName}` → send `IssueAssignmentMessage` to engineer's `Identity.Id`.
 - **REQ-PE-003d**: Track assignments in `_agentAssignments` dictionary keyed by agent `Identity.Id` (not DisplayName).
 - **REQ-PE-003e**: When an assignment's Issue is closed (completed), clear the assignment so the engineer can receive new work.
+- **REQ-PE-003f**: Non-leader PEs are treated as assignable workers. The leader assigns tasks to them using the same `IssueAssignmentMessage` mechanism, with PE-appropriate complexity preferences (High → Medium → Low).
 
 **Scenario: PE Assigns Task to Engineer**
 1. PE loops through registered engineers → finds Senior Engineer 1 has no active assignment
@@ -288,25 +292,46 @@ Each phase has gate conditions that must be met before advancing:
 
 ### REQ-PE-004: Own Task Implementation
 
-- **REQ-PE-004a**: PE works on High-complexity tasks itself.
+- **REQ-PE-004a**: PE works on High-complexity tasks itself. Non-leader PEs work on any complexity.
 - **REQ-PE-004b**: PE assigns the Issue to itself (updates title with own DisplayName).
 - **REQ-PE-004c**: PE creates PR with detailed AI-generated description including: summary, acceptance criteria, implementation notes, testing approach.
 - **REQ-PE-004d**: PR body includes `Closes #{IssueNumber}` to auto-close the Issue on merge.
 - **REQ-PE-004e**: PE commits implementation and marks PR ready-for-review.
+- **REQ-PE-004f**: Non-leader PEs skip the "defer to spawning engineers" guard — they always seek work immediately. Only the leader PE defers non-High tasks during the spawn cooldown window.
 
 ### REQ-PE-005: PR Review (Technical Quality)
 
-- **REQ-PE-005a**: PE subscribes to `ReviewRequestMessage` and queues PRs for review.
-- **REQ-PE-005b**: PE skips reviewing its own PRs.
+- **REQ-PE-005a**: PE subscribes to `ReviewRequestMessage` and queues PRs for review. **(All PEs)**
+- **REQ-PE-005b**: PE skips reviewing its own PRs. PR title matching uses `{DisplayName}:` (with colon delimiter) to prevent "PrincipalEngineer" from matching "PrincipalEngineer 1:" PRs.
 - **REQ-PE-005c**: PE reviews code PRs against architecture and engineering-task issue context — scoped to the PR's task, NOT the full project.
 - **REQ-PE-005d**: Review evaluates: architecture patterns, implementation completeness for THIS task, code quality, error handling, test coverage.
 - **REQ-PE-005e**: If changes requested, PE sends `ChangesRequestedMessage` with feedback details.
+- **REQ-PE-005f**: Cross-PE review dedup: before reviewing a PR, check GitHub comments for any `[PrincipalEngineer` prefix. If any PE has already reviewed and no new rework commits exist, skip the review. This prevents multiple PEs from reviewing the same PR redundantly.
 
 ### REQ-PE-006: Resource Evaluation
 
-- **REQ-PE-006a**: PE evaluates if more engineers are needed based on parallelizable pending tasks vs. available engineers.
-- **REQ-PE-006b**: PE sends `ResourceRequestMessage` when parallelizable tasks significantly exceed available engineers.
-- **REQ-PE-006c**: Requested role matches task complexity: Low tasks → Junior, Medium tasks → Senior.
+- **REQ-PE-006a**: PE evaluates if more workers are needed based on parallelizable pending tasks vs. available workers. **(Leader only)**
+- **REQ-PE-006b**: PE sends `ResourceRequestMessage` when parallelizable tasks significantly exceed available workers.
+- **REQ-PE-006c**: Resource requests prefer PE pool first (PEs produce more robust code), falling back to SE pool then JE pool when PE pool is exhausted. The old complexity-based role selection (Low→Junior, Medium→Senior) is replaced by pool-priority ordering.
+- **REQ-PE-006d**: Pool capacity is checked against `EngineerPoolConfig` — the PE estimates remaining capacity by comparing current agent count per role against configured pool limits.
+
+### REQ-PE-007: Multi-PE Leader Election
+
+- **REQ-PE-007a**: Each PE has a `Rank` (integer, 0-based). The core PE spawned at startup has rank 0. Additional PEs from the pool have rank 1, 2, etc.
+- **REQ-PE-007b**: The leader is the lowest-rank online PE (status: Working, Idle, Online, or Initializing) as determined by querying `AgentRegistry.GetAgentsByRole(PrincipalEngineer)`.
+- **REQ-PE-007c**: Leader election is evaluated each loop iteration — it is dynamic. If the leader goes offline, the next-lowest-rank PE becomes leader automatically.
+- **REQ-PE-007d**: Leader-only responsibilities: create engineering plan (Phase 1), create integration PR, check all tasks complete, evaluate resource needs, assign tasks to other engineers, recover orphaned assignments.
+- **REQ-PE-007e**: Any PE can: pick up and implement tasks, review PRs, handle rework on own PRs, recover own in-progress PRs, process own rework feedback.
+- **REQ-PE-007f**: If no PEs are online in the registry (edge case during initialization), the current PE considers itself the leader.
+
+### REQ-PE-008: Engineer Pool Configuration
+
+- **REQ-PE-008a**: `EngineerPoolConfig` defines per-role pool limits: `PrincipalEngineerPool` (default 2), `SeniorEngineerPool` (default 0), `JuniorEngineerPool` (default 0).
+- **REQ-PE-008b**: Pool sizes define how many *additional* agents of each role can be dynamically spawned beyond core agents. The core PE (rank 0) is always spawned — the PE pool defines how many extra PEs can be added.
+- **REQ-PE-008c**: `MaxAdditionalEngineers` is a computed property (sum of all pool sizes) for backward compatibility.
+- **REQ-PE-008d**: Default configuration (PE=2, SE=0, JE=0) means only additional PE agents are spawned — no Senior or Junior engineers. This is the recommended configuration because PE-tier prompts produce more robust code.
+- **REQ-PE-008e**: Alternative configuration example: PE=0, SE=2, JE=1 allows up to 2 Senior Engineers and 1 Junior Engineer to be spawned (classic behavior), with no additional PEs.
+- **REQ-PE-008f**: The `AgentSpawnManager` enforces per-role limits independently. It tracks `_spawnedPEs`, `_spawnedSEs`, `_spawnedJEs` separately and checks the correct pool for each spawn request.
 
 ---
 

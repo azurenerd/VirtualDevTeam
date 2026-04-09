@@ -14,7 +14,7 @@ public class CopilotCliChatCompletionServiceTests
 
         var prompt = CopilotCliChatCompletionService.FormatChatHistoryAsPrompt(history);
 
-        Assert.Contains("[CRITICAL DIRECTIVE", prompt);
+        Assert.Contains("[OUTPUT FORMAT INSTRUCTIONS]", prompt);
         Assert.Contains("Write a hello world program.", prompt);
     }
 
@@ -58,7 +58,7 @@ public class CopilotCliChatCompletionServiceTests
     {
         var history = new ChatHistory();
         var prompt = CopilotCliChatCompletionService.FormatChatHistoryAsPrompt(history);
-        Assert.Contains("[CRITICAL DIRECTIVE", prompt);
+        Assert.Contains("[OUTPUT FORMAT INSTRUCTIONS]", prompt);
     }
 
     [Fact]

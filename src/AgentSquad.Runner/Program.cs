@@ -40,13 +40,15 @@ builder.Services.AddSingleton<ProjectFileManager>(sp =>
 });
 
 // GitHub workflows
+builder.Services.AddSingleton<ConflictDetector>();
 builder.Services.AddSingleton<PullRequestWorkflow>(sp =>
 {
     var config = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<AgentSquadConfig>>().Value;
     return new PullRequestWorkflow(
         sp.GetRequiredService<IGitHubService>(),
         sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<PullRequestWorkflow>>(),
-        config.Project.DefaultBranch);
+        config.Project.DefaultBranch,
+        sp.GetRequiredService<ConflictDetector>());
 });
 builder.Services.AddSingleton<IssueWorkflow>();
 builder.Services.AddSingleton<ConflictResolver>();

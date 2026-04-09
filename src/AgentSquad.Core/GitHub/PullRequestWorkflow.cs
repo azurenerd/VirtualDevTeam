@@ -34,14 +34,18 @@ public partial class PullRequestWorkflow
         public const string LowComplexity = "complexity-low";
     }
 
+    private readonly ConflictDetector? _conflictDetector;
+
     public PullRequestWorkflow(
         IGitHubService github,
         ILogger<PullRequestWorkflow> logger,
-        string defaultBranch = "main")
+        string defaultBranch = "main",
+        ConflictDetector? conflictDetector = null)
     {
         _github = github ?? throw new ArgumentNullException(nameof(github));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _defaultBranch = defaultBranch;
+        _conflictDetector = conflictDetector;
     }
 
     /// <summary>
@@ -814,6 +818,28 @@ public partial class PullRequestWorkflow
         _logger.LogInformation(
             "Committing {Count} code files to PR #{Number} branch {Branch}",
             files.Count, prNumber, pr.HeadBranch);
+
+        // Run conflict detection before committing (Tier 3: pre-commit warnings)
+        if (_conflictDetector is not null)
+        {
+            try
+            {
+                var fileTuplesForCheck = files.Select(f => (f.Path, f.Content)).ToList();
+                var conflicts = await _conflictDetector.DetectConflictsAsync(fileTuplesForCheck.AsReadOnly(), ct);
+                if (conflicts.Count > 0)
+                {
+                    var warningComment = "## ⚠️ Conflict Detection Warnings\n\n" +
+                        string.Join("\n\n", conflicts) +
+                        "\n\n_These warnings were generated automatically. Please review for potential duplicate code._";
+                    await _github.AddPullRequestCommentAsync(prNumber, warningComment, ct);
+                    _logger.LogWarning("Detected {Count} potential conflicts for PR #{Number}", conflicts.Count, prNumber);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Conflict detection failed for PR #{Number}, proceeding with commit", prNumber);
+            }
+        }
 
         // Convert to the tuple format expected by BatchCommitFilesAsync
         var fileTuples = files

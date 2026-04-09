@@ -102,6 +102,14 @@ public interface IGitHubService
     /// </summary>
     Task<bool> AddIssueDependencyAsync(int blockedIssueNumber, long blockingIssueGitHubId, CancellationToken ct = default);
 
+    // Repository Structure
+    /// <summary>
+    /// Gets the full file tree of the repository from a branch using the Git Trees API (recursive).
+    /// Returns a list of file paths (blobs only, no directories). Used to give agents
+    /// visibility into the existing repo structure before they create new files.
+    /// </summary>
+    Task<IReadOnlyList<string>> GetRepositoryTreeAsync(string branch = "main", CancellationToken ct = default);
+
     // Rate Limiting
     Task<GitHubRateLimitInfo> GetRateLimitAsync(CancellationToken ct = default);
 }

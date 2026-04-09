@@ -40,6 +40,9 @@ public abstract class EngineerAgentBase : AgentBase
     private readonly HashSet<int> _forceApprovalSentPrs = new();
     // Per-PR CLI session IDs — resumes the session used to create the PR during rework
     private readonly Dictionary<int, string> _prSessionIds = new();
+    // Cached repo tree for giving agents visibility into existing code (Tier 1: repo structure awareness)
+    private IReadOnlyList<string>? _repoTreeCache;
+    private DateTime _repoTreeCacheExpiry = DateTime.MinValue;
     protected int? CurrentIssueNumber;
     protected int? CurrentPrNumber;
 
@@ -547,6 +550,21 @@ public abstract class EngineerAgentBase : AgentBase
             var contextBuilder = new System.Text.StringBuilder();
             contextBuilder.AppendLine($"## PM Specification\n{pmSpecDoc}\n");
             contextBuilder.AppendLine($"## Architecture\n{architectureDoc}\n");
+
+            // Tier 1: Include existing repo structure so engineer knows what already exists
+            var repoStructure = await GetRepoStructureForContextAsync(ct);
+            if (!string.IsNullOrEmpty(repoStructure))
+            {
+                contextBuilder.AppendLine("## Existing Repository Structure (main branch)");
+                contextBuilder.AppendLine(repoStructure);
+                contextBuilder.AppendLine();
+                contextBuilder.AppendLine("IMPORTANT: The repository already has the files listed above. " +
+                    "Do NOT create files that duplicate existing functionality. " +
+                    "Place new files in the appropriate existing directories. " +
+                    "Use namespaces consistent with existing code. " +
+                    "If you need to add functionality that relates to an existing file, MODIFY that file instead of creating a new one.\n");
+            }
+
             contextBuilder.AppendLine($"## Issue #{issue.Number}: {issue.Title}\n{issue.Body}\n");
             contextBuilder.AppendLine($"## PR Description\n{pr.Body}\n");
 
@@ -1487,6 +1505,31 @@ public abstract class EngineerAgentBase : AgentBase
     /// <summary>Get Architecture content. Junior overrides to truncate for budget models.</summary>
     protected virtual Task<string> GetArchitectureForContextAsync(CancellationToken ct)
         => ProjectFiles.GetArchitectureDocAsync(ct);
+
+    /// <summary>
+    /// Get the repository's file tree from main branch (cached for 5 minutes).
+    /// Used to give engineers visibility into existing code structure before they create files.
+    /// </summary>
+    protected async Task<string> GetRepoStructureForContextAsync(CancellationToken ct)
+    {
+        try
+        {
+            if (_repoTreeCache is null || DateTime.UtcNow >= _repoTreeCacheExpiry)
+            {
+                _repoTreeCache = await GitHub.GetRepositoryTreeAsync("main", ct);
+                _repoTreeCacheExpiry = DateTime.UtcNow.AddMinutes(5);
+            }
+
+            if (_repoTreeCache.Count == 0) return "";
+
+            return ConflictDetector.FormatTreeForPrompt(_repoTreeCache);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to fetch repo tree for context");
+            return "";
+        }
+    }
 
     #endregion
 
