@@ -618,13 +618,13 @@ else if (_config is not null)
 }
 
 @* ═══════════════════════════════════════════════════════════════════
-   CONFIRMATION MODAL — backdrop and dialog are siblings so textarea
-   clicks never bubble to the backdrop's close handler
+   CONFIRMATION MODAL — no click-to-dismiss on backdrop; user must
+   use Cancel or ✕ to close (correct UX for destructive actions)
    ═══════════════════════════════════════════════════════════════════ *@
 @if (_showModal)
 {
     <div class="modal-container">
-        <div class="modal-backdrop" @onclick="HideCleanupModal"></div>
+        <div class="modal-backdrop"></div>
         <div class="modal-dialog">
             <div class="modal-header modal-header-danger">
                 <h3 class="modal-title">⚠️ Confirm Repository Cleanup</h3>
