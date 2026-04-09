@@ -412,15 +412,20 @@ public class ProgramManagerAgent : AgentBase
                 var name = columns[0].Trim();
                 var roleText = columns[1].Trim();
 
-                // Only restore Senior/Junior engineers — core agents are already spawned by the worker
+                // Restore Senior/Junior engineers + additional Principal Engineers from pool
                 AgentRole? role = roleText switch
                 {
+                    "PrincipalEngineer" => AgentRole.PrincipalEngineer,
                     "SeniorEngineer" => AgentRole.SeniorEngineer,
                     "JuniorEngineer" => AgentRole.JuniorEngineer,
                     _ => null
                 };
 
                 if (role is null)
+                    continue;
+
+                // Skip the core PE (rank 0) — it's already spawned by the worker
+                if (role == AgentRole.PrincipalEngineer && name == "PrincipalEngineer")
                     continue;
 
                 // Check if an agent with this name is already running

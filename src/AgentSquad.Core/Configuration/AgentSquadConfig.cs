@@ -70,7 +70,24 @@ public class AgentConfig
 
 public class LimitsConfig
 {
-    public int MaxAdditionalEngineers { get; set; } = 3;
+    /// <summary>
+    /// Per-role engineer pool configuration. Controls how many additional engineers
+    /// of each type can be spawned. The original PE is always created as a core agent;
+    /// the pool config only governs ADDITIONAL engineers.
+    /// Default: 2 PEs, 0 SEs, 0 JEs — only additional Principal Engineers are spawned.
+    /// </summary>
+    public EngineerPoolConfig EngineerPool { get; set; } = new();
+
+    /// <summary>
+    /// Legacy property. Now computed from EngineerPool totals.
+    /// Setting this directly is ignored if EngineerPool is explicitly configured.
+    /// </summary>
+    public int MaxAdditionalEngineers
+    {
+        get => EngineerPool.PrincipalEngineerPool + EngineerPool.SeniorEngineerPool + EngineerPool.JuniorEngineerPool;
+        set { } // no-op for backward compat deserialization
+    }
+
     public int MaxDailyTokenBudget { get; set; } = 1_000_000;
     public int GitHubPollIntervalSeconds { get; set; } = 30;
     public int AgentTimeoutMinutes { get; set; } = 60;
@@ -99,6 +116,33 @@ public class LimitsConfig
     /// requests a new engineer from the PM.
     /// </summary>
     public int MinParallelizableTasksForNewEngineer { get; set; } = 3;
+}
+
+/// <summary>
+/// Controls the pool of additional engineers that can be spawned to parallelize work.
+/// The original PrincipalEngineer is always created as a core agent (rank 0).
+/// Additional engineers are spawned on demand by the PE when parallelizable tasks exist.
+/// </summary>
+public class EngineerPoolConfig
+{
+    /// <summary>
+    /// Maximum additional Principal Engineers (premium tier, full review + implementation capability).
+    /// These act as worker PEs — the original PE (rank 0) remains the leader.
+    /// Default: 2. Set to 0 to disable additional PE spawning.
+    /// </summary>
+    public int PrincipalEngineerPool { get; set; } = 2;
+
+    /// <summary>
+    /// Maximum additional Senior Engineers (standard tier, self-review capability).
+    /// Default: 0. Set > 0 to allow SE spawning alongside or instead of PEs.
+    /// </summary>
+    public int SeniorEngineerPool { get; set; } = 0;
+
+    /// <summary>
+    /// Maximum additional Junior Engineers (budget/local tier, basic implementation).
+    /// Default: 0. Set > 0 to allow JE spawning alongside or instead of PEs.
+    /// </summary>
+    public int JuniorEngineerPool { get; set; } = 0;
 }
 
 public class DashboardConfig

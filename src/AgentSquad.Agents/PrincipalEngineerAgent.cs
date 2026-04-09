@@ -42,6 +42,31 @@ public class PrincipalEngineerAgent : EngineerAgentBase
     private DateTime _lastReviewDiscovery = DateTime.MinValue;
     private static readonly TimeSpan ReviewDiscoveryInterval = TimeSpan.FromMinutes(2);
 
+    /// <summary>
+    /// Determines if this PE instance is the leader (responsible for orchestration-only tasks).
+    /// The leader is the lowest-rank online PE. If no PEs are online, falls back to this instance.
+    /// </summary>
+    private bool IsLeader()
+    {
+        var onlinePEs = _registry.GetAgentsByRole(AgentRole.PrincipalEngineer)
+            .Where(a => a.Status is AgentStatus.Working or AgentStatus.Idle or AgentStatus.Online or AgentStatus.Initializing)
+            .OrderBy(a => a.Identity.Rank)
+            .ToList();
+        return onlinePEs.Count == 0 || onlinePEs[0].Identity.Id == Identity.Id;
+    }
+
+    /// <summary>
+    /// Checks if any PE agent has already reviewed a given PR by looking for
+    /// [PrincipalEngineer*] review comments on GitHub.
+    /// </summary>
+    private async Task<bool> HasAnyPeReviewedAsync(int prNumber, CancellationToken ct)
+    {
+        var comments = await GitHub.GetPullRequestCommentsAsync(prNumber, ct);
+        return comments.Any(c =>
+            c.Body.Contains("[PrincipalEngineer]", StringComparison.OrdinalIgnoreCase) ||
+            c.Body.Contains("[PrincipalEngineer ", StringComparison.OrdinalIgnoreCase));
+    }
+
     public PrincipalEngineerAgent(
         AgentIdentity identity,
         IMessageBus messageBus,
@@ -116,12 +141,27 @@ public class PrincipalEngineerAgent : EngineerAgentBase
         {
             try
             {
+                var isLeader = IsLeader();
+
                 if (!_planningComplete)
                 {
-                    if (await CheckForArchitectureAsync(ct))
+                    if (isLeader)
                     {
-                        await CreateEngineeringPlanAsync(ct);
-                        _planningComplete = true;
+                        if (await CheckForArchitectureAsync(ct))
+                        {
+                            await CreateEngineeringPlanAsync(ct);
+                            _planningComplete = true;
+                        }
+                    }
+                    else
+                    {
+                        // Non-leader PEs: check if engineering plan issues already exist (created by leader)
+                        if (await CheckForArchitectureAsync(ct))
+                        {
+                            await SyncEngineeringPlanFromGitHubAsync(ct);
+                            if (_taskManager.TotalCount > 0)
+                                _planningComplete = true;
+                        }
                     }
                 }
                 else
@@ -131,8 +171,9 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                     var done = _taskManager.DoneCount;
                     var total = _taskManager.TotalCount;
                     var hasWork = pending > 0 || _reviewQueue.Count > 0 || !_allTasksComplete || !_integrationPrCreated;
+                    var leaderTag = isLeader ? "Leader" : $"Worker#{Identity.Rank}";
                     UpdateStatus(hasWork ? AgentStatus.Working : AgentStatus.Idle,
-                        $"Orchestrating tasks ({done}/{total} done, {pending} pending, {_reviewQueue.Count} PRs queued)");
+                        $"[{leaderTag}] Orchestrating tasks ({done}/{total} done, {pending} pending, {_reviewQueue.Count} PRs queued)");
 
                     // Recovery: re-track and re-broadcast review for our own ready-for-review PRs
                     await RecoverReadyForReviewPRsAsync(ct);
@@ -151,35 +192,38 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                     // Priority 1: Process rework feedback on our own PRs
                     await ProcessOwnReworkAsync(ct);
 
-                    // Check if all tasks are complete → integration phase
-                    if (!_allTasksComplete)
+                    // Check if all tasks are complete → integration phase (LEADER ONLY)
+                    if (!_allTasksComplete && isLeader)
                     {
                         await CheckAllTasksCompleteAsync(ct);
                     }
 
-                    if (_allTasksComplete)
+                    if (_allTasksComplete && isLeader)
                     {
-                        // Integration phase: create integration PR if needed
+                        // Integration phase: create integration PR if needed (LEADER ONLY)
                         if (!_integrationPrCreated)
                         {
                             await CreateIntegrationPRAsync(ct);
                         }
                     }
-                    else
+                    else if (!_allTasksComplete)
                     {
-                        // Priority 1.5: Recover orphaned assigned tasks with no open PRs
-                        await RecoverOrphanedAssignmentsAsync(ct);
-                        // Priority 2: Assign issues to available engineers
-                        await AssignTasksToAvailableEngineersAsync(ct);
-                        // Priority 3: Work on our own tasks (any complexity)
+                        // LEADER ONLY: Recover orphaned assigned tasks with no open PRs
+                        if (isLeader)
+                            await RecoverOrphanedAssignmentsAsync(ct);
+                        // LEADER ONLY: Assign issues to available engineers (SE/JE + non-leader PEs)
+                        if (isLeader)
+                            await AssignTasksToAvailableEngineersAsync(ct);
+                        // ALL PEs: Work on own tasks
                         await WorkOnOwnTasksAsync(ct);
-                        // Priority 3.5: Discover open PRs needing review (in case messages were lost)
+                        // ALL PEs: Discover open PRs needing review
                         await DiscoverUnreviewedEngineerPRsAsync(ct);
-                        // Priority 5: Check if more engineers are needed
-                        await EvaluateResourceNeedsAsync(ct);
+                        // LEADER ONLY: Check if more engineers are needed
+                        if (isLeader)
+                            await EvaluateResourceNeedsAsync(ct);
                     }
 
-                    // Always review PRs — even after all tasks complete (test PRs still need review)
+                    // ALL PEs: Always review PRs — even after all tasks complete
                     await DiscoverUnreviewedEngineerPRsAsync(ct);
                     await ReviewEngineerPRsAsync(ct);
 
@@ -439,6 +483,34 @@ public class PrincipalEngineerAgent : EngineerAgentBase
         UpdateStatus(AgentStatus.Idle, "Engineering plan complete, entering development loop");
     }
 
+    /// <summary>
+    /// Non-leader PEs sync task state from GitHub issues instead of creating the plan.
+    /// They load existing engineering-task issues created by the leader.
+    /// </summary>
+    private async Task SyncEngineeringPlanFromGitHubAsync(CancellationToken ct)
+    {
+        try
+        {
+            await _taskManager.LoadTasksAsync(ct);
+            if (_taskManager.TotalCount > 0)
+            {
+                Logger.LogInformation(
+                    "Non-leader PE synced {Count} tasks from GitHub ({Done} done, {Pending} pending)",
+                    _taskManager.TotalCount, _taskManager.DoneCount, _taskManager.PendingCount);
+                UpdateStatus(AgentStatus.Idle,
+                    $"Synced {_taskManager.TotalCount} tasks, entering development loop");
+            }
+            else
+            {
+                Logger.LogDebug("Non-leader PE: no engineering-task issues found yet, waiting for leader");
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Non-leader PE failed to sync engineering plan from GitHub");
+        }
+    }
+
     #endregion
 
     #region Phase 2 — Continuous Development Loop
@@ -537,6 +609,14 @@ public class PrincipalEngineerAgent : EngineerAgentBase
         try
         {
             var registeredEngineers = new List<EngineerInfo>();
+
+            // Include non-leader PEs as assignable workers
+            foreach (var agent in _registry.GetAgentsByRole(AgentRole.PrincipalEngineer))
+            {
+                if (agent.Identity.Id == Identity.Id) continue; // Skip self (leader)
+                registeredEngineers.Add(new EngineerInfo { AgentId = agent.Identity.Id, Name = agent.Identity.DisplayName, Role = AgentRole.PrincipalEngineer });
+            }
+
             foreach (var agent in _registry.GetAgentsByRole(AgentRole.SeniorEngineer))
                 registeredEngineers.Add(new EngineerInfo { AgentId = agent.Identity.Id, Name = agent.Identity.DisplayName, Role = AgentRole.SeniorEngineer });
             foreach (var agent in _registry.GetAgentsByRole(AgentRole.JuniorEngineer))
@@ -555,6 +635,7 @@ public class PrincipalEngineerAgent : EngineerAgentBase
 
                 var complexityPreferences = engineer.Role switch
                 {
+                    AgentRole.PrincipalEngineer => new[] { "High", "Medium", "Low" },
                     AgentRole.SeniorEngineer => new[] { "Medium", "High", "Low" },
                     AgentRole.JuniorEngineer => new[] { "Low", "Medium" },
                     _ => Array.Empty<string>()
@@ -611,10 +692,11 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 return;
             }
 
-            // Guard: don't grab non-High tasks if we recently requested an engineer spawn
-            // AND engineers actually exist to handle them. If no engineers exist at all,
-            // the PE should start working immediately rather than sitting idle.
-            if (!string.Equals(task.Complexity, "High", StringComparison.OrdinalIgnoreCase)
+            // Non-leader PEs skip the deferral logic — they are workers and should always pick up work.
+            // Leader PE: guard against grabbing non-High tasks if we recently requested an engineer spawn
+            // AND engineers actually exist to handle them.
+            if (IsLeader()
+                && !string.Equals(task.Complexity, "High", StringComparison.OrdinalIgnoreCase)
                 && DateTime.UtcNow - _lastResourceRequestTime < SpawnCooldown)
             {
                 var allEngineers = _registry.GetAgentsByRole(AgentRole.SeniorEngineer)
@@ -633,7 +715,6 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 }
 
                 // Only wait for spawned engineer if at least one engineer is already registered
-                // (meaning the spawn is adding capacity). If zero engineers exist, PE should work.
                 if (allEngineers.Count > 0)
                 {
                     Logger.LogDebug(
@@ -866,8 +947,8 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 if (!pr.Labels.Contains("ready-for-review", StringComparer.OrdinalIgnoreCase))
                     continue;
 
-                // Skip our own PRs
-                if (pr.Title.StartsWith(Identity.DisplayName, StringComparison.OrdinalIgnoreCase))
+                // Skip PRs owned by this PE (use colon delimiter to prevent "PrincipalEngineer" matching "PrincipalEngineer 1:")
+                if (pr.Title.StartsWith($"{Identity.DisplayName}:", StringComparison.OrdinalIgnoreCase))
                     continue;
 
                 // Skip if already reviewed or already queued
@@ -907,6 +988,16 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 if (_reviewedPrNumbers.Contains(prNumber))
                     continue;
 
+                // Cross-PE dedup: if ANY PE has already reviewed this PR, skip it.
+                // This prevents multiple PE agents from reviewing the same PR.
+                if (!_forceApprovalPrs.Contains(prNumber)
+                    && await HasAnyPeReviewedAsync(prNumber, ct)
+                    && !await PrWorkflow.NeedsReviewFromAsync(prNumber, "PrincipalEngineer", ct))
+                {
+                    _reviewedPrNumbers.Add(prNumber);
+                    continue;
+                }
+
                 // Skip NeedsReviewFromAsync for force-approval — there's no new rework,
                 // but we need to approve to unblock the engineer.
                 if (!_forceApprovalPrs.Contains(prNumber)
@@ -920,8 +1011,8 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 if (pr is null)
                     continue;
 
-                // Skip our own PRs
-                if (pr.Title.StartsWith(Identity.DisplayName, StringComparison.OrdinalIgnoreCase))
+                // Skip our own PRs (use colon delimiter for multi-PE correctness)
+                if (pr.Title.StartsWith($"{Identity.DisplayName}:", StringComparison.OrdinalIgnoreCase))
                 {
                     _reviewedPrNumbers.Add(prNumber);
                     continue;
@@ -1507,37 +1598,57 @@ public class PrincipalEngineerAgent : EngineerAgentBase
         {
             if (_resourceRequestPending)
             {
-                var currentEngineers = _registry.GetAgentsByRole(AgentRole.SeniorEngineer).Count()
+                // Check if the spawn request has been fulfilled
+                var currentWorkers = _registry.GetAgentsByRole(AgentRole.PrincipalEngineer).Count()
+                    + _registry.GetAgentsByRole(AgentRole.SeniorEngineer).Count()
                     + _registry.GetAgentsByRole(AgentRole.JuniorEngineer).Count();
-                if (currentEngineers > _agentAssignments.Count)
+                if (currentWorkers > _agentAssignments.Count + 1) // +1 for leader
                     _resourceRequestPending = false;
                 return;
             }
 
             var parallelizable = _taskManager.Tasks.Count(t =>
-                t.Status == "Pending" && _taskManager.AreDependenciesMet(t) && t.Complexity != "High");
+                t.Status == "Pending" && _taskManager.AreDependenciesMet(t));
 
             if (parallelizable < 2)
                 return;
 
-            var freeEngineers = 0;
+            // Count free workers across all roles (including non-leader PEs)
+            var freeWorkers = 0;
+            foreach (var agent in _registry.GetAgentsByRole(AgentRole.PrincipalEngineer))
+                if (agent.Identity.Id != Identity.Id && !_agentAssignments.ContainsKey(agent.Identity.Id))
+                    freeWorkers++;
             foreach (var agent in _registry.GetAgentsByRole(AgentRole.SeniorEngineer))
                 if (!_agentAssignments.ContainsKey(agent.Identity.Id))
-                    freeEngineers++;
+                    freeWorkers++;
             foreach (var agent in _registry.GetAgentsByRole(AgentRole.JuniorEngineer))
                 if (!_agentAssignments.ContainsKey(agent.Identity.Id))
-                    freeEngineers++;
+                    freeWorkers++;
 
-            if (parallelizable > freeEngineers + 1)
+            if (parallelizable > freeWorkers + 1)
             {
-                var neededRole = _taskManager.Tasks.Any(t =>
-                    t.Status == "Pending" && t.Complexity == "Low" && _taskManager.AreDependenciesMet(t))
-                    ? AgentRole.JuniorEngineer
-                    : AgentRole.SeniorEngineer;
+                // Prefer PE pool first (user preference: PEs write more robust code)
+                // Fall back to SE, then JE if PE pool is exhausted
+                var poolConfig = Config.Limits.EngineerPool;
+                var spawnManager = _registry as object; // AgentSpawnManager is separate
+
+                AgentRole neededRole;
+                var peCapacity = poolConfig.PrincipalEngineerPool
+                    - (_registry.GetAgentsByRole(AgentRole.PrincipalEngineer).Count() - 1); // -1 for leader
+                if (peCapacity > 0)
+                {
+                    neededRole = AgentRole.PrincipalEngineer;
+                }
+                else
+                {
+                    var seCapacity = poolConfig.SeniorEngineerPool
+                        - _registry.GetAgentsByRole(AgentRole.SeniorEngineer).Count();
+                    neededRole = seCapacity > 0 ? AgentRole.SeniorEngineer : AgentRole.JuniorEngineer;
+                }
 
                 Logger.LogInformation(
-                    "PE requesting additional {Role}: {Parallelizable} tasks parallelizable, {Free} engineers free",
-                    neededRole, parallelizable, freeEngineers);
+                    "PE requesting additional {Role}: {Parallelizable} tasks parallelizable, {Free} workers free",
+                    neededRole, parallelizable, freeWorkers);
 
                 await MessageBus.PublishAsync(new ResourceRequestMessage
                 {
@@ -1545,7 +1656,7 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                     ToAgentId = "*",
                     MessageType = "ResourceRequest",
                     RequestedRole = neededRole,
-                    Justification = $"{parallelizable} tasks can be worked in parallel but only {freeEngineers} engineers are available",
+                    Justification = $"{parallelizable} tasks can be worked in parallel but only {freeWorkers} workers are available",
                     CurrentTeamSize = _agentAssignments.Count + 1
                 }, ct);
 

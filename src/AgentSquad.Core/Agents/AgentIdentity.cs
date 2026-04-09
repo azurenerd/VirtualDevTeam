@@ -6,6 +6,13 @@ public record AgentIdentity
     public required string DisplayName { get; init; }
     public required AgentRole Role { get; init; }
     public required string ModelTier { get; init; }
+
+    /// <summary>
+    /// Rank within the role pool. 0 = original/leader, 1+ = additional/worker.
+    /// Used for leader election among multiple PrincipalEngineer agents.
+    /// </summary>
+    public int Rank { get; init; } = 0;
+
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public string? AssignedPullRequest { get; set; }
 }

@@ -19,14 +19,17 @@ public class AgentSpawnManager
 
     private readonly object _lock = new();
     private readonly Dictionary<AgentRole, int> _spawnCounts = new();
-    private int _additionalEngineers;
 
-    private static readonly HashSet<AgentRole> CoreRoles = new()
+    // Per-role pool counters for additional (non-core) engineer spawns
+    private int _spawnedPEs;
+    private int _spawnedSEs;
+    private int _spawnedJEs;
+
+    private static readonly HashSet<AgentRole> CoreSingletonRoles = new()
     {
         AgentRole.ProgramManager,
         AgentRole.Researcher,
         AgentRole.Architect,
-        AgentRole.PrincipalEngineer,
         AgentRole.TestEngineer
     };
 
@@ -64,7 +67,7 @@ public class AgentSpawnManager
 
         try
         {
-            var name = GenerateAgentName(role);
+            var (name, rank) = GenerateAgentNameAndRank(role);
             var modelTier = GetModelTier(role);
 
             identity = new AgentIdentity
@@ -72,12 +75,13 @@ public class AgentSpawnManager
                 Id = $"{role.ToString().ToLowerInvariant()}-{Guid.NewGuid():N}",
                 DisplayName = name,
                 Role = role,
-                ModelTier = modelTier
+                ModelTier = modelTier,
+                Rank = rank
             };
 
             _logger.LogInformation(
-                "Spawning agent '{DisplayName}' ({Role}) with model tier '{ModelTier}'.",
-                identity.DisplayName, role, modelTier);
+                "Spawning agent '{DisplayName}' ({Role}) with model tier '{ModelTier}', rank {Rank}.",
+                identity.DisplayName, role, modelTier, rank);
 
             var agent = _agentFactory.Create(role, identity);
             await _registry.RegisterAsync(agent, ct);
@@ -216,40 +220,81 @@ public class AgentSpawnManager
         }, ct);
     }
 
-    /// <summary>Number of additional engineers (Senior + Junior) currently spawned.</summary>
+    /// <summary>Number of additional engineers currently spawned across all pools.</summary>
     public int GetAdditionalEngineersCount()
     {
-        lock (_lock) { return _additionalEngineers; }
+        lock (_lock) { return _spawnedPEs + _spawnedSEs + _spawnedJEs; }
     }
 
-    /// <summary>Configured maximum additional engineers.</summary>
+    /// <summary>Configured maximum additional engineers (sum of all pools).</summary>
     public int GetMaxAdditionalEngineers() => _config.Limits.MaxAdditionalEngineers;
+
+    /// <summary>Returns pool capacity remaining for the given engineer role.</summary>
+    public int GetRemainingPoolCapacity(AgentRole role)
+    {
+        var pool = _config.Limits.EngineerPool;
+        lock (_lock)
+        {
+            return role switch
+            {
+                AgentRole.PrincipalEngineer => pool.PrincipalEngineerPool - _spawnedPEs,
+                AgentRole.SeniorEngineer => pool.SeniorEngineerPool - _spawnedSEs,
+                AgentRole.JuniorEngineer => pool.JuniorEngineerPool - _spawnedJEs,
+                _ => 0
+            };
+        }
+    }
 
     // ── Private helpers ──────────────────────────────────────────────
 
     private bool CanSpawnInternal(AgentRole role)
     {
-        if (CoreRoles.Contains(role))
+        // Core singleton roles (PM, Researcher, Architect, TE) — at most one
+        if (CoreSingletonRoles.Contains(role))
         {
-            // Core roles are singletons — at most one instance each
             var existing = _registry.GetAgentsByRole(role);
             return existing.Count == 0;
         }
 
-        // Engineer roles share the MaxAdditionalEngineers pool
-        return _additionalEngineers < _config.Limits.MaxAdditionalEngineers;
+        // PrincipalEngineer: first one is the core singleton (rank 0).
+        // Additional PEs come from the pool.
+        if (role == AgentRole.PrincipalEngineer)
+        {
+            var existingPEs = _registry.GetAgentsByRole(AgentRole.PrincipalEngineer);
+            if (existingPEs.Count == 0)
+                return true; // First PE (the leader) can always spawn
+            return _spawnedPEs < _config.Limits.EngineerPool.PrincipalEngineerPool;
+        }
+
+        // SE/JE: per-role pool limits
+        var pool = _config.Limits.EngineerPool;
+        return role switch
+        {
+            AgentRole.SeniorEngineer => _spawnedSEs < pool.SeniorEngineerPool,
+            AgentRole.JuniorEngineer => _spawnedJEs < pool.JuniorEngineerPool,
+            _ => false
+        };
     }
 
-    private string GenerateAgentName(AgentRole role)
+    private (string Name, int Rank) GenerateAgentNameAndRank(AgentRole role)
     {
+        if (role == AgentRole.PrincipalEngineer)
+        {
+            var existingPEs = _registry.GetAgentsByRole(AgentRole.PrincipalEngineer);
+            if (existingPEs.Count == 0)
+                return ("PrincipalEngineer", 0); // Leader
+            var rank = existingPEs.Count; // 1-based for additional PEs
+            return ($"PrincipalEngineer {rank}", rank);
+        }
+
         var count = _spawnCounts.GetValueOrDefault(role, 0) + 1;
         _spawnCounts[role] = count;
 
         return role switch
         {
-            AgentRole.SeniorEngineer => $"Senior Engineer {count}",
-            AgentRole.JuniorEngineer => $"Junior Engineer {count}",
-            _ => role.ToString()
+            AgentRole.SeniorEngineer => ($"Senior Engineer {count}", count),
+            AgentRole.JuniorEngineer => ($"Junior Engineer {count}", count),
+            _ => (role.ToString(), 0)
         };
     }
 
@@ -270,13 +315,35 @@ public class AgentSpawnManager
 
     private void IncrementSpawnCount(AgentRole role)
     {
-        if (!CoreRoles.Contains(role))
-            _additionalEngineers++;
+        switch (role)
+        {
+            case AgentRole.PrincipalEngineer:
+                // Only count additional PEs (not the first/leader)
+                if (_registry.GetAgentsByRole(AgentRole.PrincipalEngineer).Count > 0)
+                    _spawnedPEs++;
+                break;
+            case AgentRole.SeniorEngineer:
+                _spawnedSEs++;
+                break;
+            case AgentRole.JuniorEngineer:
+                _spawnedJEs++;
+                break;
+        }
     }
 
     private void DecrementSpawnCount(AgentRole role)
     {
-        if (!CoreRoles.Contains(role) && _additionalEngineers > 0)
-            _additionalEngineers--;
+        switch (role)
+        {
+            case AgentRole.PrincipalEngineer when _spawnedPEs > 0:
+                _spawnedPEs--;
+                break;
+            case AgentRole.SeniorEngineer when _spawnedSEs > 0:
+                _spawnedSEs--;
+                break;
+            case AgentRole.JuniorEngineer when _spawnedJEs > 0:
+                _spawnedJEs--;
+                break;
+        }
     }
 }
