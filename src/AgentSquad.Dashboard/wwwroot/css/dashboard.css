@@ -3536,6 +3536,7 @@ div[title] .config-agent-name {
     inset: 0;
     background: rgba(0, 0, 0, 0.65);
     z-index: 1000;
+    pointer-events: none;
 }
 .modal-dialog {
     position: fixed;
