@@ -188,6 +188,10 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                     await CheckOwnPrStatusAsync(ct);
                     // Recovery: finish stuck in-progress PRs that were never marked ready
                     await RecoverStuckInProgressPRAsync(ct);
+                    // LEADER ONLY: Evaluate resource needs FIRST so spawns happen before leader grabs tasks
+                    if (isLeader && !_allTasksComplete)
+                        await EvaluateResourceNeedsAsync(ct);
+
                     // Priority 0: Continue work on our own in-progress PR before anything else
                     if (CurrentPrNumber is not null && !await IsOwnPrReadyForReview(ct))
                     {
@@ -216,16 +220,13 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                         // LEADER ONLY: Recover orphaned assigned tasks with no open PRs
                         if (isLeader)
                             await RecoverOrphanedAssignmentsAsync(ct);
-                        // LEADER ONLY: Assign issues to available engineers (SE/JE + non-leader PEs)
+                        // LEADER ONLY: Assign issues to available workers (non-leader PEs, SE, JE)
                         if (isLeader)
                             await AssignTasksToAvailableEngineersAsync(ct);
-                        // ALL PEs: Work on own tasks
+                        // ALL PEs: Work on own tasks (leader defers to spawned workers when available)
                         await WorkOnOwnTasksAsync(ct);
                         // ALL PEs: Discover open PRs needing review
                         await DiscoverUnreviewedEngineerPRsAsync(ct);
-                        // LEADER ONLY: Check if more engineers are needed
-                        if (isLeader)
-                            await EvaluateResourceNeedsAsync(ct);
                     }
 
                     // ALL PEs: Always review PRs — even after all tasks complete
@@ -769,38 +770,40 @@ public class PrincipalEngineerAgent : EngineerAgentBase
             }
 
             // Non-leader PEs skip the deferral logic — they are workers and should always pick up work.
-            // Leader PE: guard against grabbing non-High tasks if we recently requested an engineer spawn
-            // AND engineers actually exist to handle them.
+            // Leader PE: guard against grabbing non-High tasks if we recently requested a PE spawn
+            // AND workers (other PEs, SEs, JEs) actually exist to handle them.
             if (IsLeader()
                 && !string.Equals(task.Complexity, "High", StringComparison.OrdinalIgnoreCase)
                 && DateTime.UtcNow - _lastResourceRequestTime < SpawnCooldown)
             {
-                var allEngineers = _registry.GetAgentsByRole(AgentRole.SeniorEngineer)
+                var allWorkers = _registry.GetAgentsByRole(AgentRole.PrincipalEngineer)
+                    .Where(a => a.Identity.Id != Identity.Id) // other PE workers
+                    .Concat(_registry.GetAgentsByRole(AgentRole.SeniorEngineer))
                     .Concat(_registry.GetAgentsByRole(AgentRole.JuniorEngineer))
                     .ToList();
-                var freeEngineers = allEngineers.Count(a => !_agentAssignments.ContainsKey(a.Identity.Id));
+                var freeWorkers = allWorkers.Count(a => !_agentAssignments.ContainsKey(a.Identity.Id));
 
-                if (freeEngineers > 0)
+                if (freeWorkers > 0)
                 {
                     Logger.LogInformation(
-                        "PE deferring {Complexity} task {TaskId} — {FreeEngineers} engineer(s) available, " +
+                        "PE leader deferring {Complexity} task {TaskId} — {FreeWorkers} worker(s) available, " +
                         "spawn cooldown active ({Remaining:F0}s remaining)",
-                        task.Complexity, task.Id, freeEngineers,
+                        task.Complexity, task.Id, freeWorkers,
                         (SpawnCooldown - (DateTime.UtcNow - _lastResourceRequestTime)).TotalSeconds);
                     return;
                 }
 
-                // Only wait for spawned engineer if at least one engineer is already registered
-                if (allEngineers.Count > 0)
+                // Only wait for spawned worker if at least one worker is already registered
+                if (allWorkers.Count > 0)
                 {
                     Logger.LogDebug(
-                        "PE waiting for spawned engineer before taking {Complexity} task {TaskId}",
+                        "PE leader waiting for spawned worker before taking {Complexity} task {TaskId}",
                         task.Complexity, task.Id);
                     return;
                 }
 
                 Logger.LogInformation(
-                    "PE taking {Complexity} task {TaskId} — no engineers registered yet, not waiting",
+                    "PE leader taking {Complexity} task {TaskId} — no workers registered yet, not waiting",
                     task.Complexity, task.Id);
             }
 
@@ -1703,23 +1706,39 @@ public class PrincipalEngineerAgent : EngineerAgentBase
 
             if (parallelizable > freeWorkers + 1)
             {
-                // Prefer PE pool first (user preference: PEs write more robust code)
-                // Fall back to SE, then JE if PE pool is exhausted
+                // Request additional PE workers (primary scaling mechanism)
+                // Fall back to SE/JE only if PE pool is exhausted and those pools are configured
                 var poolConfig = Config.Limits.EngineerPool;
-                var spawnManager = _registry as object; // AgentSpawnManager is separate
 
-                AgentRole neededRole;
+                AgentRole? neededRole = null;
                 var peCapacity = poolConfig.PrincipalEngineerPool
                     - (_registry.GetAgentsByRole(AgentRole.PrincipalEngineer).Count() - 1); // -1 for leader
                 if (peCapacity > 0)
                 {
                     neededRole = AgentRole.PrincipalEngineer;
                 }
-                else
+                else if (poolConfig.SeniorEngineerPool > 0)
                 {
                     var seCapacity = poolConfig.SeniorEngineerPool
                         - _registry.GetAgentsByRole(AgentRole.SeniorEngineer).Count();
-                    neededRole = seCapacity > 0 ? AgentRole.SeniorEngineer : AgentRole.JuniorEngineer;
+                    if (seCapacity > 0)
+                        neededRole = AgentRole.SeniorEngineer;
+                }
+
+                if (neededRole is null && poolConfig.JuniorEngineerPool > 0)
+                {
+                    var jeCapacity = poolConfig.JuniorEngineerPool
+                        - _registry.GetAgentsByRole(AgentRole.JuniorEngineer).Count();
+                    if (jeCapacity > 0)
+                        neededRole = AgentRole.JuniorEngineer;
+                }
+
+                if (neededRole is null)
+                {
+                    Logger.LogDebug(
+                        "PE needs more workers ({Parallelizable} parallelizable) but all pools exhausted",
+                        parallelizable);
+                    return;
                 }
 
                 Logger.LogInformation(
@@ -1731,7 +1750,7 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                     FromAgentId = Identity.Id,
                     ToAgentId = "*",
                     MessageType = "ResourceRequest",
-                    RequestedRole = neededRole,
+                    RequestedRole = neededRole.Value,
                     Justification = $"{parallelizable} tasks can be worked in parallel but only {freeWorkers} workers are available",
                     CurrentTeamSize = _agentAssignments.Count + 1
                 }, ct);
