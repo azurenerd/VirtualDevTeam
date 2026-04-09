@@ -22,6 +22,12 @@ builder.Services.Configure<LimitsConfig>(
 var dashboardPort = builder.Configuration.GetValue("AgentSquad:Dashboard:Port", 5050);
 builder.WebHost.UseUrls($"http://localhost:{dashboardPort}");
 
+// Ensure RCL static web assets (Dashboard CSS/JS) are served in all environments
+if (!builder.Environment.IsDevelopment())
+{
+    builder.WebHost.UseStaticWebAssets();
+}
+
 // Core services
 builder.Services.AddInProcessMessageBus();
 builder.Services.AddSingleton<AgentSquad.Core.AI.AgentUsageTracker>();
