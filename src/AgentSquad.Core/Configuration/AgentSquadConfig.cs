@@ -150,7 +150,7 @@ public class EngineerPoolConfig
 
 public class DashboardConfig
 {
-    public int Port { get; set; } = 5000;
+    public int Port { get; set; } = 5050;
     public bool EnableSignalR { get; set; } = true;
 }
 

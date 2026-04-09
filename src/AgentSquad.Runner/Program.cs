@@ -18,6 +18,10 @@ builder.Services.Configure<AgentSquadConfig>(
 builder.Services.Configure<LimitsConfig>(
     builder.Configuration.GetSection("AgentSquad:Limits"));
 
+// Configure Kestrel to use the dashboard port from config
+var dashboardPort = builder.Configuration.GetValue("AgentSquad:Dashboard:Port", 5050);
+builder.WebHost.UseUrls($"http://localhost:{dashboardPort}");
+
 // Core services
 builder.Services.AddInProcessMessageBus();
 builder.Services.AddSingleton<AgentSquad.Core.AI.AgentUsageTracker>();
