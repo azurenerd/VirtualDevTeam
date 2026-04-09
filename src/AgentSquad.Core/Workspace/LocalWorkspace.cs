@@ -65,6 +65,7 @@ public class LocalWorkspace
             else
             {
                 _logger.LogInformation("[{Agent}] Cloning {Repo} to {Path}", _agentId, _repoUrl, RepoPath);
+                // Ensure all directories in the path exist (root + agent subdirectory)
                 Directory.CreateDirectory(Path.GetDirectoryName(RepoPath)!);
 
                 // Clone with token embedded in URL for auth

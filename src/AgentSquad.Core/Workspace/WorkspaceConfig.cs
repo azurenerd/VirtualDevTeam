@@ -12,7 +12,7 @@ public class WorkspaceConfig
     /// Example: "C:/AgentSquadWorkspaces" → "C:/AgentSquadWorkspaces/PrincipalEngineer/{repo}"
     /// When null or empty, local workspace is disabled and agents use GitHub API-only mode.
     /// </summary>
-    public string? RootPath { get; set; }
+    public string? RootPath { get; set; } = @"C:\Agents";
 
     /// <summary>
     /// Command to build the project. Executed from the repo root directory.
