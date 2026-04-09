@@ -325,13 +325,32 @@ public class PrincipalEngineerAgent : EngineerAgentBase
         await _taskManager.LoadTasksAsync(ct);
         if (_taskManager.TotalCount > 0)
         {
-            Logger.LogInformation("Restored {Count} tasks from existing engineering-task issues ({Done} done, {Pending} pending)",
-                _taskManager.TotalCount, _taskManager.DoneCount, _taskManager.PendingCount);
+            // Validate recovered tasks belong to the current run by checking that
+            // corresponding enhancement issues still exist. If no enhancement issues
+            // exist, these tasks are stale leftovers from a previous run.
+            var currentEnhancements = await GitHub.GetIssuesByLabelAsync(
+                IssueWorkflow.Labels.Enhancement, ct);
+            var enhancementNumbers = currentEnhancements.Select(i => i.Number).ToHashSet();
+            var hasMatchingParent = _taskManager.Tasks.Any(t =>
+                t.ParentIssueNumber.HasValue && enhancementNumbers.Contains(t.ParentIssueNumber.Value));
 
-            _planningComplete = true;
-            UpdateStatus(AgentStatus.Working,
-                $"Loaded {_taskManager.TotalCount} tasks ({_taskManager.DoneCount} done, {_taskManager.PendingCount} pending)");
-            return;
+            if (currentEnhancements.Count == 0 || !hasMatchingParent)
+            {
+                Logger.LogWarning(
+                    "Found {Count} engineering-task issues but they don't match current enhancement issues — ignoring stale tasks",
+                    _taskManager.TotalCount);
+                // Fall through to create a fresh plan
+            }
+            else
+            {
+                Logger.LogInformation("Restored {Count} tasks from existing engineering-task issues ({Done} done, {Pending} pending)",
+                    _taskManager.TotalCount, _taskManager.DoneCount, _taskManager.PendingCount);
+
+                _planningComplete = true;
+                UpdateStatus(AgentStatus.Working,
+                    $"Loaded {_taskManager.TotalCount} tasks ({_taskManager.DoneCount} done, {_taskManager.PendingCount} pending)");
+                return;
+            }
         }
 
         UpdateStatus(AgentStatus.Working, "Creating engineering plan from Issues");
