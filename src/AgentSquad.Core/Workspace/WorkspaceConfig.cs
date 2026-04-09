@@ -119,14 +119,17 @@ public class WorkspaceConfig
 
     /// <summary>
     /// Maximum attempts to fix build errors by feeding them back to the AI.
-    /// After this many failures, the agent logs the error and skips the step.
+    /// After this many failures + a full code regeneration attempt, the step is skipped entirely.
+    /// No broken builds are ever committed.
     /// </summary>
-    public int MaxBuildRetries { get; set; } = 3;
+    public int MaxBuildRetries { get; set; } = 5;
 
     /// <summary>
     /// Maximum attempts to fix test failures by feeding them back to the AI.
+    /// After this many failures, failing tests are removed with a documented note,
+    /// and the buildable/passing code is committed.
     /// </summary>
-    public int MaxTestRetries { get; set; } = 3;
+    public int MaxTestRetries { get; set; } = 20;
 
     /// <summary>
     /// Whether to delete agent workspaces when the project is complete (all issues closed).

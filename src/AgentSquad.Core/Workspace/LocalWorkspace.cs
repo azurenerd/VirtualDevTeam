@@ -271,6 +271,26 @@ public class LocalWorkspace
     }
 
     /// <summary>
+    /// Revert all uncommitted changes in the workspace (git checkout -- . && git clean -fd).
+    /// Used to undo file writes when a build fails and the step should be skipped.
+    /// </summary>
+    public async Task RevertUncommittedChangesAsync(CancellationToken ct = default)
+    {
+        EnsureInitialized();
+        await _gitLock.WaitAsync(ct);
+        try
+        {
+            await RunGitAsync("checkout", "--", ".", ct: ct);
+            await RunGitAsync("clean", "-fd", ct: ct);
+            _logger.LogInformation("[{Agent}] Reverted all uncommitted changes", _agentId);
+        }
+        finally
+        {
+            _gitLock.Release();
+        }
+    }
+
+    /// <summary>
     /// Delete the workspace directory.
     /// </summary>
     public Task CleanupAsync()

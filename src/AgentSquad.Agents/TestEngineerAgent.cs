@@ -325,6 +325,16 @@ public class TestEngineerAgent : AgentBase
 
         // Create the test PR with real code files
         var testPrNumber = await CreateTestPRWithCodeAsync(pr, testFiles, ct);
+
+        // Build-gate: if the test PR creation was blocked by build errors, skip this PR
+        if (testPrNumber < 0)
+        {
+            Logger.LogWarning("Test PR creation for merged PR #{SourcePR} was blocked by build errors — skipping",
+                pr.Number);
+            LogActivity("task", $"⛔ Test PR for PR #{pr.Number} blocked by build errors");
+            return;
+        }
+
         _currentTestPrNumber = testPrNumber;
 
         Logger.LogInformation(
@@ -848,7 +858,19 @@ public class TestEngineerAgent : AgentBase
             }
         }
 
-        // Commit and push
+        // Gate: only commit and push if the build succeeded
+        if (!buildResult.Success)
+        {
+            Logger.LogError("TestEngineer: build still failing after {MaxRetries} fix attempts, reverting test files",
+                wsConfig.MaxBuildRetries);
+            await _workspace.RevertUncommittedChangesAsync(ct);
+            await GitHub.AddPullRequestCommentAsync(sourcePR.Number,
+                $"❌ **Test Build Blocked:** Test files for PR #{sourcePR.Number} could not be made to compile after " +
+                $"{wsConfig.MaxBuildRetries} fix attempts. Tests were not committed.", ct);
+            return -1;
+        }
+
+        // Commit and push — guaranteed to build at this point
         await _workspace.CommitAsync($"test: add tests for PR #{sourcePR.Number}", ct);
         await _workspace.PushAsync(branchName, ct);
 
@@ -905,15 +927,114 @@ public class TestEngineerAgent : AgentBase
                 // Rebuild + retest
                 var rebuildResult = await _buildRunner!.BuildAsync(
                     _workspace.RepoPath, wsConfig.BuildCommand, wsConfig.BuildTimeoutSeconds, ct);
-                if (!rebuildResult.Success) break;
+                if (!rebuildResult.Success)
+                {
+                    // Test fix broke the build — revert it
+                    await _workspace.RevertUncommittedChangesAsync(ct);
+                    continue;
+                }
 
                 testResult = await _testRunner.RunTestsAsync(
                     _workspace.RepoPath, testCommand, timeoutSeconds, ct);
                 testResult = testResult with { Tier = tier };
             }
+
+            // Last resort: if tests still fail after all retries, remove failing tests
+            if (!testResult.Success)
+            {
+                Logger.LogWarning("TestEngineer: {Tier} tests still failing after {Max} retries — removing unfixable tests",
+                    tier, wsConfig.MaxTestRetries);
+
+                testResult = await RemoveFailingTestsForTierAsync(
+                    tier, testResult, testCommand, timeoutSeconds, wsConfig, ct);
+            }
         }
 
         return testResult;
+    }
+
+    /// <summary>
+    /// Last resort for a test tier: remove failing tests with documentation so remaining tests pass.
+    /// Ensures no failing tests are committed.
+    /// </summary>
+    private async Task<TestResult> RemoveFailingTestsForTierAsync(
+        TestTier tier,
+        TestResult failingResult,
+        string testCommand,
+        int timeoutSeconds,
+        WorkspaceConfig wsConfig,
+        CancellationToken ct)
+    {
+        var kernel = _modelRegistry.GetKernel(Identity.ModelTier, Identity.Id);
+        var chat = kernel.GetRequiredService<IChatCompletionService>();
+
+        var failureSummary = failingResult.FailureDetails.Count > 0
+            ? string.Join("\n", failingResult.FailureDetails.Take(20))
+            : failingResult.Output.Length > 3000 ? failingResult.Output[^3000..] : failingResult.Output;
+
+        var removePrompt = $"""
+            The following {tier} tests have been failing despite {wsConfig.MaxTestRetries} attempts to fix them.
+            These tests MUST be removed because they cannot be made to pass.
+
+            FAILING TESTS:
+            {failureSummary}
+
+            For each failing test:
+            1. REMOVE the failing test method entirely
+            2. Add a comment at the location where it was removed:
+               // TEST REMOVED: [TestMethodName] - Could not be resolved after {wsConfig.MaxTestRetries} fix attempts.
+               // Reason: [brief description of the failure]
+               // This test should be revisited when the underlying issue is resolved.
+            3. Keep ALL passing tests intact — do not remove or modify them
+
+            Output ONLY the updated test files using this format:
+            FILE: path/to/test/file.ext
+            ```language
+            <complete updated file content with failing tests removed>
+            ```
+
+            Include the COMPLETE file content for each test file that needs changes.
+            Ensure the remaining code still compiles after removal.
+            """;
+
+        var history = new ChatHistory();
+        history.AddUserMessage(removePrompt);
+        var response = await chat.GetChatMessageContentAsync(history, cancellationToken: ct);
+        var updatedFiles = CodeFileParser.ParseFiles(response.Content ?? "");
+
+        if (updatedFiles.Count > 0)
+        {
+            foreach (var file in updatedFiles)
+                await _workspace!.WriteFileAsync(file.Path, file.Content, ct);
+
+            // Verify build still passes after test removal
+            var buildResult = await _buildRunner!.BuildAsync(
+                _workspace.RepoPath, wsConfig.BuildCommand, wsConfig.BuildTimeoutSeconds, ct);
+            if (!buildResult.Success)
+            {
+                Logger.LogWarning("TestEngineer: build broken after test removal, reverting");
+                await _workspace.RevertUncommittedChangesAsync(ct);
+                return failingResult;
+            }
+
+            // Verify remaining tests pass
+            var result = await _testRunner!.RunTestsAsync(
+                _workspace.RepoPath, testCommand, timeoutSeconds, ct);
+            result = result with { Tier = tier };
+
+            if (result.Success)
+            {
+                Logger.LogInformation("TestEngineer: removed unfixable {Tier} tests, {Passed} remaining tests pass",
+                    tier, result.Passed);
+                return result;
+            }
+
+            // Recurse one more time if there are still failures after removal
+            Logger.LogWarning("TestEngineer: still {Failed} failing tests after removal, doing another pass", result.Failed);
+            return await RemoveFailingTestsForTierAsync(tier, result, testCommand, timeoutSeconds, wsConfig, ct);
+        }
+
+        return failingResult;
     }
 
     /// <summary>
