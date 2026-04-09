@@ -1418,8 +1418,9 @@ public class ProgramManagerAgent : AgentBase
         }
         catch (Exception ex)
         {
-            Logger.LogError(ex, "Failed to create PM Specification — Architect may need manual trigger");
+            Logger.LogError(ex, "Failed to create PM Specification — will retry on next loop");
             RecordError($"PMSpec creation failed: {ex.Message}", Microsoft.Extensions.Logging.LogLevel.Error, ex);
+            _pmSpecCreated = false; // Allow retry on next loop iteration
         }
     }
 
