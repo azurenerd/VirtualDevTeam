@@ -287,7 +287,19 @@ public sealed class ConfigurationService
             // 2d. Atomically reset repo to baseline (single commit, not file-by-file)
             _logger.LogWarning("CLEANUP: Resetting repo to baseline files in {Repo}", config.GitHubRepo);
             var files = await _github.GetRepositoryTreeAsync(config.DefaultBranch, ct);
-            var filesToKeep = files.Where(f => IsFilePreserved(f, preserveFiles)).ToList();
+
+            List<string> filesToKeep;
+            if (!string.IsNullOrWhiteSpace(config.BaselineCommitSha))
+            {
+                // Use baseline commit tree — the definitive "clean" file set
+                _logger.LogInformation("Using BaselineCommitSha {Sha} for repo reset", config.BaselineCommitSha[..Math.Min(8, config.BaselineCommitSha.Length)]);
+                filesToKeep = (await _github.GetRepositoryTreeForCommitAsync(config.BaselineCommitSha, ct)).ToList();
+            }
+            else
+            {
+                // Fallback: preserve files from caveats list
+                filesToKeep = files.Where(f => IsFilePreserved(f, preserveFiles)).ToList();
+            }
 
             // Always preserve .gitignore
             if (!filesToKeep.Any(f => f.Equals(".gitignore", StringComparison.OrdinalIgnoreCase)))

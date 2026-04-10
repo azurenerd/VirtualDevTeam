@@ -135,6 +135,12 @@ public interface IGitHubService
     /// </summary>
     Task<IReadOnlyList<string>> GetRepositoryTreeAsync(string branch = "main", CancellationToken ct = default);
 
+    /// <summary>
+    /// Gets the file tree for a specific commit SHA (not a branch name).
+    /// Used by cleanup to resolve which files existed in a baseline commit.
+    /// </summary>
+    Task<IReadOnlyList<string>> GetRepositoryTreeForCommitAsync(string commitSha, CancellationToken ct = default);
+
     // Rate Limiting
     Task<GitHubRateLimitInfo> GetRateLimitAsync(CancellationToken ct = default);
 }

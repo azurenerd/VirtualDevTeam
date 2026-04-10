@@ -36,6 +36,14 @@ public class ProjectConfig
     public string ExecutiveGitHubUsername { get; set; } = "azurenerd";
 
     /// <summary>
+    /// The SHA of the baseline commit that represents the "clean" repo state.
+    /// Used by the dashboard cleanup to atomically reset the repo via Git Trees API.
+    /// When set, cleanup resolves this commit's tree to determine which files to preserve.
+    /// When empty, cleanup falls back to the preserve-files list approach.
+    /// </summary>
+    public string BaselineCommitSha { get; set; } = "";
+
+    /// <summary>
     /// Custom prompt that guides the Researcher agent on what to investigate.
     /// When empty, a comprehensive default prompt is generated from the project description.
     /// Use this to steer research toward specific areas, technologies, or concerns.

@@ -1504,4 +1504,30 @@ public class GitHubService : IGitHubService
             }
         }, ct);
     }
+
+    public async Task<IReadOnlyList<string>> GetRepositoryTreeForCommitAsync(string commitSha, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(commitSha);
+
+        return await _rl.ExecuteAsync<IReadOnlyList<string>>(async _ =>
+        {
+            try
+            {
+                var commit = await _client.Git.Commit.Get(_owner, _repo, commitSha);
+                TrackRateLimit();
+                var tree = await _client.Git.Tree.GetRecursive(_owner, _repo, commit.Tree.Sha);
+
+                return tree.Tree
+                    .Where(item => item.Type.Value == TreeType.Blob)
+                    .Select(item => item.Path)
+                    .OrderBy(p => p)
+                    .ToList();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to get repository tree for commit {CommitSha}", commitSha);
+                return Array.Empty<string>();
+            }
+        }, ct);
+    }
 }
