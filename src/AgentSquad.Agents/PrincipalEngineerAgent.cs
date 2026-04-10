@@ -35,6 +35,7 @@ public class PrincipalEngineerAgent : EngineerAgentBase
     private static readonly TimeSpan SpawnCooldown = TimeSpan.FromSeconds(45);
     private bool _allTasksComplete;
     private bool _integrationPrCreated;
+    private bool _engineeringSignaled;
     private readonly Dictionary<string, int> _agentAssignments = new();
     private readonly HashSet<int> _reviewedPrNumbers = new();
     private readonly HashSet<int> _forceApprovalPrs = new();
@@ -179,8 +180,13 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                     var hasWork = pending > 0 || _reviewQueue.Count > 0 || !_allTasksComplete || !_integrationPrCreated;
                     var leaderTag = isLeader ? "Leader" : $"Worker#{Identity.Rank}";
                     var statusVerb = isLeader ? "Orchestrating" : "Working on";
-                    UpdateStatus(hasWork ? AgentStatus.Working : AgentStatus.Idle,
-                        $"[{leaderTag}] {statusVerb} tasks ({done}/{total} done, {pending} pending, {_reviewQueue.Count} PRs queued)");
+
+                    // Preserve "Engineering complete" status once signaled so HealthMonitor can detect it
+                    if (!_engineeringSignaled)
+                    {
+                        UpdateStatus(hasWork ? AgentStatus.Working : AgentStatus.Idle,
+                            $"[{leaderTag}] {statusVerb} tasks ({done}/{total} done, {pending} pending, {_reviewQueue.Count} PRs queued)");
+                    }
 
                     // Recovery: re-track and re-broadcast review for our own ready-for-review PRs
                     await RecoverReadyForReviewPRsAsync(ct);
@@ -2174,6 +2180,7 @@ public class PrincipalEngineerAgent : EngineerAgentBase
         }
 
         UpdateStatus(AgentStatus.Idle, "Engineering complete");
+        _engineeringSignaled = true;
         LogActivity("system", "🏁 Engineering phase complete — all tasks done and integrated");
 
         await MessageBus.PublishAsync(new StatusUpdateMessage
