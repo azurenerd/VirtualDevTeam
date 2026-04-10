@@ -49,6 +49,32 @@ public partial class PullRequestWorkflow
     }
 
     /// <summary>
+    /// Auto-corrects file paths that may be missing project subdirectory prefixes.
+    /// Delegates to <see cref="ConflictDetector.ResolvePathsAsync"/> when available.
+    /// Returns the input unchanged if no conflict detector is configured.
+    /// </summary>
+    public async Task<IReadOnlyList<AI.CodeFileParser.CodeFile>> ResolveFilePathsAsync(
+        IReadOnlyList<AI.CodeFileParser.CodeFile> files, CancellationToken ct = default)
+    {
+        if (_conflictDetector is null || files.Count == 0)
+            return files;
+
+        try
+        {
+            var tuples = files.Select(f => (f.Path, f.Content)).ToList();
+            var resolved = await _conflictDetector.ResolvePathsAsync(tuples.AsReadOnly(), ct);
+
+            // Map back to CodeFile records
+            return resolved.Select(r => new AI.CodeFileParser.CodeFile(r.Path, r.Content)).ToList();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Path resolution failed, using original paths");
+            return files;
+        }
+    }
+
+    /// <summary>
     /// Parse agent name from PR title: "Senior Engineer 1: Implement auth" → "Senior Engineer 1"
     /// </summary>
     public static string? ParseAgentNameFromTitle(string title)
@@ -882,12 +908,17 @@ public partial class PullRequestWorkflow
             files.Count, prNumber, pr.HeadBranch);
 
         // Run conflict detection before committing (Tier 3: pre-commit warnings)
+        // Also auto-resolve mismatched paths (e.g., Components/Header.razor → src/MyProject/Components/Header.razor)
+        IReadOnlyList<(string Path, string Content)>? resolvedFiles = null;
         if (_conflictDetector is not null)
         {
             try
             {
+                // Auto-correct file paths that are missing the project subdirectory prefix
                 var fileTuplesForCheck = files.Select(f => (f.Path, f.Content)).ToList();
-                var conflicts = await _conflictDetector.DetectConflictsAsync(fileTuplesForCheck.AsReadOnly(), ct);
+                resolvedFiles = await _conflictDetector.ResolvePathsAsync(fileTuplesForCheck.AsReadOnly(), ct);
+
+                var conflicts = await _conflictDetector.DetectConflictsAsync(resolvedFiles, ct);
                 if (conflicts.Count > 0)
                 {
                     var warningComment = "## ⚠️ Conflict Detection Warnings\n\n" +
@@ -903,9 +934,8 @@ public partial class PullRequestWorkflow
             }
         }
 
-        // Convert to the tuple format expected by BatchCommitFilesAsync
-        var fileTuples = files
-            .Select(f => (f.Path, f.Content))
+        // Use resolved paths if available, otherwise fall back to original
+        var fileTuples = (resolvedFiles ?? files.Select(f => (f.Path, f.Content)).ToList())
             .ToList()
             .AsReadOnly();
 

@@ -137,6 +137,113 @@ public class ConflictDetector
     }
 
     /// <summary>
+    /// Auto-corrects file paths that are missing the project subdirectory prefix.
+    /// When an AI generates "Components/Header.razor" but the repo already has
+    /// "src/MyProject/Components/Header.razor", this rewrites to the correct full path.
+    /// Files with no match in the repo tree are left unchanged.
+    /// </summary>
+    public async Task<IReadOnlyList<(string Path, string Content)>> ResolvePathsAsync(
+        IReadOnlyList<(string Path, string Content)> files, CancellationToken ct = default)
+    {
+        var repoTree = await GetRepoTreeAsync(ct);
+        if (repoTree.Count == 0) return files;
+
+        // Build lookup: filename → list of full paths in repo
+        var existingByFileName = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var path in repoTree)
+        {
+            var fileName = path.Split('/')[^1];
+            if (!existingByFileName.ContainsKey(fileName))
+                existingByFileName[fileName] = [];
+            existingByFileName[fileName].Add(path);
+        }
+
+        var resolved = new List<(string Path, string Content)>(files.Count);
+        foreach (var (filePath, content) in files)
+        {
+            var normalized = filePath.Replace('\\', '/').TrimStart('/');
+            var fileName = normalized.Split('/')[^1];
+
+            // If the exact path already exists in repo, keep it
+            if (repoTree.Any(t => string.Equals(t, normalized, StringComparison.OrdinalIgnoreCase)))
+            {
+                resolved.Add((normalized, content));
+                continue;
+            }
+
+            // Look for a matching file where our path is a suffix of the existing path
+            if (existingByFileName.TryGetValue(fileName, out var existingPaths))
+            {
+                var match = existingPaths.FirstOrDefault(ep =>
+                    ep.EndsWith(normalized, StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(ep, normalized, StringComparison.OrdinalIgnoreCase));
+
+                if (match is not null)
+                {
+                    _logger.LogInformation(
+                        "Auto-corrected file path: {Original} → {Corrected}", normalized, match);
+                    resolved.Add((match, content));
+                    continue;
+                }
+            }
+
+            // No match — try to infer project prefix from repo structure
+            var correctedPath = InferProjectPrefix(normalized, repoTree);
+            if (correctedPath is not null && !string.Equals(correctedPath, normalized, StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.LogInformation(
+                    "Inferred project prefix for file path: {Original} → {Corrected}", normalized, correctedPath);
+                resolved.Add((correctedPath, content));
+            }
+            else
+            {
+                resolved.Add((normalized, content));
+            }
+        }
+
+        return resolved;
+    }
+
+    /// <summary>
+    /// Infers the project subdirectory prefix by finding a common root among existing repo files
+    /// that share a similar directory structure with the new file path.
+    /// E.g., if the repo has "src/MyProject/Components/Foo.razor" and we're adding
+    /// "Components/Bar.razor", infers "src/MyProject/Components/Bar.razor".
+    /// </summary>
+    private static string? InferProjectPrefix(string filePath, IReadOnlyList<string> repoTree)
+    {
+        // Get the first directory segment of the new file (e.g., "Components" from "Components/Header.razor")
+        var firstSlash = filePath.IndexOf('/');
+        if (firstSlash < 0) return null;
+        var firstDir = filePath[..firstSlash];
+
+        // Find existing repo paths that contain this directory segment
+        // and extract the prefix before it
+        string? bestPrefix = null;
+        var bestPrefixCount = 0;
+
+        foreach (var existing in repoTree)
+        {
+            var idx = existing.IndexOf($"/{firstDir}/", StringComparison.OrdinalIgnoreCase);
+            if (idx < 0) continue;
+
+            var prefix = existing[..idx];
+            // Count how many repo files share this prefix — more matches = more likely correct
+            var count = repoTree.Count(t => t.StartsWith(prefix + "/", StringComparison.OrdinalIgnoreCase));
+            if (count > bestPrefixCount)
+            {
+                bestPrefixCount = count;
+                bestPrefix = prefix;
+            }
+        }
+
+        if (bestPrefix is not null && bestPrefixCount >= 2)
+            return $"{bestPrefix}/{filePath}";
+
+        return null;
+    }
+
+    /// <summary>
     /// Determines if two file paths with the same filename are likely duplicates rather
     /// than legitimately different files. A duplicate is suspected when one path is a
     /// suffix of the other (e.g., Pages/Index.razor vs src/Pages/Index.razor) — meaning

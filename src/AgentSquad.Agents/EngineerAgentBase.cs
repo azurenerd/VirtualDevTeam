@@ -666,6 +666,15 @@ public abstract class EngineerAgentBase : AgentBase
             if (codeFiles.Count == 0)
                 codeFiles = AgentSquad.Core.AI.CodeFileParser.ParseFiles(stepImpl);
 
+            // Auto-correct file paths missing project subdirectory prefix
+            // (e.g., "Components/Header.razor" → "src/MyProject/Components/Header.razor")
+            if (codeFiles.Count > 0)
+            {
+                var resolved = await PrWorkflow.ResolveFilePathsAsync(codeFiles, ct);
+                codeFiles = resolved as List<AgentSquad.Core.AI.CodeFileParser.CodeFile>
+                    ?? new List<AgentSquad.Core.AI.CodeFileParser.CodeFile>(resolved);
+            }
+
             if (codeFiles.Count > 0)
             {
                 var commitMsg = $"Step {stepNumber}/{steps.Count}: {Truncate(step, 72)}";
