@@ -84,10 +84,11 @@ public class PrincipalEngineerAgent : EngineerAgentBase
         ILogger<PrincipalEngineerAgent> logger,
         BuildRunner? buildRunner = null,
         TestRunner? testRunner = null,
-        Core.Metrics.BuildTestMetrics? metrics = null)
+        Core.Metrics.BuildTestMetrics? metrics = null,
+        PlaywrightRunner? playwrightRunner = null)
         : base(identity, messageBus, github, prWorkflow, issueWorkflow,
                projectFiles, modelRegistry, stateStore, config.Value, memoryStore, logger,
-               buildRunner, testRunner, metrics)
+               buildRunner, testRunner, metrics, playwrightRunner)
     {
         _registry = registry ?? throw new ArgumentNullException(nameof(registry));
         _taskManager = new EngineeringTaskIssueManager(github, logger);

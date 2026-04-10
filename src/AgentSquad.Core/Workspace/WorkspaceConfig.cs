@@ -137,6 +137,18 @@ public class WorkspaceConfig
     public bool CleanupOnProjectComplete { get; set; } = true;
 
     /// <summary>
+    /// Whether to capture a UI screenshot after each successful build+commit and post it
+    /// as a PR comment. Requires Playwright browsers installed and AppStartCommand configured.
+    /// </summary>
+    public bool CaptureScreenshots { get; set; } = true;
+
+    /// <summary>
+    /// Seconds to wait for the page to fully render before capturing a screenshot.
+    /// Allows JavaScript frameworks (Blazor, React) time to hydrate.
+    /// </summary>
+    public int ScreenshotRenderDelaySeconds { get; set; } = 5;
+
+    /// <summary>
     /// Whether local workspace mode is enabled (RootPath is configured).
     /// </summary>
     public bool IsEnabled => !string.IsNullOrWhiteSpace(RootPath);

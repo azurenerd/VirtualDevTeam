@@ -378,6 +378,122 @@ public class PlaywrightRunner
     /// Generate the .NET test project scaffold for Playwright UI tests if it doesn't exist.
     /// Returns the .csproj content and base test fixture class.
     /// </summary>
+
+    /// <summary>
+    /// Capture a full-page screenshot of the web application for PR visual progress.
+    /// Starts the app, waits for readiness, navigates to the base URL, takes screenshot, stops app.
+    /// Returns the PNG bytes, or null if capture fails.
+    /// </summary>
+    public async Task<byte[]?> CaptureAppScreenshotAsync(
+        string workspacePath,
+        WorkspaceConfig config,
+        CancellationToken ct = default)
+    {
+        Process? appProcess = null;
+        try
+        {
+            var browsersPath = config.GetPlaywrightBrowsersPath();
+            if (!Directory.Exists(browsersPath) ||
+                Directory.GetDirectories(browsersPath, "chromium*", SearchOption.TopDirectoryOnly).Length == 0)
+            {
+                _logger.LogDebug("Playwright browsers not installed, skipping screenshot");
+                return null;
+            }
+
+            // Derive or use configured app start command
+            var appStartCommand = config.AppStartCommand;
+            if (string.IsNullOrWhiteSpace(appStartCommand))
+            {
+                // Try to auto-detect — look for a .csproj in the workspace
+                var csproj = Directory.EnumerateFiles(workspacePath, "*.csproj", SearchOption.TopDirectoryOnly).FirstOrDefault();
+                if (csproj is not null)
+                    appStartCommand = $"dotnet run --project \"{csproj}\" --urls {config.AppBaseUrl}";
+                else
+                    return null; // Can't start app without a command
+            }
+
+            var envVars = new Dictionary<string, string>
+            {
+                ["PLAYWRIGHT_BROWSERS_PATH"] = browsersPath,
+                ["ASPNETCORE_URLS"] = config.AppBaseUrl,
+                ["DOTNET_ENVIRONMENT"] = "Development"
+            };
+
+            appProcess = await StartAppUnderTestAsync(workspacePath, config, envVars, ct);
+            var ready = await WaitForAppReadyAsync(config.AppBaseUrl, config.AppStartupTimeoutSeconds, ct);
+
+            if (!ready)
+            {
+                _logger.LogDebug("App not ready for screenshot at {Url}", config.AppBaseUrl);
+                return null;
+            }
+
+            // Use Playwright to take a full-page screenshot
+            var playwright = await Microsoft.Playwright.Playwright.CreateAsync();
+            try
+            {
+                var browser = await playwright.Chromium.LaunchAsync(new Microsoft.Playwright.BrowserTypeLaunchOptions
+                {
+                    Headless = true
+                });
+
+                var context = await browser.NewContextAsync(new Microsoft.Playwright.BrowserNewContextOptions
+                {
+                    ViewportSize = new Microsoft.Playwright.ViewportSize { Width = 1920, Height = 1080 },
+                    IgnoreHTTPSErrors = true
+                });
+
+                var page = await context.NewPageAsync();
+                await page.GotoAsync(config.AppBaseUrl, new Microsoft.Playwright.PageGotoOptions
+                {
+                    WaitUntil = Microsoft.Playwright.WaitUntilState.NetworkIdle,
+                    Timeout = 30000
+                });
+
+                // Wait for render (Blazor hydration, JS frameworks)
+                await Task.Delay(config.ScreenshotRenderDelaySeconds * 1000, ct);
+
+                var screenshotBytes = await page.ScreenshotAsync(new Microsoft.Playwright.PageScreenshotOptions
+                {
+                    FullPage = true,
+                    Type = Microsoft.Playwright.ScreenshotType.Png
+                });
+
+                await browser.DisposeAsync();
+                _logger.LogInformation("Captured UI screenshot ({Size} bytes) from {Url}",
+                    screenshotBytes.Length, config.AppBaseUrl);
+
+                return screenshotBytes;
+            }
+            finally
+            {
+                playwright.Dispose();
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to capture UI screenshot");
+            return null;
+        }
+        finally
+        {
+            if (appProcess is not null)
+            {
+                try
+                {
+                    if (!appProcess.HasExited)
+                        appProcess.Kill(entireProcessTree: true);
+                }
+                catch { }
+                finally { appProcess.Dispose(); }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Generate the .NET test project scaffold for Playwright UI tests if it doesn't exist.
+    /// Returns the .csproj content and base test fixture class.
+    /// </summary>
     public static IReadOnlyList<(string Path, string Content)> GeneratePlaywrightTestScaffold(
         string projectName,
         string testProjectDir)

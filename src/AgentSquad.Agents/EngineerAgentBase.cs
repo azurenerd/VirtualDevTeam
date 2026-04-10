@@ -49,6 +49,7 @@ public abstract class EngineerAgentBase : AgentBase
     protected readonly BuildRunner? BuildRunnerSvc;
     protected readonly TestRunner? TestRunnerSvc;
     protected readonly Core.Metrics.BuildTestMetrics? Metrics;
+    protected readonly PlaywrightRunner? ScreenshotRunner;
     private bool _pendingWorkspaceCleanup;
     protected int? CurrentIssueNumber;
     protected int? CurrentPrNumber;
@@ -67,7 +68,8 @@ public abstract class EngineerAgentBase : AgentBase
         ILogger<AgentBase> logger,
         BuildRunner? buildRunner = null,
         TestRunner? testRunner = null,
-        Core.Metrics.BuildTestMetrics? metrics = null)
+        Core.Metrics.BuildTestMetrics? metrics = null,
+        PlaywrightRunner? playwrightRunner = null)
         : base(identity, logger, memoryStore)
     {
         MessageBus = messageBus ?? throw new ArgumentNullException(nameof(messageBus));
@@ -81,6 +83,7 @@ public abstract class EngineerAgentBase : AgentBase
         BuildRunnerSvc = buildRunner;
         TestRunnerSvc = testRunner;
         Metrics = metrics;
+        ScreenshotRunner = playwrightRunner;
     }
 
     #region Lifecycle
@@ -1924,7 +1927,63 @@ public abstract class EngineerAgentBase : AgentBase
         await Workspace!.CommitAsync(commitMsg, ct);
         await Workspace.PushAsync(branchName, ct);
         _ = Metrics?.RecordSuccessfulCommitAsync(Identity.Id, ct);
+
+        // Capture UI screenshot and post to PR for visual progress tracking
+        await TryCaptureAndPostScreenshotAsync(pr, branchName, stepNumber, totalSteps, ct);
+
         return true;
+    }
+
+    /// <summary>
+    /// Attempt to capture a UI screenshot of the built app and post it as a PR comment.
+    /// Fails silently — screenshot capture is best-effort and never blocks the pipeline.
+    /// </summary>
+    private async Task TryCaptureAndPostScreenshotAsync(
+        AgentPullRequest pr, string branchName, int stepNumber, int totalSteps,
+        CancellationToken ct)
+    {
+        if (ScreenshotRunner is null || Workspace is null || !Config.Workspace.CaptureScreenshots)
+            return;
+
+        try
+        {
+            Logger.LogDebug("{Role} {Name} capturing UI screenshot for PR #{PrNumber} step {Step}/{Total}",
+                Identity.Role, Identity.DisplayName, pr.Number, stepNumber, totalSteps);
+
+            var screenshotBytes = await ScreenshotRunner.CaptureAppScreenshotAsync(
+                Workspace.RepoPath, Config.Workspace, ct);
+
+            if (screenshotBytes is null || screenshotBytes.Length == 0)
+            {
+                Logger.LogDebug("No screenshot captured (app may not be a web project)");
+                return;
+            }
+
+            // Commit the screenshot to the PR branch via GitHub API
+            var screenshotPath = $".screenshots/pr-{pr.Number}-step-{stepNumber}.png";
+            var imageUrl = await GitHub.CommitBinaryFileAsync(
+                screenshotPath, screenshotBytes,
+                $"📸 UI screenshot: step {stepNumber}/{totalSteps}",
+                branchName, ct);
+
+            if (imageUrl is null) return;
+
+            // Post a PR comment with the embedded screenshot
+            var comment = $"### 📸 UI Preview — Step {stepNumber}/{totalSteps}\n\n" +
+                $"![UI Screenshot after step {stepNumber}]({imageUrl})\n\n" +
+                $"_Captured after successful build and commit by {Identity.DisplayName}_";
+
+            await GitHub.AddPullRequestCommentAsync(pr.Number, comment, ct);
+
+            Logger.LogInformation("{Role} {Name} posted UI screenshot for PR #{PrNumber} step {Step}",
+                Identity.Role, Identity.DisplayName, pr.Number, stepNumber);
+            LogActivity("screenshot", $"📸 UI screenshot posted for PR #{pr.Number} step {stepNumber}/{totalSteps}");
+        }
+        catch (Exception ex)
+        {
+            // Never let screenshot failures block the pipeline
+            Logger.LogDebug(ex, "Screenshot capture failed for PR #{PrNumber} — continuing", pr.Number);
+        }
     }
 
     /// <summary>

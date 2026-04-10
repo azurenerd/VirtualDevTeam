@@ -897,6 +897,53 @@ public class GitHubService : IGitHubService
         }, ct);
     }
 
+    public async Task<string?> CommitBinaryFileAsync(
+        string path, byte[] content, string commitMessage, string branch,
+        CancellationToken ct = default)
+    {
+        return await _rl.ExecuteAsync(async _ =>
+        {
+            // 1. Get the current commit SHA at the tip of the branch
+            var branchRef = await _client.Git.Reference.Get(_owner, _repo, $"heads/{branch}");
+            TrackRateLimit();
+            var latestCommitSha = branchRef.Object.Sha;
+            var baseCommit = await _client.Git.Commit.Get(_owner, _repo, latestCommitSha);
+
+            // 2. Create a base64-encoded blob for the binary file
+            var blob = new NewBlob
+            {
+                Content = Convert.ToBase64String(content),
+                Encoding = EncodingType.Base64
+            };
+            var blobResult = await _client.Git.Blob.Create(_owner, _repo, blob);
+
+            // 3. Build the tree with the single binary file
+            var newTree = new NewTree { BaseTree = baseCommit.Tree.Sha };
+            newTree.Tree.Add(new NewTreeItem
+            {
+                Path = path,
+                Mode = "100644",
+                Type = TreeType.Blob,
+                Sha = blobResult.Sha
+            });
+            var treeResult = await _client.Git.Tree.Create(_owner, _repo, newTree);
+
+            // 4. Create the commit
+            var newCommit = new NewCommit(commitMessage, treeResult.Sha, latestCommitSha);
+            var commitResult = await _client.Git.Commit.Create(_owner, _repo, newCommit);
+
+            // 5. Update the branch reference
+            await _client.Git.Reference.Update(_owner, _repo, $"heads/{branch}",
+                new ReferenceUpdate(commitResult.Sha));
+
+            _logger.LogInformation("Committed binary file {Path} ({Size} bytes) to {Branch}",
+                path, content.Length, branch);
+
+            // Return the raw URL for embedding in markdown
+            return $"https://raw.githubusercontent.com/{_owner}/{_repo}/{branch}/{path}";
+        }, ct);
+    }
+
     // Branches
 
     public async Task CreateBranchAsync(string branchName, string fromBranch = "main", CancellationToken ct = default)

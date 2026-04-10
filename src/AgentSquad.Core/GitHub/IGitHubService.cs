@@ -53,6 +53,14 @@ public interface IGitHubService
         string branch,
         CancellationToken ct = default);
 
+    /// <summary>
+    /// Commits a binary file (e.g., PNG screenshot) to a branch using base64 encoding.
+    /// Returns the raw URL to the committed file for embedding in markdown.
+    /// </summary>
+    Task<string?> CommitBinaryFileAsync(
+        string path, byte[] content, string commitMessage, string branch,
+        CancellationToken ct = default);
+
     // Branches
     Task CreateBranchAsync(string branchName, string fromBranch = "main", CancellationToken ct = default);
     Task<bool> BranchExistsAsync(string branchName, CancellationToken ct = default);
