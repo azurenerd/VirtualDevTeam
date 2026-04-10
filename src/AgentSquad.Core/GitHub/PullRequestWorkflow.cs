@@ -458,16 +458,29 @@ public partial class PullRequestWorkflow
             labels: [Labels.ReadyForReview, Labels.Approved], ct: ct);
 
         // 4. Auto-merge (no review needed for initial docs)
-        try
+        // Brief delay to let GitHub process the commit before attempting merge
+        await Task.Delay(3000, ct);
+
+        for (var attempt = 1; attempt <= 3; attempt++)
         {
-            await _github.MergePullRequestAsync(pr.Number,
-                $"Merge {documentPath} — auto-approved by {agentName}", ct);
-            _logger.LogInformation("Auto-merged document PR #{Number}", pr.Number);
-            await _github.DeleteBranchAsync(pr.HeadBranch, ct);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to auto-merge PR #{Number} — it may need manual merge", pr.Number);
+            try
+            {
+                await _github.MergePullRequestAsync(pr.Number,
+                    $"Merge {documentPath} — auto-approved by {agentName}", ct);
+                _logger.LogInformation("Auto-merged document PR #{Number}", pr.Number);
+                try { await _github.DeleteBranchAsync(pr.HeadBranch, ct); } catch { /* best-effort */ }
+                return;
+            }
+            catch (Exception ex) when (attempt < 3)
+            {
+                _logger.LogWarning(ex, "Merge attempt {Attempt}/3 failed for PR #{Number}, retrying after delay",
+                    attempt, pr.Number);
+                await Task.Delay(5000 * attempt, ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "All merge attempts failed for document PR #{Number}", pr.Number);
+            }
         }
     }
 
