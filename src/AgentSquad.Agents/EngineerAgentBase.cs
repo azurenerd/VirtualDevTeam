@@ -1206,18 +1206,22 @@ public abstract class EngineerAgentBase : AgentBase
                     }
                     else
                     {
-                        // Build-blocked rework — notify on PR but don't re-request review
+                        // Build-blocked rework — notify on PR but don't re-request review.
+                        // Re-enqueue so next loop iteration retries (or hits max cycles for force-approval).
                         Logger.LogWarning("{Role} {Name} rework for PR #{PrNumber} blocked by build errors",
                             Identity.Role, Identity.DisplayName, pr.Number);
                         _ = Metrics?.RecordReworkBuildBlockedAsync(Identity.Id, ct);
                         await GitHub.AddPullRequestCommentAsync(pr.Number,
                             $"**[{Identity.DisplayName}] Rework blocked** — Address review feedback produced code with build errors " +
                             $"that could not be auto-resolved. This rework attempt counted toward the limit ({attempts}/{Config.Limits.MaxReworkCycles}).", ct);
+
+                        foreach (var item in reworkBatch)
+                            ReworkQueue.Enqueue(item);
                     }
                 }
                 else
                 {
-                    // AI failed to produce FILE: blocks — do NOT mark as ready for review
+                    // AI failed to produce FILE: blocks — re-enqueue so retry/force-approval can proceed.
                     Logger.LogWarning(
                         "{Role} {Name} rework on PR #{PrNumber} produced no FILE: blocks — no code changes committed. " +
                         "Skipping ready-for-review to avoid pointless re-review of unchanged code",
@@ -1225,6 +1229,9 @@ public abstract class EngineerAgentBase : AgentBase
                     await GitHub.AddPullRequestCommentAsync(pr.Number,
                         $"**[{Identity.DisplayName}] Rework attempted** — AI response did not produce committable file changes. " +
                         $"This rework attempt counted toward the limit ({attempts}/{Config.Limits.MaxReworkCycles}).", ct);
+
+                    foreach (var item in reworkBatch)
+                        ReworkQueue.Enqueue(item);
                 }
             }
         }
