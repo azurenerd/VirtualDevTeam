@@ -84,6 +84,7 @@ builder.Services.AddSignalR();
 builder.Services.AddSingleton<DashboardDataService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<DashboardDataService>());
 builder.Services.AddSingleton<ConfigurationService>();
+builder.Services.AddScoped<EngineeringPlanDataService>();
 
 // Worker service that starts the core agents and kicks off the workflow
 builder.Services.AddHostedService<AgentSquadWorker>();
