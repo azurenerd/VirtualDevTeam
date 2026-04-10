@@ -48,6 +48,7 @@ public class TestEngineerAgent : AgentBase
     private LocalWorkspace? _workspace;
     private bool _pendingWorkspaceCleanup;
     private readonly HashSet<int> _testedPRs = new();
+    private readonly HashSet<int> _sessionTestedPRs = new(); // Only PRs actually tested this session (not skipped old ones)
     private readonly List<IDisposable> _subscriptions = new();
     private readonly ConcurrentQueue<(int PrNumber, string PrTitle, string Feedback, string Reviewer)> _reworkQueue = new();
     private readonly Dictionary<int, int> _reworkAttempts = new();
@@ -265,6 +266,7 @@ public class TestEngineerAgent : AgentBase
             {
                 await GenerateTestsForMergedPRAsync(pr, codeFiles, ct);
                 _testedPRs.Add(pr.Number);
+                _sessionTestedPRs.Add(pr.Number);
             }
             catch (Exception ex)
             {
@@ -310,13 +312,13 @@ public class TestEngineerAgent : AgentBase
             }
         }
 
-        if (untestedCodePRs == 0 && _testedPRs.Count > 0)
+        if (untestedCodePRs == 0 && _sessionTestedPRs.Count > 0)
         {
             UpdateStatus(AgentStatus.Idle,
-                $"All {_testedPRs.Count} merged PRs tested — coverage met, tests complete");
+                $"All {_sessionTestedPRs.Count} merged PRs tested — coverage met, tests complete");
             Logger.LogInformation(
                 "Test coverage complete: all {Count} merged code PRs have been tested",
-                _testedPRs.Count);
+                _sessionTestedPRs.Count);
         }
     }
 
