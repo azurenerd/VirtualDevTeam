@@ -240,12 +240,18 @@ public class HealthMonitor : IHostedService, IDisposable
         // --- Parallel Development signals ---
         if (!_workflow.HasSignal(WorkflowStateMachine.Signals.AllEngineeringComplete))
         {
+            // Check if PE reports engineering complete (PE may do all coding itself)
+            bool peComplete = HasReasonContaining(AgentRole.PrincipalEngineer,
+                "engineering complete", "all tasks complete", "all tasks done", "integration pr");
+
             var engineers = agents.Where(a => a.Identity.Role is AgentRole.SeniorEngineer or AgentRole.JuniorEngineer).ToList();
-            if (engineers.Count > 0 && engineers.All(a =>
+            bool engineersDone = engineers.Count > 0 && engineers.All(a =>
                 a.Status is AgentStatus.Online or AgentStatus.Idle &&
                 ((a.StatusReason ?? "").Contains("complete", StringComparison.OrdinalIgnoreCase) ||
                  (a.StatusReason ?? "").Contains("no task", StringComparison.OrdinalIgnoreCase) ||
-                 (a.StatusReason ?? "").Contains("no assigned", StringComparison.OrdinalIgnoreCase))))
+                 (a.StatusReason ?? "").Contains("no assigned", StringComparison.OrdinalIgnoreCase)));
+
+            if (peComplete || engineersDone)
             {
                 SignalIfNew(WorkflowStateMachine.Signals.AllEngineeringComplete);
             }
