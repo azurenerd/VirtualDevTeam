@@ -155,7 +155,8 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                         if (await CheckForArchitectureAsync(ct))
                         {
                             await CreateEngineeringPlanAsync(ct);
-                            _planningComplete = true;
+                            // _planningComplete is set inside CreateEngineeringPlanAsync
+                            // on success or valid restore paths
                         }
                     }
                     else
@@ -592,6 +593,7 @@ public class PrincipalEngineerAgent : EngineerAgentBase
         }, ct);
 
         UpdateStatus(AgentStatus.Idle, "Engineering plan complete, entering development loop");
+        _planningComplete = true;
     }
 
     /// <summary>
