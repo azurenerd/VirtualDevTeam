@@ -271,6 +271,7 @@ public class TestEngineerAgent : AgentBase
             catch (Exception ex)
             {
                 Logger.LogWarning(ex, "Failed to generate tests for merged PR #{Number}", pr.Number);
+                _testedPRs.Add(pr.Number); // Don't retry failed PRs indefinitely
             }
         }
     }
@@ -1098,8 +1099,9 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
             if (!existingPlaywright)
             {
                 Logger.LogInformation("TestEngineer: scaffolding Playwright test project infrastructure");
+                var sourceProjectName = GetSourceProjectName();
                 var scaffoldFiles = PlaywrightRunner.GeneratePlaywrightTestScaffold(
-                    "tests/UITests", wsConfig.AppBaseUrl ?? "http://localhost:5000");
+                    sourceProjectName, "tests/UITests");
                 foreach (var sf in scaffoldFiles)
                     await _workspace.WriteFileAsync(sf.Path, sf.Content, ct);
             }
