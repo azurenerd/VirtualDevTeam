@@ -249,9 +249,19 @@
     {
         if (_plan is not null && _plan.Stats.Total > 0 && !_graphInitialized)
         {
-            _graphInitialized = true;
-            await JS.InvokeVoidAsync("EngineeringPlan.init", "cy", _objRef);
-            await PushGraphDataAsync();
+            try
+            {
+                // Small delay to ensure DOM is fully painted after Blazor diff
+                await Task.Delay(150);
+                await JS.InvokeVoidAsync("EngineeringPlan.init", "cy", _objRef);
+                await PushGraphDataAsync();
+                _graphInitialized = true;
+            }
+            catch (Exception ex)
+            {
+                // JS interop can fail during prerendering; allow retry on next render
+                Console.WriteLine($"[EngineeringPlan] Graph init failed: {ex.Message}");
+            }
         }
     }
 

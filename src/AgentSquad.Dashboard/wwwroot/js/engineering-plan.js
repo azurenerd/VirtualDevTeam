@@ -2,6 +2,11 @@
 (function () {
     'use strict';
 
+    // Register cytoscape-dagre extension if available
+    if (typeof cytoscape !== 'undefined' && typeof cytoscapeDagre !== 'undefined') {
+        cytoscape.use(cytoscapeDagre);
+    }
+
     let cy = null;
     let dotNetRef = null;
 
@@ -26,8 +31,19 @@
             dotNetRef = objRef;
             if (cy) { cy.destroy(); cy = null; }
 
+            var container = document.getElementById(containerId);
+            if (!container) {
+                console.error('[EngineeringPlan] Container #' + containerId + ' not found');
+                return;
+            }
+            if (container.offsetWidth === 0 || container.offsetHeight === 0) {
+                console.warn('[EngineeringPlan] Container has 0 dimensions, forcing minimum size');
+                container.style.minHeight = '400px';
+                container.style.minWidth = '400px';
+            }
+
             cy = cytoscape({
-                container: document.getElementById(containerId),
+                container: container,
                 boxSelectionEnabled: false,
                 autounselectify: false,
                 minZoom: 0.2,
@@ -180,36 +196,63 @@
         },
 
         update: function (nodesJson, edgesJson) {
-            if (!cy) return;
+            if (!cy) {
+                console.error('[EngineeringPlan] cy not initialized, cannot update');
+                return;
+            }
 
-            var nodes = JSON.parse(nodesJson);
-            var edges = JSON.parse(edgesJson);
+            try {
+                var nodes = JSON.parse(nodesJson);
+                var edges = JSON.parse(edgesJson);
 
-            var elements = [];
-            nodes.forEach(function (n) {
-                elements.push({ group: 'nodes', data: n });
-            });
-            edges.forEach(function (e) {
-                elements.push({ group: 'edges', data: { source: e.source, target: e.target, label: e.label, id: e.source + '->' + e.target } });
-            });
+                // Build a set of valid node IDs for edge validation
+                var nodeIds = new Set();
+                var elements = [];
+                nodes.forEach(function (n) {
+                    nodeIds.add(n.id);
+                    elements.push({ group: 'nodes', data: n });
+                });
 
-            cy.elements().remove();
-            cy.add(elements);
+                // Only add edges where both source and target exist
+                var skippedEdges = 0;
+                edges.forEach(function (e) {
+                    if (nodeIds.has(e.source) && nodeIds.has(e.target)) {
+                        elements.push({ group: 'edges', data: { source: e.source, target: e.target, label: e.label, id: e.source + '->' + e.target } });
+                    } else {
+                        skippedEdges++;
+                    }
+                });
 
-            // Run dagre layout
-            cy.layout({
-                name: 'dagre',
-                rankDir: 'TB',
-                nodeSep: 60,
-                rankSep: 80,
-                edgeSep: 30,
-                padding: 40,
-                animate: true,
-                animationDuration: 500,
-                animationEasing: 'ease-out-cubic',
-                fit: true,
-                spacingFactor: 1.1
-            }).run();
+                if (skippedEdges > 0) {
+                    console.warn('[EngineeringPlan] Skipped ' + skippedEdges + ' edges with missing source/target');
+                }
+                console.log('[EngineeringPlan] Adding ' + nodes.length + ' nodes, ' + (edges.length - skippedEdges) + ' edges');
+
+                cy.elements().remove();
+                cy.add(elements);
+
+                // Try dagre layout, fall back to breadthfirst then grid
+                try {
+                    cy.layout({
+                        name: 'dagre',
+                        rankDir: 'TB',
+                        nodeSep: 60,
+                        rankSep: 80,
+                        edgeSep: 30,
+                        padding: 40,
+                        animate: true,
+                        animationDuration: 500,
+                        animationEasing: 'ease-out-cubic',
+                        fit: true,
+                        spacingFactor: 1.1
+                    }).run();
+                } catch (layoutErr) {
+                    console.warn('[EngineeringPlan] Dagre layout failed, falling back to grid:', layoutErr);
+                    cy.layout({ name: 'grid', fit: true, padding: 40, animate: true }).run();
+                }
+            } catch (err) {
+                console.error('[EngineeringPlan] Update failed:', err);
+            }
         },
 
         fitGraph: function () {
