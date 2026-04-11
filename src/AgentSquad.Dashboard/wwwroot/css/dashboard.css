@@ -4679,3 +4679,133 @@ div[title] .config-agent-name {
     border-radius: 6px;
     white-space: pre-wrap;
 }
+
+/* ===== Director CLI Tab ===== */
+.director-cli-container {
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - 2rem);
+    margin: -1rem;
+    background: var(--bg-primary);
+}
+
+.cli-tab-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border-subtle);
+    padding: 0 0.5rem;
+    min-height: 42px;
+    flex-shrink: 0;
+}
+
+.cli-tabs {
+    display: flex;
+    gap: 2px;
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+
+.cli-tabs::-webkit-scrollbar { display: none; }
+
+.cli-tab {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.5rem 0.75rem;
+    cursor: pointer;
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    font-family: var(--font-mono);
+    border-bottom: 2px solid transparent;
+    transition: all 0.15s;
+    white-space: nowrap;
+    user-select: none;
+}
+
+.cli-tab:hover {
+    color: var(--text-primary);
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.cli-tab.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+    background: rgba(0, 212, 255, 0.06);
+}
+
+.cli-tab.busy .tab-name {
+    font-style: italic;
+}
+
+.tab-status { font-size: 0.6rem; line-height: 1; }
+.status-ready { color: var(--success); }
+.status-busy { color: var(--warning); animation: pulse-dot 1.5s ease-in-out infinite; }
+.status-error { color: var(--danger); }
+
+@keyframes pulse-dot {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+}
+
+.tab-close {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 1rem;
+    line-height: 1;
+    padding: 0 0.15rem;
+    cursor: pointer;
+    border-radius: 3px;
+    transition: all 0.1s;
+}
+
+.tab-close:hover {
+    color: var(--danger);
+    background: rgba(255, 123, 114, 0.15);
+}
+
+.cli-tab-actions {
+    flex-shrink: 0;
+    padding-left: 0.5rem;
+}
+
+.btn-new-thread {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.35rem 0.75rem;
+    background: rgba(0, 212, 255, 0.1);
+    border: 1px solid rgba(0, 212, 255, 0.25);
+    color: var(--accent);
+    font-size: 0.8rem;
+    font-family: var(--font-mono);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s;
+    white-space: nowrap;
+}
+
+.btn-new-thread:hover {
+    background: rgba(0, 212, 255, 0.2);
+    border-color: var(--accent);
+}
+
+.terminal-container {
+    flex: 1;
+    overflow: hidden;
+    padding: 0.5rem;
+    background: #0d1117;
+}
+
+.terminal-container > div {
+    height: 100% !important;
+}
+
+/* Nav separator before Director CLI */
+.nav-separator {
+    margin-top: 0.5rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+}

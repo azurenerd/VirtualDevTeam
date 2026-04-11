@@ -1,0 +1,178 @@
+@page "/director-cli"
+@rendermode InteractiveServer
+@using Microsoft.JSInterop
+@using AgentSquad.Dashboard.Services
+@inject IJSRuntime JS
+@inject DirectorCliService CliService
+@implements IAsyncDisposable
+
+<PageTitle>Director CLI — AgentSquad</PageTitle>
+
+<div class="director-cli-container">
+    @* Thread tab bar *@
+    <div class="cli-tab-bar">
+        <div class="cli-tabs">
+            @foreach (var thread in _threads)
+            {
+                var threadId = thread.Id;
+                var isActive = threadId == _activeThreadId;
+                <div class="cli-tab @(isActive ? "active" : "") @(thread.Status == CliThreadStatus.Busy ? "busy" : "")"
+                     @onclick="() => SwitchThread(threadId)">
+                    <span class="tab-status">
+                        @if (thread.Status == CliThreadStatus.Busy)
+                        {
+                            <span class="status-busy">●</span>
+                        }
+                        else if (thread.Status == CliThreadStatus.Error)
+                        {
+                            <span class="status-error">●</span>
+                        }
+                        else
+                        {
+                            <span class="status-ready">●</span>
+                        }
+                    </span>
+                    <span class="tab-name">@thread.Name</span>
+                    @if (_threads.Count > 1)
+                    {
+                        <button class="tab-close" @onclick:stopPropagation="true"
+                                @onclick="() => CloseThread(threadId)" title="Close thread">×</button>
+                    }
+                </div>
+            }
+        </div>
+        <div class="cli-tab-actions">
+            <button class="btn-new-thread" @onclick="CreateNewThread" title="New thread (parallel session)">
+                <span>＋</span> New Thread
+            </button>
+        </div>
+    </div>
+
+    @* Terminal container *@
+    <div id="terminal-container" class="terminal-container"></div>
+</div>
+
+@code {
+    private DotNetObjectReference<DirectorCLI>? _objRef;
+    private List<CliThreadInfo> _threads = new();
+    private string? _activeThreadId;
+    private bool _initialized;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _objRef = DotNetObjectReference.Create(this);
+
+        // Create the initial thread
+        var threadId = CliService.CreateThread("Main");
+        _activeThreadId = threadId;
+        RefreshThreadList();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && _activeThreadId is not null)
+        {
+            await Task.Delay(100); // Wait for DOM
+            await JS.InvokeVoidAsync("DirectorCLI.init", "terminal-container", _objRef);
+            await JS.InvokeVoidAsync("DirectorCLI.activateThread", _activeThreadId, "terminal-container");
+            _initialized = true;
+        }
+    }
+
+    private async Task CreateNewThread()
+    {
+        var threadNum = _threads.Count + 1;
+        var threadId = CliService.CreateThread($"Thread {threadNum}");
+        _activeThreadId = threadId;
+        RefreshThreadList();
+
+        if (_initialized)
+        {
+            await JS.InvokeVoidAsync("DirectorCLI.activateThread", threadId, "terminal-container");
+        }
+    }
+
+    private async Task SwitchThread(string threadId)
+    {
+        _activeThreadId = threadId;
+        if (_initialized)
+        {
+            await JS.InvokeVoidAsync("DirectorCLI.activateThread", threadId, "terminal-container");
+        }
+    }
+
+    private async Task CloseThread(string threadId)
+    {
+        CliService.CloseThread(threadId);
+
+        if (_initialized)
+        {
+            await JS.InvokeVoidAsync("DirectorCLI.removeThread", threadId);
+        }
+
+        RefreshThreadList();
+
+        // Switch to another thread if we closed the active one
+        if (_activeThreadId == threadId)
+        {
+            _activeThreadId = _threads.FirstOrDefault()?.Id;
+            if (_activeThreadId is not null && _initialized)
+            {
+                await JS.InvokeVoidAsync("DirectorCLI.activateThread", _activeThreadId, "terminal-container");
+            }
+        }
+    }
+
+    [JSInvokable]
+    public async Task OnCommandEntered(string threadId, string command)
+    {
+        RefreshThreadList();
+        await InvokeAsync(StateHasChanged);
+
+        // Execute the command asynchronously — the terminal will receive output via callbacks
+        _ = Task.Run(async () =>
+        {
+            await CliService.SendCommandAsync(threadId, command, async (output) =>
+            {
+                // Marshal the output to the UI thread and write to xterm
+                await InvokeAsync(async () =>
+                {
+                    await JS.InvokeVoidAsync("DirectorCLI.writeOutput", threadId, output);
+                });
+            });
+
+            // Update thread status when done
+            await InvokeAsync(() =>
+            {
+                RefreshThreadList();
+                StateHasChanged();
+            });
+        });
+    }
+
+    [JSInvokable]
+    public void OnCancelRequested(string threadId)
+    {
+        CliService.CancelCommand(threadId);
+        RefreshThreadList();
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void RefreshThreadList()
+    {
+        _threads = CliService.GetThreads().ToList();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_initialized)
+        {
+            try
+            {
+                await JS.InvokeVoidAsync("DirectorCLI.destroy");
+            }
+            catch { }
+        }
+        _objRef?.Dispose();
+    }
+}

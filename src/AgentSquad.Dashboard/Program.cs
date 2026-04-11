@@ -12,6 +12,7 @@ builder.Services.AddSignalR();
 builder.Services.AddSingleton<DashboardDataService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<DashboardDataService>());
 builder.Services.AddScoped<EngineeringPlanDataService>();
+builder.Services.AddSingleton<DirectorCliService>();
 
 var app = builder.Build();
 
