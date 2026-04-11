@@ -96,6 +96,9 @@ public class LocalWorkspace
         try
         {
             await RunGitAsync("fetch", "origin", ct: ct);
+            // Clean uncommitted changes before checkout to prevent
+            // "Please commit your changes or stash them before you switch branches"
+            await RunGitAsync("reset", "--hard", "HEAD", ct: ct);
             await RunGitAsync("checkout", _defaultBranch, ct: ct);
             await RunGitAsync("reset", "--hard", $"origin/{_defaultBranch}", ct: ct);
             await RunGitAsync("clean", "-fd", ct: ct);
