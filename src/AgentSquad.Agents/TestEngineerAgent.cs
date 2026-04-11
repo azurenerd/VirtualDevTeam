@@ -1224,6 +1224,11 @@ public class TestEngineerAgent : AgentBase
                 "Test coverage complete: all {Count} code PRs have been tested",
                 _sessionTestedPRs.Count);
         }
+        else if (untestedCodePRs > 0)
+        {
+            Logger.LogDebug("Coverage check: {Untested} untested code PRs remaining, {Tested} tested this session",
+                untestedCodePRs, _sessionTestedPRs.Count);
+        }
     }
 
     /// <summary>
@@ -2422,9 +2427,16 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
             Logger.LogError("TestEngineer: build still failing after {MaxRetries} fix attempts, reverting test files",
                 wsConfig.MaxBuildRetries);
             await _workspace.RevertUncommittedChangesAsync(ct);
-            await _github.AddPullRequestCommentAsync(sourcePR.Number,
-                $"❌ **Test Build Blocked:** Test files for PR #{sourcePR.Number} could not be made to compile after " +
-                $"{wsConfig.MaxBuildRetries} fix attempts. Tests were not committed.", ct);
+            try
+            {
+                await _github.AddPullRequestCommentAsync(sourcePR.Number,
+                    $"❌ **Test Build Blocked:** Test files for PR #{sourcePR.Number} could not be made to compile after " +
+                    $"{wsConfig.MaxBuildRetries} fix attempts. Tests were not committed.", ct);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "Could not add build-blocked comment to PR #{Number}", sourcePR.Number);
+            }
             return -1;
         }
 
