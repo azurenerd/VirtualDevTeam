@@ -838,6 +838,70 @@ public class TestEngineerAgent : AgentBase
             sb.AppendLine();
         }
 
+        // Test artifacts summary (videos, traces, screenshots)
+        if (tierResults is { Count: > 0 })
+        {
+            var allArtifacts = tierResults
+                .Where(r => r.Artifacts.HasArtifacts)
+                .SelectMany(r => new[]
+                {
+                    (Type: "🎥 Videos", Items: r.Artifacts.Videos),
+                    (Type: "📋 Traces", Items: r.Artifacts.Traces),
+                    (Type: "📸 Screenshots", Items: r.Artifacts.Screenshots)
+                })
+                .Where(a => a.Items.Count > 0)
+                .ToList();
+
+            if (allArtifacts.Count > 0)
+            {
+                sb.AppendLine("### Test Artifacts");
+                sb.AppendLine();
+                foreach (var artifact in allArtifacts)
+                {
+                    sb.AppendLine($"- **{artifact.Type}:** {artifact.Items.Count} file(s)");
+                    foreach (var path in artifact.Items.Take(5))
+                        sb.AppendLine($"  - `{Path.GetFileName(path)}`");
+                    if (artifact.Items.Count > 5)
+                        sb.AppendLine($"  - ... and {artifact.Items.Count - 5} more");
+                }
+                sb.AppendLine();
+                sb.AppendLine("*Videos and traces are stored in the workspace `test-results/` directory.*");
+                sb.AppendLine();
+            }
+        }
+
+        // Upload screenshots to PR comments for visual verification
+        if (tierResults is { Count: > 0 })
+        {
+            var screenshots = tierResults
+                .SelectMany(r => r.Artifacts.Screenshots)
+                .Take(3) // Limit to avoid comment spam
+                .ToList();
+
+            foreach (var screenshotPath in screenshots)
+            {
+                try
+                {
+                    if (File.Exists(screenshotPath))
+                    {
+                        var bytes = await File.ReadAllBytesAsync(screenshotPath, ct);
+                        var fileName = Path.GetFileName(screenshotPath);
+                        var repoPath = $"test-results/screenshots/{fileName}";
+                        await _github.CommitBinaryFileAsync(
+                            repoPath, bytes,
+                            $"test-artifact: {fileName}",
+                            pr.HeadBranch, ct);
+                        sb.AppendLine($"![{fileName}]({repoPath})");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogDebug(ex, "Could not upload screenshot {Path} to PR #{Number}",
+                        screenshotPath, pr.Number);
+                }
+            }
+        }
+
         // File list
         sb.AppendLine("<details><summary>Test Files</summary>");
         sb.AppendLine();

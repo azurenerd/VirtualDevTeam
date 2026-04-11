@@ -88,6 +88,25 @@ public class PlaywrightRunner
             ["BROWSER"] = "chromium"
         };
 
+        // Video recording: set env vars so test fixtures can configure BrowserNewContextOptions
+        var testResultsPath = Path.Combine(workspacePath, config.TestResultsDir);
+        Directory.CreateDirectory(testResultsPath);
+
+        if (config.RecordTestVideos)
+        {
+            envVars["PWVIDEO_DIR"] = Path.Combine(testResultsPath, "videos");
+            Directory.CreateDirectory(envVars["PWVIDEO_DIR"]);
+        }
+
+        if (config.RecordTestTraces)
+        {
+            envVars["PWTRACE_DIR"] = Path.Combine(testResultsPath, "traces");
+            Directory.CreateDirectory(envVars["PWTRACE_DIR"]);
+        }
+
+        // Standard Playwright test output directory
+        envVars["PLAYWRIGHT_TEST_RESULTS_DIR"] = testResultsPath;
+
         Process? appProcess = null;
         try
         {
@@ -127,6 +146,16 @@ public class PlaywrightRunner
             var (passed, failed, skipped) = TestRunner.ParseTestCounts(combinedOutput);
             var failures = TestRunner.ParseTestFailures(combinedOutput);
 
+            // Collect video, trace, and screenshot artifacts
+            var artifacts = CollectTestArtifacts(testResultsPath, config);
+
+            if (artifacts.HasArtifacts)
+            {
+                _logger.LogInformation(
+                    "Collected test artifacts: {Videos} videos, {Traces} traces, {Screenshots} screenshots",
+                    artifacts.Videos.Count, artifacts.Traces.Count, artifacts.Screenshots.Count);
+            }
+
             return new TestResult
             {
                 Success = result.Success && failed == 0,
@@ -136,7 +165,8 @@ public class PlaywrightRunner
                 Skipped = skipped,
                 Duration = result.Duration,
                 Tier = TestTier.UI,
-                FailureDetails = failures
+                FailureDetails = failures,
+                Artifacts = artifacts
             };
         }
         finally
@@ -526,7 +556,8 @@ public class PlaywrightRunner
             $"namespace {projectName}.UITests.Infrastructure;\n\n" +
             "/// <summary>\n" +
             "/// Shared Playwright fixture that manages browser lifecycle.\n" +
-            "/// Runs headless by default. Captures screenshots on test failure.\n" +
+            "/// Runs headless by default. Captures screenshots on failure,\n" +
+            "/// records video and traces when configured via environment variables.\n" +
             "/// </summary>\n" +
             "public class PlaywrightFixture : IAsyncLifetime\n" +
             "{\n" +
@@ -547,18 +578,53 @@ public class PlaywrightRunner
             "        await Browser.DisposeAsync();\n" +
             "        Playwright.Dispose();\n" +
             "    }\n\n" +
-            "    public async Task<IPage> NewPageAsync()\n" +
+            "    public async Task<(IPage Page, IBrowserContext Context)> NewPageWithContextAsync(string? testName = null)\n" +
             "    {\n" +
-            "        var context = await Browser.NewContextAsync(new BrowserNewContextOptions\n" +
+            "        var contextOptions = new BrowserNewContextOptions\n" +
             "        {\n" +
             "            BaseURL = BaseUrl,\n" +
             "            IgnoreHTTPSErrors = true\n" +
-            "        });\n" +
-            "        return await context.NewPageAsync();\n" +
+            "        };\n\n" +
+            "        // Enable video recording if PWVIDEO_DIR is set\n" +
+            "        var videoDir = Environment.GetEnvironmentVariable(\"PWVIDEO_DIR\");\n" +
+            "        if (!string.IsNullOrEmpty(videoDir))\n" +
+            "        {\n" +
+            "            Directory.CreateDirectory(videoDir);\n" +
+            "            contextOptions.RecordVideoDir = videoDir;\n" +
+            "            contextOptions.RecordVideoSize = new RecordVideoSize { Width = 1280, Height = 720 };\n" +
+            "        }\n\n" +
+            "        var context = await Browser.NewContextAsync(contextOptions);\n\n" +
+            "        // Enable tracing if PWTRACE_DIR is set\n" +
+            "        var traceDir = Environment.GetEnvironmentVariable(\"PWTRACE_DIR\");\n" +
+            "        if (!string.IsNullOrEmpty(traceDir))\n" +
+            "        {\n" +
+            "            Directory.CreateDirectory(traceDir);\n" +
+            "            await context.Tracing.StartAsync(new TracingStartOptions\n" +
+            "            {\n" +
+            "                Screenshots = true,\n" +
+            "                Snapshots = true,\n" +
+            "                Sources = true\n" +
+            "            });\n" +
+            "        }\n\n" +
+            "        return (await context.NewPageAsync(), context);\n" +
+            "    }\n\n" +
+            "    public async Task<IPage> NewPageAsync()\n" +
+            "    {\n" +
+            "        var (page, _) = await NewPageWithContextAsync();\n" +
+            "        return page;\n" +
+            "    }\n\n" +
+            "    /// <summary>Stops tracing and saves the trace file. Call in test cleanup.</summary>\n" +
+            "    public static async Task StopTracingAsync(IBrowserContext context, string testName)\n" +
+            "    {\n" +
+            "        var traceDir = Environment.GetEnvironmentVariable(\"PWTRACE_DIR\");\n" +
+            "        if (string.IsNullOrEmpty(traceDir)) return;\n" +
+            "        var tracePath = Path.Combine(traceDir, $\"{testName}.zip\");\n" +
+            "        await context.Tracing.StopAsync(new TracingStopOptions { Path = tracePath });\n" +
             "    }\n\n" +
             "    public static async Task CaptureScreenshotAsync(IPage page, string testName)\n" +
             "    {\n" +
-            "        var screenshotDir = Path.Combine(\"TestResults\", \"screenshots\");\n" +
+            "        var resultsDir = Environment.GetEnvironmentVariable(\"PLAYWRIGHT_TEST_RESULTS_DIR\") ?? \"TestResults\";\n" +
+            "        var screenshotDir = Path.Combine(resultsDir, \"screenshots\");\n" +
             "        Directory.CreateDirectory(screenshotDir);\n" +
             "        var path = Path.Combine(screenshotDir, $\"{testName}_{DateTime.UtcNow:yyyyMMdd_HHmmss}.png\");\n" +
             "        await page.ScreenshotAsync(new PageScreenshotOptions { Path = path, FullPage = true });\n" +
@@ -570,5 +636,53 @@ public class PlaywrightRunner
         files.Add((Path.Combine(fixtureDir, "PlaywrightFixture.cs"), fixtureContent));
 
         return files;
+    }
+
+    /// <summary>
+    /// Collect video, trace, and screenshot artifacts from the test results directory.
+    /// Searches recursively for .webm (videos), .zip (traces), and .png (screenshots).
+    /// </summary>
+    internal static TestArtifacts CollectTestArtifacts(string testResultsPath, WorkspaceConfig config)
+    {
+        if (!Directory.Exists(testResultsPath))
+            return new TestArtifacts();
+
+        var videos = new List<string>();
+        var traces = new List<string>();
+        var screenshots = new List<string>();
+
+        // Collect videos (.webm files)
+        if (config.RecordTestVideos)
+        {
+            var videoDir = Path.Combine(testResultsPath, "videos");
+            if (Directory.Exists(videoDir))
+            {
+                videos.AddRange(Directory.GetFiles(videoDir, "*.webm", SearchOption.AllDirectories));
+            }
+        }
+
+        // Collect traces (.zip files in traces dir)
+        if (config.RecordTestTraces)
+        {
+            var traceDir = Path.Combine(testResultsPath, "traces");
+            if (Directory.Exists(traceDir))
+            {
+                traces.AddRange(Directory.GetFiles(traceDir, "*.zip", SearchOption.AllDirectories));
+            }
+        }
+
+        // Collect screenshots (.png files anywhere in results)
+        var screenshotDir = Path.Combine(testResultsPath, "screenshots");
+        if (Directory.Exists(screenshotDir))
+        {
+            screenshots.AddRange(Directory.GetFiles(screenshotDir, "*.png", SearchOption.AllDirectories));
+        }
+
+        return new TestArtifacts
+        {
+            Videos = videos,
+            Traces = traces,
+            Screenshots = screenshots
+        };
     }
 }

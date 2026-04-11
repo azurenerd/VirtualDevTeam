@@ -65,7 +65,31 @@ public record TestResult
     /// </summary>
     public IReadOnlyList<string> FailureDetails { get; init; } = [];
 
+    /// <summary>
+    /// Paths to test artifacts (videos, traces, screenshots) produced during this run.
+    /// Grouped by type for structured access.
+    /// </summary>
+    public TestArtifacts Artifacts { get; init; } = new();
+
     public int Total => Passed + Failed + Skipped;
+}
+
+/// <summary>
+/// Collected Playwright test artifacts from a UI test run.
+/// </summary>
+public record TestArtifacts
+{
+    /// <summary>Paths to .webm video recordings of test execution.</summary>
+    public IReadOnlyList<string> Videos { get; init; } = [];
+
+    /// <summary>Paths to .zip Playwright trace files (viewable at trace.playwright.dev).</summary>
+    public IReadOnlyList<string> Traces { get; init; } = [];
+
+    /// <summary>Paths to .png screenshot files captured during tests.</summary>
+    public IReadOnlyList<string> Screenshots { get; init; } = [];
+
+    /// <summary>Whether any artifacts were collected.</summary>
+    public bool HasArtifacts => Videos.Count > 0 || Traces.Count > 0 || Screenshots.Count > 0;
 }
 
 /// <summary>

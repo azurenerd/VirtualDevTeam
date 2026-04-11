@@ -149,6 +149,25 @@ public class WorkspaceConfig
     public int ScreenshotRenderDelaySeconds { get; set; } = 5;
 
     /// <summary>
+    /// Whether to capture Playwright video recordings during UI test execution.
+    /// Videos are stored in the test-results directory and posted to PR comments.
+    /// </summary>
+    public bool RecordTestVideos { get; set; } = true;
+
+    /// <summary>
+    /// Whether to capture Playwright execution traces during UI test execution.
+    /// Traces include screenshots, DOM snapshots, network requests, and console logs.
+    /// Can be viewed at https://trace.playwright.dev
+    /// </summary>
+    public bool RecordTestTraces { get; set; } = true;
+
+    /// <summary>
+    /// Directory name (relative to workspace) for Playwright test output artifacts
+    /// (videos, traces, screenshots). Cleaned between runs.
+    /// </summary>
+    public string TestResultsDir { get; set; } = "test-results";
+
+    /// <summary>
     /// Whether local workspace mode is enabled (RootPath is configured).
     /// </summary>
     public bool IsEnabled => !string.IsNullOrWhiteSpace(RootPath);
