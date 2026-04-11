@@ -51,10 +51,10 @@ public class PlaywrightRunner
         }
         else
         {
-            // Fallback to npx (Node.js projects)
+            // Fallback to npx (Node.js projects) — use --yes to skip "Ok to proceed?" prompt
             await RunInstallCommandAsync(
                 OperatingSystem.IsWindows() ? "cmd" : "npx",
-                OperatingSystem.IsWindows() ? "/c npx playwright install chromium" : "playwright install chromium",
+                OperatingSystem.IsWindows() ? "/c npx --yes playwright install chromium" : "--yes playwright install chromium",
                 browsersPath, ct);
         }
 
@@ -339,6 +339,7 @@ public class PlaywrightRunner
             Arguments = args,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            RedirectStandardInput = true,
             UseShellExecute = false,
             CreateNoWindow = true
         };
@@ -346,6 +347,10 @@ public class PlaywrightRunner
 
         using var process = new Process { StartInfo = startInfo };
         process.Start();
+
+        // Auto-answer any interactive prompts (e.g., npx "Ok to proceed? (y)")
+        try { await process.StandardInput.WriteLineAsync("y"); process.StandardInput.Close(); }
+        catch { /* stdin may already be closed */ }
 
         var stdout = await process.StandardOutput.ReadToEndAsync(ct);
         var stderr = await process.StandardError.ReadToEndAsync(ct);
