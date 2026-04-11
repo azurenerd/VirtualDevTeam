@@ -62,6 +62,7 @@ VALUES (707, 'PrincipalEngineer: Project Foundation', 'PE', 'phase1_architect', 
 - Base build fails but no `ChangesRequestedMessage` sent (the bug we just fixed)
 - Tests committed but build fails — TE should retry with AI fixes
 - Screenshots not posted
+- **TE workspace init timeout → "API-only mode" fallback** — check logs for "falling back to API mode". If present, TE committed files without building or running them. NO screenshots will be posted. This is a critical failure that invalidates the whole TE phase.
 
 ### Phase 3: PM Review
 
@@ -184,3 +185,5 @@ $headers = @{ Authorization = "token $token"; Accept = "application/vnd.github.v
 |------|--------|
 | 2026-04-11 | Initial version — sequential pipeline (Architect→TE→PM→merge), same-PR testing, visual evidence, multi-phase rework |
 | 2026-04-11 | Added TE build-failure notification gap (fixed: TE now sends ChangesRequestedMessage on build failure) |
+| 2026-04-11 | Added TE workspace init failure mode: git clone timeout → silent API-only fallback → no screenshots/no test execution |
+| 2026-04-11 | Added PE self-merge bug: PE was skipping own PRs in MergeTestedPRsAsync (fixed) |

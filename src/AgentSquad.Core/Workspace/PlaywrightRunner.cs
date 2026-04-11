@@ -248,7 +248,8 @@ public class PlaywrightRunner
         Dictionary<string, string> envVars,
         CancellationToken ct)
     {
-        var (exe, args) = BuildRunner.ParseCommand(config.AppStartCommand!);
+        var appCommand = ResolveAppStartCommand(workspacePath, config);
+        var (exe, args) = BuildRunner.ParseCommand(appCommand);
 
         var startInfo = new ProcessStartInfo
         {
@@ -272,12 +273,63 @@ public class PlaywrightRunner
         _ = Task.Run(() => process.StandardError.ReadToEndAsync(ct), ct);
 
         _logger.LogInformation("Started app under test: {Command} (PID {Pid})",
-            config.AppStartCommand, process.Id);
+            appCommand, process.Id);
 
         // Give it a moment to initialize
         await Task.Delay(2000, ct);
 
         return process;
+    }
+
+    /// <summary>
+    /// Resolves the app start command, auto-detecting the project path if the configured
+    /// --project path doesn't exist in the workspace (e.g., config says src/Foo/Foo.csproj
+    /// but the repo has Foo/Foo.csproj at root).
+    /// </summary>
+    private string ResolveAppStartCommand(string workspacePath, WorkspaceConfig config)
+    {
+        var command = config.AppStartCommand!;
+
+        // Extract --project value from command
+        var projectMatch = System.Text.RegularExpressions.Regex.Match(
+            command, @"--project\s+""?([^""]+\.csproj)""?");
+        if (!projectMatch.Success)
+            return command;
+
+        var configuredPath = projectMatch.Groups[1].Value.Replace('/', Path.DirectorySeparatorChar);
+        var fullPath = Path.Combine(workspacePath, configuredPath);
+
+        if (File.Exists(fullPath))
+            return command; // configured path works
+
+        // Auto-detect: search for a .csproj with the same filename
+        var fileName = Path.GetFileName(configuredPath);
+        var candidates = Directory.EnumerateFiles(workspacePath, fileName, SearchOption.AllDirectories)
+            .Where(f => !f.Contains("test", StringComparison.OrdinalIgnoreCase)
+                     && !f.Contains("Test", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (candidates.Count == 0)
+        {
+            // Broader search for any web .csproj
+            candidates = Directory.EnumerateFiles(workspacePath, "*.csproj", SearchOption.AllDirectories)
+                .Where(f => !f.Contains("test", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+        }
+
+        if (candidates.Count > 0)
+        {
+            var resolvedPath = Path.GetRelativePath(workspacePath, candidates[0]);
+            var newCommand = command.Replace(projectMatch.Groups[1].Value, resolvedPath);
+            _logger.LogInformation(
+                "Auto-resolved app project path: {ConfiguredPath} -> {ResolvedPath}",
+                configuredPath, resolvedPath);
+            return newCommand;
+        }
+
+        _logger.LogWarning("Could not find project file {FileName} in workspace {Path}, using configured command as-is",
+            fileName, workspacePath);
+        return command;
     }
 
     /// <summary>
