@@ -80,31 +80,34 @@ html, body {
 /* ===== Page Layout ===== */
 .page {
     display: flex;
+    flex-direction: row;
     min-height: 100vh;
 }
 
 .sidebar {
     width: 260px;
+    min-width: 260px;
     background-color: var(--sidebar-bg);
     border-right: 1px solid var(--border-subtle);
-    position: fixed;
+    position: sticky;
     top: 0;
-    left: 0;
     height: 100vh;
     z-index: 100;
     display: flex;
     flex-direction: column;
+    overflow-y: auto;
 }
 
 main {
     flex: 1;
-    margin-left: 260px;
+    min-width: 0;
     background-color: var(--bg-primary);
     min-height: 100vh;
 }
 
 .content {
     padding: 2rem 2.5rem;
+    max-width: 100%;
 }
 
 /* ===== Sidebar Branding ===== */

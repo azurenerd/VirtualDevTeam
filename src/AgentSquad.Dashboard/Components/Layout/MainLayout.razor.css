@@ -1,11 +1,13 @@
 .page {
     position: relative;
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
+    min-height: 100vh;
 }
 
 main {
     flex: 1;
+    min-width: 0;
 }
 
 .sidebar {
@@ -47,12 +49,9 @@ main {
 }
 
 @media (min-width: 641px) {
-    .page {
-        flex-direction: row;
-    }
-
     .sidebar {
-        width: 250px;
+        width: 260px;
+        min-width: 260px;
         height: 100vh;
         position: sticky;
         top: 0;
@@ -69,11 +68,7 @@ main {
         text-align: right;
         width: 0;
     }
-
-    .top-row, article {
-        padding-left: 2rem !important;
-        padding-right: 1.5rem !important;
-    }
+}
 }
 
 #blazor-error-ui {
