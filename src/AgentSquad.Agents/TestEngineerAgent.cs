@@ -1009,36 +1009,10 @@ public class TestEngineerAgent : AgentBase
             }
         }
 
-        // Upload screenshots to PR comments for visual verification
+        // Upload test artifacts (screenshots, videos, traces) to the PR branch
         if (tierResults is { Count: > 0 })
         {
-            var screenshots = tierResults
-                .SelectMany(r => r.Artifacts.Screenshots)
-                .Take(3) // Limit to avoid comment spam
-                .ToList();
-
-            foreach (var screenshotPath in screenshots)
-            {
-                try
-                {
-                    if (File.Exists(screenshotPath))
-                    {
-                        var bytes = await File.ReadAllBytesAsync(screenshotPath, ct);
-                        var fileName = Path.GetFileName(screenshotPath);
-                        var repoPath = $"test-results/screenshots/{fileName}";
-                        await _github.CommitBinaryFileAsync(
-                            repoPath, bytes,
-                            $"test-artifact: {fileName}",
-                            pr.HeadBranch, ct);
-                        sb.AppendLine($"![{fileName}]({repoPath})");
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Logger.LogDebug(ex, "Could not upload screenshot {Path} to PR #{Number}",
-                        screenshotPath, pr.Number);
-                }
-            }
+            await UploadTestArtifactsToPrAsync(pr, tierResults, sb, ct);
         }
 
         // File list
@@ -1057,6 +1031,117 @@ public class TestEngineerAgent : AgentBase
         {
             Logger.LogWarning(ex, "Could not post test results comment on PR #{Number}", pr.Number);
         }
+    }
+
+    /// <summary>
+    /// Upload test artifacts (screenshots, videos, traces) to the PR branch and embed
+    /// them in the markdown comment. Screenshots are inline images, videos are download
+    /// links, traces link to trace.playwright.dev for interactive viewing.
+    /// </summary>
+    private async Task UploadTestArtifactsToPrAsync(
+        AgentPullRequest pr,
+        IReadOnlyList<TestResult> tierResults,
+        System.Text.StringBuilder sb,
+        CancellationToken ct)
+    {
+        var screenshots = tierResults
+            .SelectMany(r => r.Artifacts.Screenshots)
+            .Where(File.Exists)
+            .Take(5)
+            .ToList();
+
+        var videos = tierResults
+            .SelectMany(r => r.Artifacts.Videos)
+            .Where(File.Exists)
+            .Take(3)
+            .ToList();
+
+        var traces = tierResults
+            .SelectMany(r => r.Artifacts.Traces)
+            .Where(File.Exists)
+            .Take(3)
+            .ToList();
+
+        if (screenshots.Count == 0 && videos.Count == 0 && traces.Count == 0)
+            return;
+
+        sb.AppendLine("### Uploaded Artifacts");
+        sb.AppendLine();
+
+        // Screenshots — embedded as inline images
+        foreach (var path in screenshots)
+        {
+            try
+            {
+                var bytes = await File.ReadAllBytesAsync(path, ct);
+                var fileName = Path.GetFileName(path);
+                var repoPath = $"test-results/screenshots/{fileName}";
+                var imageUrl = await _github.CommitBinaryFileAsync(
+                    repoPath, bytes, $"test-artifact: {fileName}", pr.HeadBranch, ct);
+                if (imageUrl is not null)
+                {
+                    sb.AppendLine($"**📸 {fileName}**");
+                    sb.AppendLine($"![{fileName}]({imageUrl})");
+                    sb.AppendLine();
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "Could not upload screenshot {Path}", path);
+            }
+        }
+
+        // Videos — committed to repo with download links
+        foreach (var path in videos)
+        {
+            try
+            {
+                var bytes = await File.ReadAllBytesAsync(path, ct);
+                if (bytes.Length > 10 * 1024 * 1024)
+                {
+                    Logger.LogDebug("Skipping video upload — too large ({Size} bytes): {Path}", bytes.Length, path);
+                    sb.AppendLine($"- 🎥 `{Path.GetFileName(path)}` ({bytes.Length / 1024 / 1024}MB — too large to upload)");
+                    continue;
+                }
+                var fileName = Path.GetFileName(path);
+                var repoPath = $"test-results/videos/{fileName}";
+                var videoUrl = await _github.CommitBinaryFileAsync(
+                    repoPath, bytes, $"test-artifact: {fileName}", pr.HeadBranch, ct);
+                if (videoUrl is not null)
+                    sb.AppendLine($"- 🎥 [{fileName}]({videoUrl}) ({bytes.Length / 1024}KB)");
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "Could not upload video {Path}", path);
+            }
+        }
+
+        // Traces — committed with link to trace.playwright.dev viewer
+        foreach (var path in traces)
+        {
+            try
+            {
+                var bytes = await File.ReadAllBytesAsync(path, ct);
+                if (bytes.Length > 20 * 1024 * 1024)
+                {
+                    Logger.LogDebug("Skipping trace upload — too large ({Size} bytes): {Path}", bytes.Length, path);
+                    sb.AppendLine($"- 📋 `{Path.GetFileName(path)}` ({bytes.Length / 1024 / 1024}MB — too large to upload)");
+                    continue;
+                }
+                var fileName = Path.GetFileName(path);
+                var repoPath = $"test-results/traces/{fileName}";
+                var traceUrl = await _github.CommitBinaryFileAsync(
+                    repoPath, bytes, $"test-artifact: {fileName}", pr.HeadBranch, ct);
+                if (traceUrl is not null)
+                    sb.AppendLine($"- 📋 [{fileName}]({traceUrl}) — [View in Trace Viewer](https://trace.playwright.dev)");
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "Could not upload trace {Path}", path);
+            }
+        }
+
+        sb.AppendLine();
     }
 
     /// <summary>
@@ -2371,6 +2456,22 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
         Logger.LogInformation(
             "Created test PR #{TestPR} for merged PR #{SourcePR} on branch {Branch}",
             testPr.Number, sourcePR.Number, branchName);
+
+        // Upload test artifacts (screenshots, videos, traces) to the test PR
+        if (testResults is not null && testResults.TierResults.Any(r => r.Artifacts.HasArtifacts))
+        {
+            try
+            {
+                var artifactSb = new System.Text.StringBuilder();
+                await UploadTestArtifactsToPrAsync(testPr, testResults.TierResults, artifactSb, ct);
+                if (artifactSb.Length > 0)
+                    await _github.AddPullRequestCommentAsync(testPr.Number, artifactSb.ToString(), ct);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "Could not upload test artifacts to PR #{Number}", testPr.Number);
+            }
+        }
 
         return testPr.Number;
     }
