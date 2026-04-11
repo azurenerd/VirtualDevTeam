@@ -1960,15 +1960,44 @@ public class ProgramManagerAgent : AgentBase
                 })
                 .ToList();
 
-            if (htmlDesignFiles.Count == 0) return null;
+            // Also find design screenshots committed by the Researcher
+            var designScreenshots = tree
+                .Where(f => f.StartsWith("docs/design-screenshots/", StringComparison.OrdinalIgnoreCase) &&
+                            Path.GetExtension(f).Equals(".png", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            if (htmlDesignFiles.Count == 0 && designScreenshots.Count == 0) return null;
 
             var sb = new System.Text.StringBuilder();
+
+            // Include design screenshot images first — most visually impactful
+            if (designScreenshots.Count > 0)
+            {
+                sb.AppendLine("## Design Visual Reference");
+                sb.AppendLine();
+                sb.AppendLine("The following screenshots were rendered from the HTML design files. " +
+                    "ALL UI implementations MUST match these visuals exactly.");
+                sb.AppendLine();
+
+                foreach (var screenshot in designScreenshots)
+                {
+                    var fileName = Path.GetFileNameWithoutExtension(screenshot);
+                    // Use raw GitHub URL for image embedding (GitHubRepo is "owner/repo" format)
+                    var imageUrl = $"https://raw.githubusercontent.com/{_config.Project.GitHubRepo}/main/{screenshot}";
+                    sb.AppendLine($"### {fileName}");
+                    sb.AppendLine();
+                    sb.AppendLine($"![{fileName} design reference]({imageUrl})");
+                    sb.AppendLine();
+                }
+            }
+
+            // Include HTML source for detailed CSS/layout reference
             foreach (var file in htmlDesignFiles)
             {
                 var content = await _github.GetFileContentAsync(file, ct: ct);
                 if (string.IsNullOrWhiteSpace(content)) continue;
 
-                sb.AppendLine($"### Design File: `{file}`");
+                sb.AppendLine($"### Design Source: `{file}`");
                 sb.AppendLine();
                 sb.AppendLine("```html");
                 sb.AppendLine(content.Length > 10000 ? content[..10000] + "\n<!-- truncated -->" : content);
@@ -1978,7 +2007,8 @@ public class ProgramManagerAgent : AgentBase
 
             if (sb.Length > 0)
             {
-                Logger.LogInformation("Read {Count} visual design reference files for PMSpec", htmlDesignFiles.Count);
+                Logger.LogInformation("Read {Count} design files + {Screenshots} screenshots for PMSpec",
+                    htmlDesignFiles.Count, designScreenshots.Count);
                 return sb.ToString().TrimEnd();
             }
 

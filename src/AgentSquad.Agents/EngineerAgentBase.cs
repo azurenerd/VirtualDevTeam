@@ -1734,12 +1734,31 @@ public abstract class EngineerAgentBase : AgentBase
                 })
                 .ToList();
 
-            if (designFiles.Count == 0) return null;
+            // Also find design screenshots committed by the Researcher
+            var designScreenshots = tree
+                .Where(f => f.StartsWith("docs/design-screenshots/", StringComparison.OrdinalIgnoreCase) &&
+                            Path.GetExtension(f).Equals(".png", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            if (designFiles.Count == 0 && designScreenshots.Count == 0) return null;
 
             var sb = new System.Text.StringBuilder();
             sb.AppendLine("## Visual Design Reference");
             sb.AppendLine("The following design files define the EXACT UI to be built. " +
                 "Match the layout, colors, typography, and component structure precisely.\n");
+
+            // Include screenshot image references for visual context
+            if (designScreenshots.Count > 0)
+            {
+                sb.AppendLine("### Design Screenshots (rendered from HTML design files)");
+                sb.AppendLine("These screenshots show the EXACT expected visual output:\n");
+                foreach (var screenshot in designScreenshots)
+                {
+                    var fileName = Path.GetFileNameWithoutExtension(screenshot);
+                    sb.AppendLine($"- **{fileName}**: See `{screenshot}` in the repository");
+                }
+                sb.AppendLine();
+            }
 
             foreach (var file in designFiles)
             {
@@ -1754,8 +1773,8 @@ public abstract class EngineerAgentBase : AgentBase
             }
 
             _cachedDesignContext = sb.ToString().TrimEnd();
-            Logger.LogInformation("{Role} {Name} loaded {Count} design reference files",
-                Identity.Role, Identity.DisplayName, designFiles.Count);
+            Logger.LogInformation("{Role} {Name} loaded {Count} design reference files + {Screenshots} screenshots",
+                Identity.Role, Identity.DisplayName, designFiles.Count, designScreenshots.Count);
             return _cachedDesignContext;
         }
         catch (Exception ex)

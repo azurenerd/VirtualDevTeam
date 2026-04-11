@@ -3,6 +3,7 @@ using AgentSquad.Core.Configuration;
 using AgentSquad.Core.GitHub;
 using AgentSquad.Core.Messaging;
 using AgentSquad.Core.Persistence;
+using AgentSquad.Core.Workspace;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Microsoft.SemanticKernel;
@@ -18,6 +19,7 @@ public class ResearcherAgent : AgentBase
     private readonly ProjectFileManager _projectFiles;
     private readonly ModelRegistry _modelRegistry;
     private readonly AgentSquadConfig _config;
+    private readonly PlaywrightRunner? _playwrightRunner;
 
     private readonly Queue<ResearchDirective> _researchQueue = new();
     private readonly List<IDisposable> _subscriptions = new();
@@ -32,7 +34,8 @@ public class ResearcherAgent : AgentBase
         ModelRegistry modelRegistry,
         AgentMemoryStore memoryStore,
         IOptions<AgentSquadConfig> config,
-        ILogger<ResearcherAgent> logger)
+        ILogger<ResearcherAgent> logger,
+        PlaywrightRunner? playwrightRunner = null)
         : base(identity, logger, memoryStore)
     {
         _messageBus = messageBus ?? throw new ArgumentNullException(nameof(messageBus));
@@ -41,6 +44,7 @@ public class ResearcherAgent : AgentBase
         _projectFiles = projectFiles ?? throw new ArgumentNullException(nameof(projectFiles));
         _modelRegistry = modelRegistry ?? throw new ArgumentNullException(nameof(modelRegistry));
         _config = config?.Value ?? throw new ArgumentNullException(nameof(config));
+        _playwrightRunner = playwrightRunner;
     }
 
     protected override Task OnInitializeAsync(CancellationToken ct)
@@ -717,12 +721,85 @@ public class ResearcherAgent : AgentBase
             }
 
             Logger.LogInformation("Found {Count} visual design reference files in repository", designFiles.Count);
+
+            // Capture screenshots of HTML design files and commit to repo
+            await CaptureDesignScreenshotsAsync(designFiles, sb, ct);
+
             return sb.ToString().TrimEnd();
         }
         catch (Exception ex)
         {
             Logger.LogWarning(ex, "Failed to scan for design reference files");
             return null;
+        }
+    }
+
+    /// <summary>
+    /// Capture PNG screenshots of HTML design files and commit them to the repo.
+    /// These screenshots are embedded in Research.md, PMSpec, Architecture, and issues
+    /// so all agents (and the human reviewer) see the exact intended visual output.
+    /// </summary>
+    private async Task CaptureDesignScreenshotsAsync(
+        List<(string path, string type)> designFiles,
+        System.Text.StringBuilder sb,
+        CancellationToken ct)
+    {
+        if (_playwrightRunner is null)
+        {
+            Logger.LogDebug("PlaywrightRunner not available, skipping design screenshots");
+            return;
+        }
+
+        var htmlDesignFiles = designFiles.Where(f => f.type.StartsWith("html")).ToList();
+        if (htmlDesignFiles.Count == 0) return;
+
+        sb.AppendLine();
+        sb.AppendLine("## Design Visual Previews");
+        sb.AppendLine();
+        sb.AppendLine("The following screenshots were rendered from the HTML design reference files. " +
+            "Engineers MUST match these visuals exactly.");
+        sb.AppendLine();
+
+        var screenshotCount = 0;
+        foreach (var (path, _) in htmlDesignFiles)
+        {
+            try
+            {
+                var htmlContent = await _github.GetFileContentAsync(path, ct: ct);
+                if (string.IsNullOrWhiteSpace(htmlContent)) continue;
+
+                var screenshotBytes = await _playwrightRunner.CaptureHtmlScreenshotAsync(
+                    htmlContent, _config.Workspace, ct: ct);
+                if (screenshotBytes is null || screenshotBytes.Length == 0) continue;
+
+                // Commit the screenshot to the repo
+                var fileName = Path.GetFileNameWithoutExtension(path);
+                var screenshotPath = $"docs/design-screenshots/{fileName}.png";
+                var imageUrl = await _github.CommitBinaryFileAsync(
+                    screenshotPath, screenshotBytes,
+                    $"Add design screenshot: {fileName}.png (rendered from {path})",
+                    "main", ct);
+
+                if (!string.IsNullOrWhiteSpace(imageUrl))
+                {
+                    sb.AppendLine($"### {Path.GetFileName(path)}");
+                    sb.AppendLine();
+                    sb.AppendLine($"![{fileName} design]({imageUrl})");
+                    sb.AppendLine();
+                    sb.AppendLine($"*Rendered from `{path}` at 1920×1080*");
+                    sb.AppendLine();
+                    screenshotCount++;
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "Failed to capture design screenshot for {Path}", path);
+            }
+        }
+
+        if (screenshotCount > 0)
+        {
+            Logger.LogInformation("Captured and committed {Count} design screenshots", screenshotCount);
         }
     }
 

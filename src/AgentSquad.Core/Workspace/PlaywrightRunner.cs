@@ -412,7 +412,107 @@ public class PlaywrightRunner
     /// <summary>
     /// Capture a full-page screenshot of the web application for PR visual progress.
     /// Starts the app, waits for readiness, navigates to the base URL, takes screenshot, stops app.
-    /// Returns the PNG bytes, or null if capture fails.
+    /// <summary>
+    /// Render a static HTML file (or raw HTML string) to a PNG screenshot using Playwright.
+    /// Does NOT require a running app — loads HTML directly in headless Chromium.
+    /// Useful for capturing design reference files as visual embeds.
+    /// </summary>
+    /// <param name="htmlContent">Raw HTML content to render.</param>
+    /// <param name="config">Workspace config for browser path.</param>
+    /// <param name="viewportWidth">Viewport width in pixels (default 1920).</param>
+    /// <param name="viewportHeight">Viewport height in pixels (default 1080).</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>PNG bytes, or null if rendering fails.</returns>
+    public async Task<byte[]?> CaptureHtmlScreenshotAsync(
+        string htmlContent,
+        WorkspaceConfig config,
+        int viewportWidth = 1920,
+        int viewportHeight = 1080,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            var browsersPath = config.GetPlaywrightBrowsersPath();
+            if (!Directory.Exists(browsersPath) ||
+                Directory.GetDirectories(browsersPath, "chromium*", SearchOption.TopDirectoryOnly).Length == 0)
+            {
+                _logger.LogDebug("Playwright browsers not installed, skipping HTML screenshot");
+                return null;
+            }
+
+            var playwright = await Microsoft.Playwright.Playwright.CreateAsync();
+            try
+            {
+                var browser = await playwright.Chromium.LaunchAsync(new Microsoft.Playwright.BrowserTypeLaunchOptions
+                {
+                    Headless = true
+                });
+
+                var context = await browser.NewContextAsync(new Microsoft.Playwright.BrowserNewContextOptions
+                {
+                    ViewportSize = new Microsoft.Playwright.ViewportSize { Width = viewportWidth, Height = viewportHeight }
+                });
+
+                var page = await context.NewPageAsync();
+                await page.SetContentAsync(htmlContent, new Microsoft.Playwright.PageSetContentOptions
+                {
+                    WaitUntil = Microsoft.Playwright.WaitUntilState.NetworkIdle,
+                    Timeout = 15000
+                });
+
+                // Brief render delay for any CSS animations or SVG rendering
+                await Task.Delay(1000, ct);
+
+                var screenshotBytes = await page.ScreenshotAsync(new Microsoft.Playwright.PageScreenshotOptions
+                {
+                    FullPage = true,
+                    Type = Microsoft.Playwright.ScreenshotType.Png
+                });
+
+                await browser.DisposeAsync();
+                _logger.LogInformation("Captured HTML design screenshot ({Size} bytes, {W}×{H})",
+                    screenshotBytes.Length, viewportWidth, viewportHeight);
+
+                return screenshotBytes;
+            }
+            finally
+            {
+                playwright.Dispose();
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to capture HTML design screenshot");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Capture a screenshot of an HTML file from the workspace.
+    /// Reads the file, renders it via Playwright, and returns PNG bytes.
+    /// </summary>
+    public async Task<byte[]?> CaptureHtmlFileScreenshotAsync(
+        string workspacePath,
+        string relativeFilePath,
+        WorkspaceConfig config,
+        CancellationToken ct = default)
+    {
+        var fullPath = Path.Combine(workspacePath, relativeFilePath.Replace('/', Path.DirectorySeparatorChar));
+        if (!File.Exists(fullPath))
+        {
+            _logger.LogDebug("HTML file not found for screenshot: {Path}", fullPath);
+            return null;
+        }
+
+        var htmlContent = await File.ReadAllTextAsync(fullPath, ct);
+        if (string.IsNullOrWhiteSpace(htmlContent))
+            return null;
+
+        return await CaptureHtmlScreenshotAsync(htmlContent, config, ct: ct);
+    }
+
+    /// <summary>
+    /// Captures the running application's main page as a 1920×1080 PNG screenshot.
     /// </summary>
     public async Task<byte[]?> CaptureAppScreenshotAsync(
         string workspacePath,
