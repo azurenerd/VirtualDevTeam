@@ -216,6 +216,9 @@ public class LocalWorkspace
         await _gitLock.WaitAsync(ct);
         try
         {
+            // Ensure .gitignore exists before staging — prevents bin/obj/build artifacts from being committed
+            await EnsureGitignoreAsync(ct);
+
             await RunGitAsync("add", "-A", ct: ct);
 
             // Check if there's anything to commit
@@ -251,6 +254,81 @@ public class LocalWorkspace
         {
             _gitLock.Release();
         }
+    }
+
+    /// <summary>
+    /// Ensures a .gitignore file exists at the repo root. If missing, creates a standard
+    /// .NET gitignore that prevents bin/, obj/, and other build artifacts from being committed.
+    /// </summary>
+    private async Task EnsureGitignoreAsync(CancellationToken ct)
+    {
+        var gitignorePath = Path.Combine(RepoPath, ".gitignore");
+        if (File.Exists(gitignorePath)) return;
+
+        _logger.LogInformation("[{Agent}] No .gitignore found — creating standard .NET gitignore", _agentId);
+        var content = """
+            ## Build results
+            [Dd]ebug/
+            [Rr]elease/
+            x64/
+            x86/
+            [Ww][Ii][Nn]32/
+            [Aa][Rr][Mm]/
+            [Aa][Rr][Mm]64/
+            bld/
+            [Bb]in/
+            [Oo]bj/
+            [Ll]og/
+            [Ll]ogs/
+
+            ## NuGet
+            *.nupkg
+            *.snupkg
+            **/[Pp]ackages/*
+            !**/[Pp]ackages/build/
+
+            ## Visual Studio
+            .vs/
+            *.suo
+            *.user
+            *.userosscache
+            *.sln.docstates
+            *.csproj.user
+
+            ## Rider
+            .idea/
+
+            ## User-specific
+            *.rsuser
+            *.DotSettings.user
+            launchSettings.json
+
+            ## Build output
+            publish/
+            [Pp]ublish/
+            **/wwwroot/dist/
+
+            ## Node
+            node_modules/
+            npm-debug.log*
+
+            ## OS
+            .DS_Store
+            Thumbs.db
+            desktop.ini
+
+            ## Environment
+            .env
+            .env.*
+            appsettings.Development.json
+            appsettings.Local.json
+
+            ## Playwright
+            playwright-report/
+            test-results/
+            """.Replace("            ", "");  // Remove indentation from raw string literal
+
+        await File.WriteAllTextAsync(gitignorePath, content, ct);
     }
 
     /// <summary>
