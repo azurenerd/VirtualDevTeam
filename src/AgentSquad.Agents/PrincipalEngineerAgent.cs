@@ -39,6 +39,7 @@ public class PrincipalEngineerAgent : EngineerAgentBase
     private readonly Dictionary<string, int> _agentAssignments = new();
     private readonly HashSet<int> _reviewedPrNumbers = new();
     private readonly HashSet<int> _forceApprovalPrs = new();
+    private readonly HashSet<int> _mergedTestedPrNumbers = new();
     private readonly ConcurrentQueue<int> _reviewQueue = new();
     private readonly Dictionary<int, int> _conflictRetryCount = new();
     private DateTime _lastReviewDiscovery = DateTime.MinValue;
@@ -242,6 +243,10 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                     // ALL PEs: Always review PRs — even after all tasks complete
                     await DiscoverUnreviewedEngineerPRsAsync(ct);
                     await ReviewEngineerPRsAsync(ct);
+
+                    // Inline test workflow: merge PRs that have been approved + tested
+                    if (Config.Workspace.IsInlineTestWorkflow)
+                        await MergeTestedPRsAsync(ct);
 
                 }
 
@@ -1367,8 +1372,9 @@ public class PrincipalEngineerAgent : EngineerAgentBase
 
                 if (approved)
                 {
+                    var requireTests = Config.Workspace.IsInlineTestWorkflow;
                     var result = await PrWorkflow.ApproveAndMaybeMergeAsync(
-                        pr.Number, "PrincipalEngineer", reviewBody, ct);
+                        pr.Number, "PrincipalEngineer", reviewBody, requireTests, ct);
                     if (result == MergeAttemptResult.Merged)
                     {
                         Logger.LogInformation("PE approved and merged PR #{Number}", pr.Number);
@@ -1386,6 +1392,11 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                         Logger.LogWarning("PE approved PR #{Number} but merge blocked by conflicts, attempting close-and-recreate", pr.Number);
                         LogActivity("task", $"⚠️ PR #{pr.Number} blocked by merge conflicts — closing and recreating");
                         await TryCloseAndRecreatePRAsync(pr, ct);
+                    }
+                    else if (result == MergeAttemptResult.AwaitingTests)
+                    {
+                        Logger.LogInformation("PE approved PR #{Number}, waiting for Test Engineer to add tests", pr.Number);
+                        LogActivity("task", $"✅ Approved PR #{pr.Number}: {pr.Title} — awaiting tests");
                     }
                     else
                     {
@@ -1425,6 +1436,95 @@ public class PrincipalEngineerAgent : EngineerAgentBase
         catch (Exception ex)
         {
             Logger.LogWarning(ex, "Failed to review engineer PRs");
+        }
+    }
+
+    /// <summary>
+    /// Inline test workflow: find PRs with both 'approved' and 'tests-added' labels,
+    /// do a lightweight review of the test code, and merge.
+    /// Engineers wrote the code (already approved by PE). TE added tests.
+    /// PE does a quick test-quality check then merges. PM/Architect don't re-review.
+    /// </summary>
+    private async Task MergeTestedPRsAsync(CancellationToken ct)
+    {
+        try
+        {
+            var openPRs = await GitHub.GetOpenPullRequestsAsync(ct);
+
+            foreach (var pr in openPRs)
+            {
+                if (ct.IsCancellationRequested) break;
+
+                // Must have BOTH approved (code reviewed) and tests-added (TE finished)
+                bool hasApproved = pr.Labels.Contains(
+                    PullRequestWorkflow.Labels.Approved, StringComparer.OrdinalIgnoreCase);
+                bool hasTests = pr.Labels.Contains(
+                    PullRequestWorkflow.Labels.TestsAdded, StringComparer.OrdinalIgnoreCase);
+
+                if (!hasApproved || !hasTests)
+                    continue;
+
+                // Skip our own PRs
+                if (pr.Title.StartsWith($"{Identity.DisplayName}:", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                // Skip if we already processed this PR in this cycle
+                if (_reviewedPrNumbers.Contains(pr.Number) &&
+                    !_mergedTestedPrNumbers.Add(pr.Number))
+                    continue;
+
+                Logger.LogInformation(
+                    "Found approved+tested PR #{Number}: {Title} — reviewing tests and merging",
+                    pr.Number, pr.Title);
+                UpdateStatus(AgentStatus.Working, $"Reviewing tests on PR #{pr.Number}");
+
+                // Lightweight test review: check that TE actually added test files
+                var changedFiles = await GitHub.GetPullRequestChangedFilesAsync(pr.Number, ct);
+                var testFiles = changedFiles
+                    .Where(f => f.Contains("test", StringComparison.OrdinalIgnoreCase) ||
+                                f.Contains("Test", StringComparison.Ordinal))
+                    .ToList();
+
+                if (testFiles.Count == 0)
+                {
+                    Logger.LogWarning(
+                        "PR #{Number} has tests-added label but no test files found — skipping merge",
+                        pr.Number);
+                    await GitHub.AddPullRequestCommentAsync(pr.Number,
+                        "⚠️ **PE Review:** PR has `tests-added` label but no test files were detected. " +
+                        "Waiting for actual test files to be committed.", ct);
+                    continue;
+                }
+
+                // Post test review approval and merge
+                await GitHub.AddPullRequestCommentAsync(pr.Number,
+                    $"✅ **[PrincipalEngineer] Tests Reviewed** — {testFiles.Count} test file(s) verified. Merging.", ct);
+
+                var result = await PrWorkflow.MergeApprovedTestedPRAsync(
+                    pr.Number, "PrincipalEngineer", ct);
+
+                if (result == MergeAttemptResult.Merged)
+                {
+                    Logger.LogInformation("PE merged tested PR #{Number}", pr.Number);
+                    LogActivity("task", $"✅ Merged PR #{pr.Number}: {pr.Title} (code approved + tests added)");
+
+                    if (!pr.Title.StartsWith("TestEngineer:", StringComparison.OrdinalIgnoreCase))
+                        await MarkEngineerTaskDoneAsync(pr, ct);
+
+                    await RememberAsync(MemoryType.Action,
+                        $"Merged tested PR #{pr.Number}: {pr.Title}", ct: ct);
+                }
+                else if (result == MergeAttemptResult.ConflictBlocked)
+                {
+                    Logger.LogWarning("Tested PR #{Number} has merge conflicts", pr.Number);
+                    LogActivity("task", $"⚠️ Tested PR #{pr.Number} blocked by merge conflicts");
+                    await TryCloseAndRecreatePRAsync(pr, ct);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to merge tested PRs");
         }
     }
 

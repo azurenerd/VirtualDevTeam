@@ -154,6 +154,17 @@ public class WorkspaceConfig
     public bool IsEnabled => !string.IsNullOrWhiteSpace(RootPath);
 
     /// <summary>
+    /// Test workflow mode: "inline" pushes test commits to the original PR's branch
+    /// (pre-merge), "separate-pr" creates a dedicated test PR (post-merge, legacy).
+    /// Default is "inline" for a single-PR workflow.
+    /// </summary>
+    public string TestWorkflow { get; set; } = "inline";
+
+    /// <summary>Whether the TestWorkflow is set to inline mode.</summary>
+    public bool IsInlineTestWorkflow =>
+        string.Equals(TestWorkflow, "inline", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
     /// Optional .gitconfig overrides for cloned repos (e.g., user.name, user.email).
     /// Applied via git config after clone.
     /// </summary>

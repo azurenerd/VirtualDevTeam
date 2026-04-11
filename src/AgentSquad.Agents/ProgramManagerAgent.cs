@@ -919,7 +919,7 @@ public class ProgramManagerAgent : AgentBase
                 if (approved)
                 {
                     var result = await _prWorkflow.ApproveAndMaybeMergeAsync(
-                        pr.Number, "ProgramManager", reviewBody, ct);
+                        pr.Number, "ProgramManager", reviewBody, ct: ct);
                     if (result == MergeAttemptResult.Merged)
                     {
                         Logger.LogInformation("PM approved and merged PR #{Number}", pr.Number);

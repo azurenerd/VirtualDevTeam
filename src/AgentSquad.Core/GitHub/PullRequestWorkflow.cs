@@ -12,7 +12,9 @@ public enum MergeAttemptResult
 {
     Merged,
     AwaitingApprovals,
-    ConflictBlocked
+    ConflictBlocked,
+    /// <summary>Code approved but waiting for Test Engineer to add tests (inline test workflow).</summary>
+    AwaitingTests
 }
 
 /// <summary>
@@ -29,6 +31,7 @@ public partial class PullRequestWorkflow
         public const string ReadyForReview = "ready-for-review";
         public const string Approved = "approved";
         public const string InProgress = "in-progress";
+        public const string TestsAdded = "tests-added";
         public const string HighComplexity = "complexity-high";
         public const string MediumComplexity = "complexity-medium";
         public const string LowComplexity = "complexity-low";
@@ -626,7 +629,9 @@ public partial class PullRequestWorkflow
     /// the Architect substitutes in. Returns true if the PR was merged.
     /// </summary>
     public async Task<MergeAttemptResult> ApproveAndMaybeMergeAsync(
-        int prNumber, string approverAgent, string reason, CancellationToken ct = default)
+        int prNumber, string approverAgent, string reason,
+        bool requireTestsBeforeMerge = false,
+        CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(approverAgent);
 
@@ -649,10 +654,7 @@ public partial class PullRequestWorkflow
 
         if (requiredReviewers.All(r => approvedReviewers.Contains(r, StringComparer.OrdinalIgnoreCase)))
         {
-            // All reviewers approved — merge!
-            _logger.LogInformation("All reviewers approved PR #{Number}, merging", prNumber);
-
-            // Update labels
+            // All reviewers approved — update labels
             if (pr is not null)
             {
                 var updatedLabels = pr.Labels
@@ -663,62 +665,99 @@ public partial class PullRequestWorkflow
                 await _github.UpdatePullRequestAsync(prNumber, labels: updatedLabels, ct: ct);
             }
 
-            try
+            // If inline test workflow is active, don't merge yet — wait for TE to add tests
+            if (requireTestsBeforeMerge &&
+                pr is not null &&
+                !pr.Labels.Contains(Labels.TestsAdded, StringComparer.OrdinalIgnoreCase))
             {
-                await _github.MergePullRequestAsync(prNumber,
-                    $"Merged by {approverAgent} after dual approval from {string.Join(" and ", approvedReviewers)}", ct);
-            }
-            catch (Octokit.PullRequestNotMergeableException)
-            {
-                // Branch is behind main or has conflicts — try to update
-                _logger.LogWarning("PR #{Number} not mergeable, attempting branch update", prNumber);
-                var updated = await _github.UpdatePullRequestBranchAsync(prNumber, ct);
-                if (!updated)
-                {
-                    // Standard merge-update failed — try force-rebase onto main
-                    _logger.LogWarning("PR #{Number} branch update failed — attempting force-rebase onto main", prNumber);
-                    updated = await _github.RebaseBranchOnMainAsync(prNumber, ct);
-                }
-
-                if (updated)
-                {
-                    // Wait briefly for GitHub to process the merge commit
-                    await Task.Delay(5000, ct);
-                    try
-                    {
-                        await _github.MergePullRequestAsync(prNumber,
-                            $"Merged by {approverAgent} after branch sync and dual approval from {string.Join(" and ", approvedReviewers)}", ct);
-                    }
-                    catch (Exception retryEx)
-                    {
-                        _logger.LogWarning(retryEx, "PR #{Number} still not mergeable after branch update — may have real conflicts", prNumber);
-                        await _github.AddPullRequestCommentAsync(prNumber,
-                            $"⚠️ **Merge blocked** — PR has conflicts with `main` that could not be auto-resolved. " +
-                            $"Branch update was attempted but merge still failed.", ct);
-                        return MergeAttemptResult.ConflictBlocked;
-                    }
-                }
-                else
-                {
-                    _logger.LogWarning("PR #{Number} branch update and rebase both failed — merge conflicts require manual resolution", prNumber);
-                    await _github.AddPullRequestCommentAsync(prNumber,
-                        $"⚠️ **Merge blocked** — PR has conflicts with `main` that require resolution. " +
-                        $"The engineer should rebase and resolve conflicts.", ct);
-                    return MergeAttemptResult.ConflictBlocked;
-                }
+                _logger.LogInformation(
+                    "PR #{Number} approved by all reviewers but waiting for Test Engineer to add tests",
+                    prNumber);
+                await _github.AddPullRequestCommentAsync(prNumber,
+                    "✅ **Code approved by all reviewers.** Waiting for the Test Engineer to add tests before merging.", ct);
+                return MergeAttemptResult.AwaitingTests;
             }
 
-            // Clean up the head branch after squash merge
-            if (pr is not null && !string.IsNullOrEmpty(pr.HeadBranch))
-                await _github.DeleteBranchAsync(pr.HeadBranch, ct);
-
-            return MergeAttemptResult.Merged;
+            // Tests already added (or not required) — merge!
+            _logger.LogInformation("All reviewers approved PR #{Number}, merging", prNumber);
+            return await AttemptMergeAsync(prNumber, approverAgent, approvedReviewers, pr, ct);
         }
 
         _logger.LogInformation("PR #{Number} still needs approval from: {Missing}",
             prNumber,
             string.Join(", ", requiredReviewers.Except(approvedReviewers, StringComparer.OrdinalIgnoreCase)));
         return MergeAttemptResult.AwaitingApprovals;
+    }
+
+    /// <summary>
+    /// Merge a PR that has been approved and (if inline test workflow) has tests.
+    /// Used by PE to merge PRs with both 'approved' and 'tests-added' labels.
+    /// </summary>
+    public async Task<MergeAttemptResult> MergeApprovedTestedPRAsync(
+        int prNumber, string mergerAgent, CancellationToken ct = default)
+    {
+        var pr = await _github.GetPullRequestAsync(prNumber, ct);
+        if (pr is null || !string.Equals(pr.State, "open", StringComparison.OrdinalIgnoreCase))
+            return MergeAttemptResult.ConflictBlocked;
+
+        var approvedReviewers = await GetApprovedReviewersAsync(prNumber, ct);
+        return await AttemptMergeAsync(prNumber, mergerAgent, approvedReviewers, pr, ct);
+    }
+
+    /// <summary>
+    /// Shared merge logic: tries merge with branch-update fallback and cleanup.
+    /// </summary>
+    private async Task<MergeAttemptResult> AttemptMergeAsync(
+        int prNumber, string mergerAgent, List<string> approvedReviewers,
+        AgentPullRequest? pr, CancellationToken ct)
+    {
+        try
+        {
+            await _github.MergePullRequestAsync(prNumber,
+                $"Merged by {mergerAgent} after approval from {string.Join(" and ", approvedReviewers)}", ct);
+        }
+        catch (Octokit.PullRequestNotMergeableException)
+        {
+            _logger.LogWarning("PR #{Number} not mergeable, attempting branch update", prNumber);
+            var updated = await _github.UpdatePullRequestBranchAsync(prNumber, ct);
+            if (!updated)
+            {
+                _logger.LogWarning("PR #{Number} branch update failed — attempting force-rebase onto main", prNumber);
+                updated = await _github.RebaseBranchOnMainAsync(prNumber, ct);
+            }
+
+            if (updated)
+            {
+                await Task.Delay(5000, ct);
+                try
+                {
+                    await _github.MergePullRequestAsync(prNumber,
+                        $"Merged by {mergerAgent} after branch sync and approval from {string.Join(" and ", approvedReviewers)}", ct);
+                }
+                catch (Exception retryEx)
+                {
+                    _logger.LogWarning(retryEx, "PR #{Number} still not mergeable after branch update", prNumber);
+                    await _github.AddPullRequestCommentAsync(prNumber,
+                        $"⚠️ **Merge blocked** — PR has conflicts with `main` that could not be auto-resolved. " +
+                        $"Branch update was attempted but merge still failed.", ct);
+                    return MergeAttemptResult.ConflictBlocked;
+                }
+            }
+            else
+            {
+                _logger.LogWarning("PR #{Number} branch update and rebase both failed", prNumber);
+                await _github.AddPullRequestCommentAsync(prNumber,
+                    $"⚠️ **Merge blocked** — PR has conflicts with `main` that require resolution. " +
+                    $"The engineer should rebase and resolve conflicts.", ct);
+                return MergeAttemptResult.ConflictBlocked;
+            }
+        }
+
+        // Clean up the head branch after merge
+        if (pr is not null && !string.IsNullOrEmpty(pr.HeadBranch))
+            await _github.DeleteBranchAsync(pr.HeadBranch, ct);
+
+        return MergeAttemptResult.Merged;
     }
 
     /// <summary>

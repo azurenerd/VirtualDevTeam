@@ -557,7 +557,7 @@ public class ArchitectAgent : AgentBase
                 if (verdict == "APPROVED")
                 {
                     await _prWorkflow.ApproveAndMaybeMergeAsync(
-                        pr.Number, "Architect", $"🏗️ Architecture Review: {reasoning}", ct);
+                        pr.Number, "Architect", $"🏗️ Architecture Review: {reasoning}", ct: ct);
                     Logger.LogInformation("Architect approved PR #{Number}", pr.Number);
                     LogActivity("task", $"✅ Approved PR #{pr.Number}: {pr.Title}");
                     await RememberAsync(MemoryType.Decision,

@@ -145,7 +145,9 @@ public class TestEngineerAgent : AgentBase
 
     protected override async Task RunAgentLoopAsync(CancellationToken ct)
     {
-        UpdateStatus(AgentStatus.Idle, "Monitoring merged PRs for test coverage");
+        var isInline = _config.Workspace.IsInlineTestWorkflow;
+        UpdateStatus(AgentStatus.Idle,
+            isInline ? "Monitoring PRs for inline test coverage" : "Monitoring merged PRs for test coverage");
 
         while (!ct.IsCancellationRequested)
         {
@@ -160,10 +162,13 @@ public class TestEngineerAgent : AgentBase
                 // Priority 2: Recover any open test PRs that need review
                 await RecoverTestPRsAsync(ct);
 
-                // Priority 3: Scan for new merged PRs to test
-                await ScanMergedPRsForTestingAsync(ct);
+                // Priority 3: Scan for PRs to test (mode-dependent)
+                if (isInline)
+                    await ScanApprovedPRsForInlineTestingAsync(ct);
+                else
+                    await ScanMergedPRsForTestingAsync(ct);
 
-                // Check if all code-bearing merged PRs have been tested → signal completion
+                // Check if all code-bearing PRs have been tested → signal completion
                 await CheckTestCoverageCompleteAsync(ct);
 
                 await RefreshDiagnosticWithMemoryAsync(ct);
@@ -277,7 +282,581 @@ public class TestEngineerAgent : AgentBase
     }
 
     /// <summary>
-    /// Checks whether all code-bearing merged PRs from this session have been tested.
+    /// Inline test workflow: scans open PRs that have been approved by PE/PM
+    /// (have 'approved' label) but don't yet have tests ('tests-added' label).
+    /// Pushes test commits directly to the PR's branch so the PR contains both
+    /// the feature code and its tests — a single-PR workflow.
+    ///
+    /// Flow: approved → TE adds tests → tests-added → PE reviews tests → merge
+    /// </summary>
+    private async Task ScanApprovedPRsForInlineTestingAsync(CancellationToken ct)
+    {
+        // Don't pick up new work if we're already generating tests for another PR
+        if (_currentTestPrNumber is not null)
+            return;
+
+        var openPRs = await _github.GetOpenPullRequestsAsync(ct);
+
+        // Sort by creation date (oldest first = FIFO) so earlier PRs get tests first
+        var candidates = openPRs
+            .Where(pr => !_testedPRs.Contains(pr.Number))
+            .OrderBy(pr => pr.CreatedAt)
+            .ToList();
+
+        foreach (var pr in candidates)
+        {
+            if (ct.IsCancellationRequested) break;
+
+            // Gate: must have 'approved' label (PE has reviewed the code)
+            if (!pr.Labels.Contains(PullRequestWorkflow.Labels.Approved, StringComparer.OrdinalIgnoreCase))
+                continue;
+
+            // Skip PRs that already have tests
+            if (pr.Labels.Contains(PullRequestWorkflow.Labels.TestsAdded, StringComparer.OrdinalIgnoreCase) ||
+                pr.Labels.Contains(TestedLabel, StringComparer.OrdinalIgnoreCase))
+            {
+                _testedPRs.Add(pr.Number);
+                continue;
+            }
+
+            // Skip test-only PRs (our own or other TEs)
+            if (pr.Labels.Contains("tests", StringComparer.OrdinalIgnoreCase))
+            {
+                _testedPRs.Add(pr.Number);
+                continue;
+            }
+
+            // Skip PRs authored by this agent (prevent circular testing)
+            if (PullRequestWorkflow.ParseAgentNameFromTitle(pr.Title) is { } agent &&
+                agent.Equals(Identity.DisplayName, StringComparison.OrdinalIgnoreCase))
+            {
+                _testedPRs.Add(pr.Number);
+                continue;
+            }
+
+            // Check for testable code files
+            var changedFiles = await _github.GetPullRequestChangedFilesAsync(pr.Number, ct);
+            var codeFiles = changedFiles
+                .Where(f => TestableExtensions.Contains(Path.GetExtension(f)))
+                .ToList();
+
+            if (codeFiles.Count == 0)
+            {
+                Logger.LogDebug("Skipping approved PR #{Number} — no testable code files", pr.Number);
+                _testedPRs.Add(pr.Number);
+                continue;
+            }
+
+            Logger.LogInformation(
+                "Found approved PR #{Number} with {Count} testable files needing tests: {Title}",
+                pr.Number, codeFiles.Count, pr.Title);
+            LogActivity("task",
+                $"🧪 Adding inline tests to approved PR #{pr.Number}: {pr.Title} ({codeFiles.Count} code files)");
+
+            try
+            {
+                await AddInlineTestsToPRAsync(pr, codeFiles, ct);
+                _testedPRs.Add(pr.Number);
+                _sessionTestedPRs.Add(pr.Number);
+            }
+            catch (OperationCanceledException)
+            {
+                throw; // Don't swallow cancellation
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex, "Failed to add inline tests to PR #{Number}", pr.Number);
+                RecordError($"Inline test failure for PR #{pr.Number}: {ex.Message}",
+                    Microsoft.Extensions.Logging.LogLevel.Warning, ex);
+                _testedPRs.Add(pr.Number); // Don't retry indefinitely
+
+                // Post a comment so the team knows what happened
+                try
+                {
+                    await _github.AddPullRequestCommentAsync(pr.Number,
+                        $"⚠️ **Test Engineer:** Failed to generate tests for this PR.\n\n" +
+                        $"Error: `{ex.Message}`\n\n" +
+                        $"The PR can still be reviewed and merged without automated tests.", ct);
+                }
+                catch { /* best effort */ }
+            }
+
+            // Process one PR per loop iteration to stay responsive
+            break;
+        }
+    }
+
+    /// <summary>
+    /// Core inline test pipeline: checks out the PR's branch, reads source files locally,
+    /// generates tests, builds + runs them with retry, commits and pushes.
+    ///
+    /// Edge cases handled:
+    /// - PR closed/merged between start and push → checks state before push
+    /// - Base code doesn't build → aborts with comment, doesn't add broken tests
+    /// - Push rejected (branch moved) → pulls and retries once
+    /// - Test build fails after max retries → reverts, posts comment
+    /// - No workspace available → falls back to API-only commit
+    /// </summary>
+    private async Task AddInlineTestsToPRAsync(
+        AgentPullRequest pr, List<string> codeFilePaths, CancellationToken ct)
+    {
+        _currentTestPrNumber = pr.Number;
+        ActivateTestPrSession(pr.Number);
+
+        try
+        {
+            UpdateStatus(AgentStatus.Working, $"Adding tests to PR #{pr.Number}");
+
+            if (_workspace is not null && _buildRunner is not null && _testRunner is not null)
+                await AddInlineTestsViaWorkspaceAsync(pr, codeFilePaths, ct);
+            else
+                await AddInlineTestsViaApiAsync(pr, codeFilePaths, ct);
+        }
+        finally
+        {
+            _currentTestPrNumber = null;
+            UpdateStatus(AgentStatus.Idle, "Monitoring approved PRs for test coverage");
+        }
+    }
+
+    /// <summary>
+    /// Workspace path: checkout PR branch, verify build, generate tests, build+test, push.
+    /// </summary>
+    private async Task AddInlineTestsViaWorkspaceAsync(
+        AgentPullRequest pr, List<string> codeFilePaths, CancellationToken ct)
+    {
+        var wsConfig = _config.Workspace;
+
+        // --- Phase 1: Sync workspace to the PR's branch ---
+        UpdateStatus(AgentStatus.Working, $"Checking out PR #{pr.Number} branch");
+        await _workspace!.SyncWithMainAsync(ct);
+        await _workspace.CheckoutBranchAsync(pr.HeadBranch, ct);
+
+        // --- Phase 2: Verify the PR's code actually builds ---
+        // If the base code doesn't build, there's no point adding tests to it
+        UpdateStatus(AgentStatus.Working, $"Verifying PR #{pr.Number} base build");
+        var baseBuild = await _buildRunner!.BuildAsync(
+            _workspace.RepoPath, wsConfig.BuildCommand, wsConfig.BuildTimeoutSeconds, ct);
+
+        if (!baseBuild.Success)
+        {
+            Logger.LogWarning(
+                "PR #{Number} base code doesn't build — skipping inline tests. Errors: {Errors}",
+                pr.Number, baseBuild.Errors.Length > 500 ? baseBuild.Errors[..500] : baseBuild.Errors);
+            await _github.AddPullRequestCommentAsync(pr.Number,
+                "⚠️ **Test Engineer:** Cannot add tests — the PR's code doesn't build.\n\n" +
+                "Please fix build errors first. The Test Engineer will retry when the PR is updated.", ct);
+            // Don't mark as tested — allow retry after engineer fixes build
+            _testedPRs.Remove(pr.Number);
+            return;
+        }
+
+        // --- Phase 3: Read source files locally (faster than API, no rate limit) ---
+        UpdateStatus(AgentStatus.Working, $"Reading source files from PR #{pr.Number}");
+        var sourceFiles = new Dictionary<string, string>();
+        foreach (var filePath in codeFilePaths)
+        {
+            var content = await _workspace.ReadFileAsync(filePath, ct);
+            if (!string.IsNullOrWhiteSpace(content))
+                sourceFiles[filePath] = content;
+        }
+
+        if (sourceFiles.Count == 0)
+        {
+            // Fallback to API if local read fails (files might be in paths we can't find locally)
+            Logger.LogWarning("Could not read source files locally for PR #{Number}, trying API", pr.Number);
+            foreach (var filePath in codeFilePaths)
+            {
+                try
+                {
+                    var content = await _github.GetFileContentAsync(filePath, pr.HeadBranch, ct);
+                    if (!string.IsNullOrWhiteSpace(content))
+                        sourceFiles[filePath] = content;
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogDebug(ex, "Could not read {Path} from branch {Branch}", filePath, pr.HeadBranch);
+                }
+            }
+        }
+
+        if (sourceFiles.Count == 0)
+        {
+            Logger.LogWarning("No source files readable for PR #{Number}", pr.Number);
+            return;
+        }
+
+        // --- Phase 4: Generate test code via AI ---
+        UpdateStatus(AgentStatus.Working, $"Generating tests for PR #{pr.Number} ({sourceFiles.Count} files)");
+        var existingTests = await DiscoverExistingTestsAsync(sourceFiles.Keys.ToList(), ct);
+        var testOutput = await GenerateTestCodeAsync(pr, sourceFiles, existingTests, ct);
+
+        if (string.IsNullOrWhiteSpace(testOutput))
+        {
+            Logger.LogWarning("AI returned empty test output for PR #{Number}", pr.Number);
+            return;
+        }
+
+        var testFiles = CodeFileParser.ParseFiles(testOutput);
+        if (testFiles.Count == 0)
+        {
+            Logger.LogWarning("No parseable test files from AI output for PR #{Number}", pr.Number);
+            return;
+        }
+
+        Logger.LogInformation(
+            "Generated {Count} test files for PR #{Number}: {Files}",
+            testFiles.Count, pr.Number,
+            string.Join(", ", testFiles.Select(f => f.Path)));
+
+        // --- Phase 5: Write test files, scaffold project infrastructure ---
+        foreach (var file in testFiles)
+            await _workspace.WriteFileAsync(file.Path, file.Content, ct);
+
+        EnsureTestProjectExists(testFiles);
+        await AddTestProjectsToSolutionAsync(testFiles, ct);
+
+        // --- Phase 6: Build test code with AI fix retry loop ---
+        UpdateStatus(AgentStatus.Working, $"Building tests for PR #{pr.Number}");
+        var buildResult = await _buildRunner.BuildAsync(
+            _workspace.RepoPath, wsConfig.BuildCommand, wsConfig.BuildTimeoutSeconds, ct);
+
+        if (!buildResult.Success)
+        {
+            buildResult = await RetryBuildWithAIFixesAsync(
+                pr, testFiles, buildResult, wsConfig, ct);
+        }
+
+        if (!buildResult.Success)
+        {
+            // Build still failing after all retries — revert and report
+            Logger.LogWarning(
+                "Inline test build failed after {Retries} retries for PR #{Number}",
+                wsConfig.MaxBuildRetries, pr.Number);
+            await _workspace.RevertUncommittedChangesAsync(ct);
+            await _github.AddPullRequestCommentAsync(pr.Number,
+                $"❌ **Test Engineer:** Could not make test code compile after " +
+                $"{wsConfig.MaxBuildRetries} attempts. Build errors prevented test addition.\n\n" +
+                $"The PR can still be merged without automated tests.", ct);
+            return;
+        }
+
+        // --- Phase 7: Run tests by tier ---
+        UpdateStatus(AgentStatus.Working, $"Running tests for PR #{pr.Number}");
+        var tierResults = new List<TestResult>();
+
+        // Unit tests (always run)
+        var unitResult = await RunTestTierWithRetryAsync(
+            TestTier.Unit,
+            wsConfig.UnitTestCommand ?? wsConfig.TestCommand,
+            wsConfig.UnitTestTimeoutSeconds, wsConfig, ct);
+        if (unitResult is not null)
+            tierResults.Add(unitResult);
+
+        // Integration tests (only if unit tests passed and command configured)
+        if (unitResult is null or { Success: true })
+        {
+            var intCommand = wsConfig.IntegrationTestCommand;
+            if (!string.IsNullOrWhiteSpace(intCommand))
+            {
+                var intResult = await RunTestTierWithRetryAsync(
+                    TestTier.Integration, intCommand,
+                    wsConfig.IntegrationTestTimeoutSeconds, wsConfig, ct);
+                if (intResult is not null)
+                    tierResults.Add(intResult);
+            }
+        }
+
+        // UI tests (only if prior tiers passed, enabled, and command configured)
+        if (tierResults.All(r => r.Success) && wsConfig.EnableUITests)
+        {
+            var uiCommand = wsConfig.UITestCommand;
+            if (!string.IsNullOrWhiteSpace(uiCommand) && _playwrightRunner is not null)
+            {
+                await _playwrightRunner.EnsureBrowsersInstalledAsync(_config.Workspace, _workspace!.RepoPath, ct);
+                var uiResult = await RunTestTierWithRetryAsync(
+                    TestTier.UI, uiCommand,
+                    wsConfig.UITestTimeoutSeconds, wsConfig, ct);
+                if (uiResult is not null)
+                    tierResults.Add(uiResult);
+            }
+        }
+
+        // --- Phase 8: Pre-push safety check — is the PR still open? ---
+        var currentPr = await _github.GetPullRequestAsync(pr.Number, ct);
+        if (currentPr is null || !string.Equals(currentPr.State, "open", StringComparison.OrdinalIgnoreCase))
+        {
+            Logger.LogWarning("PR #{Number} is no longer open (state: {State}), discarding test work",
+                pr.Number, currentPr?.State ?? "null");
+            await _workspace.RevertUncommittedChangesAsync(ct);
+            return;
+        }
+
+        // --- Phase 9: Commit and push to the PR's branch ---
+        UpdateStatus(AgentStatus.Working, $"Pushing tests to PR #{pr.Number}");
+        await _workspace.CommitAsync($"test: add tests for PR #{pr.Number}", ct);
+
+        try
+        {
+            await _workspace.PushAsync(pr.HeadBranch, ct);
+        }
+        catch (Exception pushEx)
+        {
+            // Push failed — likely the branch moved (engineer pushed a fix, or force-push)
+            // Try once more: pull the latest, rebuild, and push again
+            Logger.LogWarning(pushEx,
+                "Push to {Branch} rejected for PR #{Number} — attempting pull and retry",
+                pr.HeadBranch, pr.Number);
+
+            try
+            {
+                // Fetch + merge the remote changes
+                var merged = await _workspace.MergeMainIntoBranchAsync(ct);
+                if (!merged)
+                {
+                    Logger.LogWarning("Merge conflict on PR #{Number} branch — aborting inline tests", pr.Number);
+                    await _workspace.RevertUncommittedChangesAsync(ct);
+                    await _github.AddPullRequestCommentAsync(pr.Number,
+                        "⚠️ **Test Engineer:** Could not push tests — merge conflict with recent changes on the branch.", ct);
+                    return;
+                }
+
+                // Rebuild to verify the merge didn't break anything
+                var rebuildResult = await _buildRunner.BuildAsync(
+                    _workspace.RepoPath, wsConfig.BuildCommand, wsConfig.BuildTimeoutSeconds, ct);
+                if (!rebuildResult.Success)
+                {
+                    Logger.LogWarning("Rebuild after merge failed for PR #{Number}", pr.Number);
+                    await _workspace.RevertUncommittedChangesAsync(ct);
+                    return;
+                }
+
+                await _workspace.PushAsync(pr.HeadBranch, ct);
+            }
+            catch (Exception retryEx)
+            {
+                Logger.LogWarning(retryEx, "Push retry also failed for PR #{Number}", pr.Number);
+                await _workspace.RevertUncommittedChangesAsync(ct);
+                await _github.AddPullRequestCommentAsync(pr.Number,
+                    "⚠️ **Test Engineer:** Could not push tests to this branch. " +
+                    "The branch may have diverged. Tests will be retried on the next cycle.", ct);
+                _testedPRs.Remove(pr.Number); // Allow retry
+                return;
+            }
+        }
+
+        // --- Phase 10: Update PR labels and post results ---
+        await ApplyTestsAddedLabelAsync(pr, ct);
+        await PostInlineTestResultsCommentAsync(pr, testFiles, tierResults, ct);
+
+        Logger.LogInformation(
+            "Successfully added {Count} test files to PR #{Number}: {Title}",
+            testFiles.Count, pr.Number, pr.Title);
+        LogActivity("task",
+            $"✅ Added {testFiles.Count} test files inline to PR #{pr.Number}: {pr.Title}");
+        UpdateStatus(AgentStatus.Idle,
+            $"Tests added to PR #{pr.Number} — awaiting PE merge");
+    }
+
+    /// <summary>
+    /// API-only fallback: commit test files directly via GitHub API when workspace is unavailable.
+    /// No local build/test execution — tests are committed untested.
+    /// </summary>
+    private async Task AddInlineTestsViaApiAsync(
+        AgentPullRequest pr, List<string> codeFilePaths, CancellationToken ct)
+    {
+        // Read source via API
+        var sourceFiles = new Dictionary<string, string>();
+        foreach (var filePath in codeFilePaths)
+        {
+            try
+            {
+                var content = await _github.GetFileContentAsync(filePath, pr.HeadBranch, ct);
+                if (!string.IsNullOrWhiteSpace(content))
+                    sourceFiles[filePath] = content;
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "Could not read {Path} from {Branch}", filePath, pr.HeadBranch);
+            }
+        }
+
+        if (sourceFiles.Count == 0)
+        {
+            Logger.LogWarning("No source files readable via API for PR #{Number}", pr.Number);
+            return;
+        }
+
+        var existingTests = await DiscoverExistingTestsAsync(sourceFiles.Keys.ToList(), ct);
+        var testOutput = await GenerateTestCodeAsync(pr, sourceFiles, existingTests, ct);
+        var testFiles = CodeFileParser.ParseFiles(testOutput ?? "");
+
+        if (testFiles.Count == 0)
+        {
+            Logger.LogWarning("No parseable test files for PR #{Number} (API mode)", pr.Number);
+            return;
+        }
+
+        // Batch commit all test files to the PR's branch
+        var fileTuples = testFiles.Select(f => (f.Path, f.Content)).ToList();
+        await _github.BatchCommitFilesAsync(
+            fileTuples,
+            $"test: add {testFiles.Count} test files for PR #{pr.Number}",
+            pr.HeadBranch, ct);
+
+        await ApplyTestsAddedLabelAsync(pr, ct);
+        await PostInlineTestResultsCommentAsync(pr, testFiles, tierResults: null, ct);
+
+        Logger.LogInformation("Added {Count} test files via API to PR #{Number}", testFiles.Count, pr.Number);
+    }
+
+    /// <summary>
+    /// Retry build failures by asking AI to fix the test code. Returns the final build result.
+    /// </summary>
+    private async Task<BuildResult> RetryBuildWithAIFixesAsync(
+        AgentPullRequest pr,
+        IReadOnlyList<CodeFileParser.CodeFile> testFiles,
+        BuildResult buildResult,
+        WorkspaceConfig wsConfig,
+        CancellationToken ct)
+    {
+        var kernel = _modelRegistry.GetKernel(Identity.ModelTier, Identity.Id);
+        var chat = kernel.GetRequiredService<IChatCompletionService>();
+
+        for (int attempt = 0; attempt < wsConfig.MaxBuildRetries && !buildResult.Success; attempt++)
+        {
+            Logger.LogInformation(
+                "Inline test build fix attempt {Attempt}/{Max} for PR #{Number}",
+                attempt + 1, wsConfig.MaxBuildRetries, pr.Number);
+
+            var errorSummary = buildResult.ParsedErrors.Count > 0
+                ? string.Join("\n", buildResult.ParsedErrors.Take(20))
+                : buildResult.Errors.Length > 2000 ? buildResult.Errors[..2000] : buildResult.Errors;
+
+            var fixHistory = new ChatHistory();
+            fixHistory.AddSystemMessage(
+                "You are a test engineer fixing build errors in test files. " +
+                "The test files were added to an existing PR branch and won't compile. " +
+                "Fix ONLY the test code — do NOT modify the source code under test.\n\n" +
+                "Output ONLY corrected files using:\nFILE: path/to/file.ext\n```language\n<content>\n```");
+            fixHistory.AddUserMessage(
+                $"Build attempt {attempt + 1}/{wsConfig.MaxBuildRetries} failed.\n\n" +
+                $"## Build Errors\n\n{errorSummary}\n\n" +
+                $"## Test Files\n\n" +
+                string.Join("\n", testFiles.Select(f =>
+                    $"### {f.Path}\n```\n{(f.Content.Length > 1500 ? f.Content[..1500] + "\n// ... truncated" : f.Content)}\n```")) +
+                "\n\nFix ALL build errors. Only modify test files.");
+
+            var fixResponse = await chat.GetChatMessageContentAsync(fixHistory, cancellationToken: ct);
+            var fixedFiles = CodeFileParser.ParseFiles(fixResponse.Content ?? "");
+
+            if (fixedFiles.Count == 0)
+            {
+                Logger.LogDebug("AI fix attempt produced no files for PR #{Number}", pr.Number);
+                continue;
+            }
+
+            foreach (var file in fixedFiles)
+                await _workspace!.WriteFileAsync(file.Path, file.Content, ct);
+
+            buildResult = await _buildRunner!.BuildAsync(
+                _workspace!.RepoPath, wsConfig.BuildCommand, wsConfig.BuildTimeoutSeconds, ct);
+        }
+
+        return buildResult;
+    }
+
+    /// <summary>
+    /// Apply the 'tests-added' label to the PR, preserving existing labels.
+    /// </summary>
+    private async Task ApplyTestsAddedLabelAsync(AgentPullRequest pr, CancellationToken ct)
+    {
+        try
+        {
+            var updatedLabels = pr.Labels
+                .Append(PullRequestWorkflow.Labels.TestsAdded)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            await _github.UpdatePullRequestAsync(pr.Number, labels: updatedLabels, ct: ct);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Could not apply tests-added label to PR #{Number}", pr.Number);
+        }
+    }
+
+    /// <summary>
+    /// Post a detailed test results comment on the PR.
+    /// </summary>
+    private async Task PostInlineTestResultsCommentAsync(
+        AgentPullRequest pr,
+        IReadOnlyList<CodeFileParser.CodeFile> testFiles,
+        IReadOnlyList<TestResult>? tierResults,
+        CancellationToken ct)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("## 🧪 Test Engineer — Inline Tests Added");
+        sb.AppendLine();
+        sb.AppendLine($"Added **{testFiles.Count}** test file(s) to this PR.");
+        sb.AppendLine();
+
+        // Test results by tier
+        if (tierResults is { Count: > 0 })
+        {
+            sb.AppendLine("### Test Results");
+            sb.AppendLine();
+            foreach (var r in tierResults)
+            {
+                var icon = r.Success ? "✅" : "❌";
+                sb.AppendLine($"- **{r.Tier} Tests:** {icon} {r.Passed} passed, {r.Failed} failed, {r.Skipped} skipped ({r.Duration.TotalSeconds:F1}s)");
+            }
+            sb.AppendLine();
+
+            // Include failure details if any tier failed
+            var failures = tierResults.Where(r => !r.Success).ToList();
+            if (failures.Count > 0)
+            {
+                sb.AppendLine("<details><summary>⚠️ Test Failures</summary>");
+                sb.AppendLine();
+                foreach (var f in failures)
+                {
+                    if (f.FailureDetails.Count > 0)
+                    {
+                        sb.AppendLine($"**{f.Tier} failures:**");
+                        foreach (var detail in f.FailureDetails.Take(10))
+                            sb.AppendLine($"- {detail}");
+                        sb.AppendLine();
+                    }
+                }
+                sb.AppendLine("</details>");
+                sb.AppendLine();
+            }
+        }
+        else
+        {
+            sb.AppendLine("*Tests committed but not executed locally (API-only mode).*");
+            sb.AppendLine();
+        }
+
+        // File list
+        sb.AppendLine("<details><summary>Test Files</summary>");
+        sb.AppendLine();
+        foreach (var file in testFiles)
+            sb.AppendLine($"- `{file.Path}`");
+        sb.AppendLine();
+        sb.AppendLine("</details>");
+
+        try
+        {
+            await _github.AddPullRequestCommentAsync(pr.Number, sb.ToString(), ct);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Could not post test results comment on PR #{Number}", pr.Number);
+        }
+    }
+
+    /// <summary>
     /// When coverage is complete and no test PRs are pending review, updates status
     /// to trigger the HealthMonitor's testing.coverage.met signal.
     /// </summary>
@@ -287,38 +866,59 @@ public class TestEngineerAgent : AgentBase
         if (_currentTestPrNumber is not null || !_reworkQueue.IsEmpty)
             return;
 
-        var mergedPRs = await _github.GetMergedPullRequestsAsync(ct);
+        var isInline = _config.Workspace.IsInlineTestWorkflow;
         var untestedCodePRs = 0;
 
-        foreach (var pr in mergedPRs)
+        if (isInline)
         {
-            // Skip PRs from before this session
-            if (pr.MergedAt.HasValue && pr.MergedAt.Value < _sessionStartUtc)
-                continue;
-
-            // Skip already-tracked PRs
-            if (_testedPRs.Contains(pr.Number))
-                continue;
-
-            // Skip our own test PRs
-            if (PullRequestWorkflow.ParseAgentNameFromTitle(pr.Title) is { } agent &&
-                agent.Equals(Identity.DisplayName, StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            // Check if it has testable code
-            var changedFiles = await _github.GetPullRequestChangedFilesAsync(pr.Number, ct);
-            if (changedFiles.Any(f => TestableExtensions.Contains(Path.GetExtension(f))))
+            // Inline mode: check open approved PRs that still lack tests
+            var openPRs = await _github.GetOpenPullRequestsAsync(ct);
+            foreach (var pr in openPRs)
             {
-                untestedCodePRs++;
+                if (_testedPRs.Contains(pr.Number)) continue;
+
+                // Only count approved PRs (the ones we're responsible for)
+                if (!pr.Labels.Contains(PullRequestWorkflow.Labels.Approved, StringComparer.OrdinalIgnoreCase))
+                    continue;
+                if (pr.Labels.Contains(PullRequestWorkflow.Labels.TestsAdded, StringComparer.OrdinalIgnoreCase))
+                    continue;
+                if (pr.Labels.Contains(TestedLabel, StringComparer.OrdinalIgnoreCase))
+                    continue;
+
+                if (PullRequestWorkflow.ParseAgentNameFromTitle(pr.Title) is { } agent &&
+                    agent.Equals(Identity.DisplayName, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                var changedFiles = await _github.GetPullRequestChangedFilesAsync(pr.Number, ct);
+                if (changedFiles.Any(f => TestableExtensions.Contains(Path.GetExtension(f))))
+                    untestedCodePRs++;
+            }
+        }
+        else
+        {
+            // Legacy mode: check merged PRs
+            var mergedPRs = await _github.GetMergedPullRequestsAsync(ct);
+            foreach (var pr in mergedPRs)
+            {
+                if (pr.MergedAt.HasValue && pr.MergedAt.Value < _sessionStartUtc) continue;
+                if (_testedPRs.Contains(pr.Number)) continue;
+
+                if (PullRequestWorkflow.ParseAgentNameFromTitle(pr.Title) is { } agent &&
+                    agent.Equals(Identity.DisplayName, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                var changedFiles = await _github.GetPullRequestChangedFilesAsync(pr.Number, ct);
+                if (changedFiles.Any(f => TestableExtensions.Contains(Path.GetExtension(f))))
+                    untestedCodePRs++;
             }
         }
 
         if (untestedCodePRs == 0 && _sessionTestedPRs.Count > 0)
         {
             UpdateStatus(AgentStatus.Idle,
-                $"All {_sessionTestedPRs.Count} merged PRs tested — coverage met, tests complete");
+                $"All {_sessionTestedPRs.Count} PRs tested — coverage met, tests complete");
             Logger.LogInformation(
-                "Test coverage complete: all {Count} merged code PRs have been tested",
+                "Test coverage complete: all {Count} code PRs have been tested",
                 _sessionTestedPRs.Count);
         }
     }
