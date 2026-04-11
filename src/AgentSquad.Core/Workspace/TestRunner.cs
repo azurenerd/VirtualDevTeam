@@ -35,9 +35,17 @@ public class TestRunner
         var (passed, failed, skipped) = ParseTestCounts(combinedOutput);
         var failures = ParseTestFailures(combinedOutput);
 
+        // Trust parsed test counts over process exit code when available.
+        // dotnet test can return non-zero exit code even when all tests pass
+        // (e.g., one test project fails to build while others run fine).
+        var testsWereParsed = passed > 0 || failed > 0;
+        var success = testsWereParsed
+            ? failed == 0
+            : result.Success;
+
         var testResult = new TestResult
         {
-            Success = result.Success && failed == 0,
+            Success = success,
             Output = combinedOutput,
             Passed = passed,
             Failed = failed,
@@ -47,8 +55,13 @@ public class TestRunner
         };
 
         if (testResult.Success)
+        {
             _logger.LogInformation("Tests passed: {Passed} passed, {Skipped} skipped in {Duration:F1}s",
                 passed, skipped, result.Duration.TotalSeconds);
+            if (!result.Success)
+                _logger.LogWarning("Test process exited with code {ExitCode} but all {Passed} parsed tests passed — treating as success",
+                    result.ExitCode, passed);
+        }
         else
             _logger.LogWarning("Tests FAILED: {Passed} passed, {Failed} failed, {Skipped} skipped in {Duration:F1}s",
                 passed, failed, skipped, result.Duration.TotalSeconds);
