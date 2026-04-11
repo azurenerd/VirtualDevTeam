@@ -1112,99 +1112,110 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 Labels = new List<string>()
             };
 
-            // Generate implementation steps
-            var steps = await GenerateImplementationStepsAsync(
-                chat, pr, syntheticIssue, pmSpecDoc, architectureDoc, techStack, ct);
+            // SinglePassMode: skip step generation, produce complete implementation in one prompt
+            var useSinglePass = Config.CopilotCli.SinglePassMode;
 
-            if (steps.Count > 0)
+            if (!useSinglePass)
             {
-                Logger.LogInformation(
-                    "Principal Engineer generated {Count} implementation steps for task {TaskId}",
-                    steps.Count, task.Id);
+                // Multi-step path: generate steps then implement each one
+                var steps = await GenerateImplementationStepsAsync(
+                    chat, pr, syntheticIssue, pmSpecDoc, architectureDoc, techStack, ct);
 
-                var completedSteps = new List<string>();
-                for (var i = 0; i < steps.Count; i++)
+                if (steps.Count > 0)
                 {
-                    ct.ThrowIfCancellationRequested();
-                    var step = steps[i];
-                    var stepNumber = i + 1;
-
-                    UpdateStatus(AgentStatus.Working,
-                        $"PR #{pr.Number} step {stepNumber}/{steps.Count}: {Truncate(step, 60)}");
                     Logger.LogInformation(
-                        "PE implementing step {Step}/{Total} for task {TaskId}: {Desc}",
-                        stepNumber, steps.Count, task.Id, Truncate(step, 100));
+                        "Principal Engineer generated {Count} implementation steps for task {TaskId}",
+                        steps.Count, task.Id);
 
-                    var stepHistory = new ChatHistory();
-                    stepHistory.AddSystemMessage(GetStepImplementationSystemPrompt(techStack, stepNumber, steps.Count));
-
-                    var ctx = new System.Text.StringBuilder();
-                    ctx.AppendLine($"## PM Specification\n{pmSpecDoc}\n");
-                    ctx.AppendLine($"## Architecture\n{architectureDoc}\n");
-                    if (sourceIssue is not null)
-                        ctx.AppendLine($"## Issue #{sourceIssue.Number}: {sourceIssue.Title}\n{sourceIssue.Body}\n");
-                    ctx.AppendLine($"## Task: {task.Name}\n{task.Description}\n");
-                    ctx.AppendLine($"## PR Description\n{pr.Body}\n");
-
-                    if (completedSteps.Count > 0)
+                    var completedSteps = new List<string>();
+                    for (var i = 0; i < steps.Count; i++)
                     {
-                        ctx.AppendLine("## Previously Completed Steps");
-                        for (var j = 0; j < completedSteps.Count; j++)
-                            ctx.AppendLine($"- Step {j + 1}: {completedSteps[j]}");
-                        ctx.AppendLine();
-                        var existingFiles = await GetPrFileListAsync(pr.Number, ct);
-                        if (!string.IsNullOrEmpty(existingFiles))
-                            ctx.AppendLine($"## Files already in this PR\n{existingFiles}\n");
-                    }
+                        ct.ThrowIfCancellationRequested();
+                        var step = steps[i];
+                        var stepNumber = i + 1;
 
-                    ctx.AppendLine($"## Current Step ({stepNumber}/{steps.Count})");
-                    ctx.AppendLine(step);
-                    ctx.AppendLine();
-                    ctx.AppendLine("Implement ONLY this step. Output each file using this format:\n");
-                    ctx.AppendLine("FILE: path/to/file.ext\n```language\n<file content>\n```\n");
-                    ctx.AppendLine($"Use the {techStack} technology stack. Every file MUST use the FILE: marker format.");
-                    if (completedSteps.Count > 0)
-                        ctx.AppendLine("If updating a file from a previous step, include the COMPLETE updated file content.");
-
-                    stepHistory.AddUserMessage(ctx.ToString());
-
-                    var stepResponse = await chat.GetChatMessageContentAsync(stepHistory, cancellationToken: ct);
-                    var stepImpl = stepResponse.Content?.Trim() ?? "";
-
-                    var codeFiles = AgentSquad.Core.AI.CodeFileParser.ParseFiles(stepImpl);
-                    if (codeFiles.Count > 0)
-                    {
-                        if (Workspace is not null && BuildRunnerSvc is not null)
-                        {
-                            var committed = await CommitViaLocalWorkspaceAsync(pr, codeFiles,
-                                $"Step {stepNumber}/{steps.Count}: {Truncate(step, 72)}",
-                                stepNumber, steps.Count, step, chat, ct);
-                            if (!committed)
-                            {
-                                Logger.LogWarning("PE step {Step}/{Total} blocked by build errors on PR #{PrNumber}",
-                                    stepNumber, steps.Count, pr.Number);
-                                await GitHub.AddPullRequestCommentAsync(pr.Number,
-                                    $"❌ **Build Blocked:** Step {stepNumber}/{steps.Count} could not produce a buildable commit.", ct);
-                                return;
-                            }
-                        }
-                        else
-                        {
-                            await PrWorkflow.CommitCodeFilesToPRAsync(
-                                pr.Number, codeFiles, $"Step {stepNumber}/{steps.Count}: {Truncate(step, 72)}", ct);
-                        }
+                        UpdateStatus(AgentStatus.Working,
+                            $"PR #{pr.Number} step {stepNumber}/{steps.Count}: {Truncate(step, 60)}");
                         Logger.LogInformation(
-                            "PE committed {FileCount} files for step {Step}/{Total} on PR #{PrNumber}",
-                            codeFiles.Count, stepNumber, steps.Count, pr.Number);
-                    }
+                            "PE implementing step {Step}/{Total} for task {TaskId}: {Desc}",
+                            stepNumber, steps.Count, task.Id, Truncate(step, 100));
 
-                    completedSteps.Add(step);
+                        var stepHistory = new ChatHistory();
+                        stepHistory.AddSystemMessage(GetStepImplementationSystemPrompt(techStack, stepNumber, steps.Count));
+
+                        var ctx = new System.Text.StringBuilder();
+                        ctx.AppendLine($"## PM Specification\n{pmSpecDoc}\n");
+                        ctx.AppendLine($"## Architecture\n{architectureDoc}\n");
+                        if (sourceIssue is not null)
+                            ctx.AppendLine($"## Issue #{sourceIssue.Number}: {sourceIssue.Title}\n{sourceIssue.Body}\n");
+                        ctx.AppendLine($"## Task: {task.Name}\n{task.Description}\n");
+                        ctx.AppendLine($"## PR Description\n{pr.Body}\n");
+
+                        if (completedSteps.Count > 0)
+                        {
+                            ctx.AppendLine("## Previously Completed Steps");
+                            for (var j = 0; j < completedSteps.Count; j++)
+                                ctx.AppendLine($"- Step {j + 1}: {completedSteps[j]}");
+                            ctx.AppendLine();
+                            var existingFiles = await GetPrFileListAsync(pr.Number, ct);
+                            if (!string.IsNullOrEmpty(existingFiles))
+                                ctx.AppendLine($"## Files already in this PR\n{existingFiles}\n");
+                        }
+
+                        ctx.AppendLine($"## Current Step ({stepNumber}/{steps.Count})");
+                        ctx.AppendLine(step);
+                        ctx.AppendLine();
+                        ctx.AppendLine("Implement ONLY this step. Output each file using this format:\n");
+                        ctx.AppendLine("FILE: path/to/file.ext\n```language\n<file content>\n```\n");
+                        ctx.AppendLine($"Use the {techStack} technology stack. Every file MUST use the FILE: marker format.");
+                        if (completedSteps.Count > 0)
+                            ctx.AppendLine("If updating a file from a previous step, include the COMPLETE updated file content.");
+
+                        stepHistory.AddUserMessage(ctx.ToString());
+
+                        var stepResponse = await chat.GetChatMessageContentAsync(stepHistory, cancellationToken: ct);
+                        var stepImpl = stepResponse.Content?.Trim() ?? "";
+
+                        var codeFiles = AgentSquad.Core.AI.CodeFileParser.ParseFiles(stepImpl);
+                        if (codeFiles.Count > 0)
+                        {
+                            if (Workspace is not null && BuildRunnerSvc is not null)
+                            {
+                                var committed = await CommitViaLocalWorkspaceAsync(pr, codeFiles,
+                                    $"Step {stepNumber}/{steps.Count}: {Truncate(step, 72)}",
+                                    stepNumber, steps.Count, step, chat, ct);
+                                if (!committed)
+                                {
+                                    Logger.LogWarning("PE step {Step}/{Total} blocked by build errors on PR #{PrNumber}",
+                                        stepNumber, steps.Count, pr.Number);
+                                    await GitHub.AddPullRequestCommentAsync(pr.Number,
+                                        $"❌ **Build Blocked:** Step {stepNumber}/{steps.Count} could not produce a buildable commit.", ct);
+                                    return;
+                                }
+                            }
+                            else
+                            {
+                                await PrWorkflow.CommitCodeFilesToPRAsync(
+                                    pr.Number, codeFiles, $"Step {stepNumber}/{steps.Count}: {Truncate(step, 72)}", ct);
+                            }
+                            Logger.LogInformation(
+                                "PE committed {FileCount} files for step {Step}/{Total} on PR #{PrNumber}",
+                                codeFiles.Count, stepNumber, steps.Count, pr.Number);
+                        }
+
+                        completedSteps.Add(step);
+                    }
+                }
+                else
+                {
+                    useSinglePass = true; // fallback to single-pass if no steps generated
                 }
             }
-            else
+
+            if (useSinglePass)
             {
-                // Fallback: single-pass implementation
-                Logger.LogWarning("PE could not generate steps for task {TaskId}, using single-pass", task.Id);
+                // Single-pass: complete implementation in one AI call
+                Logger.LogInformation("PE using single-pass implementation for task {TaskId}", task.Id);
 
                 var history = new ChatHistory();
                 history.AddSystemMessage(GetImplementationSystemPrompt(techStack));

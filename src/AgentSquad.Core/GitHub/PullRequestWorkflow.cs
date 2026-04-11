@@ -311,6 +311,14 @@ public partial class PullRequestWorkflow
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(agentName);
 
+        // Check if already marked ready-for-review to avoid duplicate comments
+        var pr = await _github.GetPullRequestAsync(prNumber, ct);
+        if (pr is not null && pr.Labels.Contains(Labels.ReadyForReview, StringComparer.OrdinalIgnoreCase))
+        {
+            _logger.LogInformation("PR #{Number} already has ready-for-review label, skipping duplicate comment", prNumber);
+            return;
+        }
+
         _logger.LogInformation("Agent {Agent} marking PR #{Number} ready for review", agentName, prNumber);
 
         await _github.AddPullRequestCommentAsync(
@@ -319,7 +327,8 @@ public partial class PullRequestWorkflow
             ct);
 
         // Update labels: swap in-progress for ready-for-review
-        var pr = await _github.GetPullRequestAsync(prNumber, ct);
+        // Re-fetch since we may have fetched earlier for duplicate check
+        pr = await _github.GetPullRequestAsync(prNumber, ct);
         if (pr is not null)
         {
             var updatedLabels = pr.Labels

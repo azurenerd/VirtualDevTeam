@@ -1109,7 +1109,12 @@ public class TestEngineerAgent : AgentBase
         }
         else
         {
-            sb.AppendLine("*Tests committed but not executed locally (API-only mode).*");
+            sb.AppendLine("⚠️ **WARNING: API-Only Mode — Tests NOT Verified**");
+            sb.AppendLine();
+            sb.AppendLine("Tests were committed via GitHub API only — they were **NOT built or executed**.");
+            sb.AppendLine("No screenshots or test results are available. This typically happens when the");
+            sb.AppendLine("test workspace failed to initialize (e.g., git clone timeout).");
+            sb.AppendLine("**A reviewer should manually verify these tests compile and pass.**");
             sb.AppendLine();
         }
 
@@ -1546,35 +1551,135 @@ public class TestEngineerAgent : AgentBase
         var allOutputs = new System.Text.StringBuilder();
         var memoryContext = await GetMemoryContextAsync(ct: ct);
 
-        // Generate unit tests (always)
-        if (strategy.NeedsUnitTests)
-        {
-            UpdateStatus(AgentStatus.Working, $"Generating unit tests for PR #{pr.Number}");
-            var unitOutput = await GenerateTestsForTierAsync(
-                chat, TestTier.Unit, pr, techStack, businessContext,
-                sourceContext.ToString() + existingTestContext, memoryContext, ct);
-            allOutputs.AppendLine(unitOutput);
-        }
+        var useSinglePass = _config.CopilotCli.SinglePassMode;
 
-        // Generate integration tests (when service/API layers changed)
-        if (strategy.NeedsIntegrationTests)
+        if (useSinglePass)
         {
-            UpdateStatus(AgentStatus.Working, $"Generating integration tests for PR #{pr.Number}");
-            var integrationOutput = await GenerateTestsForTierAsync(
-                chat, TestTier.Integration, pr, techStack, businessContext,
-                sourceContext.ToString() + existingTestContext, memoryContext, ct);
-            allOutputs.AppendLine(integrationOutput);
-        }
+            // Single-pass: combine all test tiers into one AI call
+            var tiers = new List<string>();
+            if (strategy.NeedsUnitTests) tiers.Add("Unit");
+            if (strategy.NeedsIntegrationTests) tiers.Add("Integration");
+            if (strategy.NeedsUITests && _config.Workspace.EnableUITests) tiers.Add("UI/E2E (Playwright)");
 
-        // Generate UI tests with Playwright (when UI components changed)
-        if (strategy.NeedsUITests && _config.Workspace.EnableUITests)
+            UpdateStatus(AgentStatus.Working, $"Generating all tests ({string.Join("+", tiers)}) for PR #{pr.Number}");
+            Logger.LogInformation("TE single-pass: generating {Tiers} tests in one prompt for PR #{Number}",
+                string.Join(", ", tiers), pr.Number);
+
+            var history = new ChatHistory();
+
+            // Combined system prompt with all tier guidance
+            var combinedSystem = new System.Text.StringBuilder();
+            combinedSystem.AppendLine($"You are an expert test engineer writing tests for a {techStack} project.");
+            combinedSystem.AppendLine("Your job is to generate REAL, RUNNABLE test code — not documentation or test plans.");
+            combinedSystem.AppendLine("Write actual test files that can be compiled and executed.\n");
+            combinedSystem.AppendLine("CRITICAL RULE — DEPENDENCY MANAGEMENT:");
+            combinedSystem.AppendLine("Before using ANY library, package, framework, or external dependency in your code, you MUST:");
+            combinedSystem.AppendLine("1. Check the project's existing dependency manifest to see what is already installed");
+            combinedSystem.AppendLine("2. If a dependency is NOT already listed, add it to the manifest file");
+            combinedSystem.AppendLine("3. ALWAYS output the complete dependency manifest with ALL needed dependencies");
+            combinedSystem.AppendLine("Missing dependencies are the #1 cause of build failures. Prevent this by always including the manifest.\n");
+            combinedSystem.AppendLine("Output each test file using this exact format:\n");
+            combinedSystem.AppendLine("FILE: tests/path/to/TestFile.ext\n```language\n<complete file content>\n```\n");
+            combinedSystem.AppendLine("Every file MUST use the FILE: marker format so it can be parsed and committed.\n");
+
+            if (IsBlazorProject())
+                combinedSystem.AppendLine(GetBlazorTestGuidance());
+
+            combinedSystem.AppendLine($"Generate ALL of the following test tiers in a single response:\n");
+            if (strategy.NeedsUnitTests)
+            {
+                combinedSystem.AppendLine("## Tier 1: UNIT TESTS");
+                combinedSystem.AppendLine("- Mock ALL external dependencies. Test one behavior per test method.");
+                combinedSystem.AppendLine("- Add [Trait(\"Category\", \"Unit\")] attribute. Place in tests/{ProjectName}.Tests/Unit/");
+                combinedSystem.AppendLine("- Cover happy paths, edge cases, null/empty inputs, boundary values, error conditions.\n");
+            }
+            if (strategy.NeedsIntegrationTests)
+            {
+                combinedSystem.AppendLine("## Tier 2: INTEGRATION TESTS");
+                combinedSystem.AppendLine("- Test DI wiring, API endpoints, middleware. Use WebApplicationFactory.");
+                combinedSystem.AppendLine("- Add [Trait(\"Category\", \"Integration\")] attribute. Place in tests/{ProjectName}.Tests/Integration/");
+                combinedSystem.AppendLine("- Test error handling and validation at API boundaries.\n");
+            }
+            if (strategy.NeedsUITests && _config.Workspace.EnableUITests)
+            {
+                combinedSystem.AppendLine("## Tier 3: UI/E2E TESTS (Playwright)");
+                combinedSystem.AppendLine("- Use Microsoft.Playwright for browser automation with Page Object Model.");
+                combinedSystem.AppendLine("- Base URL from env var BASE_URL (default: http://localhost:5000).");
+                combinedSystem.AppendLine("- Add [Trait(\"Category\", \"UI\")] and [Collection(\"Playwright\")] attributes.");
+                combinedSystem.AppendLine("- Place in tests/{ProjectName}.UITests/. Include PlaywrightFixture class.\n");
+            }
+            combinedSystem.AppendLine("YOU MUST output .csproj files with all required package references.");
+
+            if (!string.IsNullOrEmpty(memoryContext))
+                combinedSystem.AppendLine($"\n{memoryContext}");
+
+            history.AddSystemMessage(combinedSystem.ToString());
+
+            var userPrompt = new System.Text.StringBuilder();
+            userPrompt.AppendLine($"## Merged PR #{pr.Number}: {pr.Title}\n");
+            userPrompt.AppendLine($"## PR Description\n{pr.Body}\n");
+            userPrompt.AppendLine(businessContext);
+            userPrompt.AppendLine(sourceContext.ToString());
+            userPrompt.AppendLine(existingTestContext);
+
+            if (strategy.NeedsUITests && _config.Workspace.EnableUITests && strategy.UITestScenarios.Count > 0)
+            {
+                userPrompt.AppendLine("## UI Test Scenarios to Cover");
+                foreach (var scenario in strategy.UITestScenarios)
+                    userPrompt.AppendLine($"- {scenario}");
+                userPrompt.AppendLine();
+            }
+
+            if (strategy.NeedsUITests && _config.Workspace.EnableUITests)
+            {
+                var designCtx = await ReadDesignReferencesForTestsAsync(ct);
+                if (!string.IsNullOrWhiteSpace(designCtx))
+                {
+                    userPrompt.AppendLine("## Visual Design Reference");
+                    userPrompt.AppendLine(designCtx);
+                    userPrompt.AppendLine();
+                }
+            }
+
+            userPrompt.AppendLine($"Generate comprehensive {string.Join(", ", tiers)} tests for the above code using {techStack}.");
+            userPrompt.AppendLine("Include ALL test tiers requested above in your response.");
+
+            history.AddUserMessage(userPrompt.ToString());
+            var response = await chat.GetChatMessageContentAsync(history, cancellationToken: ct);
+            allOutputs.AppendLine(response.Content?.Trim() ?? "");
+        }
+        else
         {
-            UpdateStatus(AgentStatus.Working, $"Generating UI/Playwright tests for PR #{pr.Number}");
-            var uiOutput = await GenerateTestsForTierAsync(
-                chat, TestTier.UI, pr, techStack, businessContext,
-                sourceContext.ToString() + existingTestContext, memoryContext, ct,
-                strategy.UITestScenarios);
-            allOutputs.AppendLine(uiOutput);
+            // Multi-pass: separate AI call per tier
+            if (strategy.NeedsUnitTests)
+            {
+                UpdateStatus(AgentStatus.Working, $"Generating unit tests for PR #{pr.Number}");
+                var unitOutput = await GenerateTestsForTierAsync(
+                    chat, TestTier.Unit, pr, techStack, businessContext,
+                    sourceContext.ToString() + existingTestContext, memoryContext, ct);
+                allOutputs.AppendLine(unitOutput);
+            }
+
+            // Generate integration tests (when service/API layers changed)
+            if (strategy.NeedsIntegrationTests)
+            {
+                UpdateStatus(AgentStatus.Working, $"Generating integration tests for PR #{pr.Number}");
+                var integrationOutput = await GenerateTestsForTierAsync(
+                    chat, TestTier.Integration, pr, techStack, businessContext,
+                    sourceContext.ToString() + existingTestContext, memoryContext, ct);
+                allOutputs.AppendLine(integrationOutput);
+            }
+
+            // Generate UI tests with Playwright (when UI components changed)
+            if (strategy.NeedsUITests && _config.Workspace.EnableUITests)
+            {
+                UpdateStatus(AgentStatus.Working, $"Generating UI/Playwright tests for PR #{pr.Number}");
+                var uiOutput = await GenerateTestsForTierAsync(
+                    chat, TestTier.UI, pr, techStack, businessContext,
+                    sourceContext.ToString() + existingTestContext, memoryContext, ct,
+                    strategy.UITestScenarios);
+                allOutputs.AppendLine(uiOutput);
+            }
         }
 
         Logger.LogInformation("Generated tests for PR #{Number}: Unit={Unit}, Integration={Integration}, UI={UI}, ExistingTests={Existing}",
