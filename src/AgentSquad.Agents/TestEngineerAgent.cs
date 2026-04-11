@@ -511,12 +511,33 @@ public class TestEngineerAgent : AgentBase
 
         if (!baseBuild.Success)
         {
+            var truncatedErrors = baseBuild.Errors.Length > 500
+                ? baseBuild.Errors[..500] : baseBuild.Errors;
             Logger.LogWarning(
                 "PR #{Number} base code doesn't build — skipping inline tests. Errors: {Errors}",
-                pr.Number, baseBuild.Errors.Length > 500 ? baseBuild.Errors[..500] : baseBuild.Errors);
+                pr.Number, truncatedErrors);
+
+            var buildErrorSummary = baseBuild.ParsedErrors.Count > 0
+                ? string.Join("\n", baseBuild.ParsedErrors.Take(10))
+                : truncatedErrors;
+
             await _github.AddPullRequestCommentAsync(pr.Number,
                 "⚠️ **Test Engineer:** Cannot add tests — the PR's code doesn't build.\n\n" +
+                $"**Build errors:**\n```\n{buildErrorSummary}\n```\n\n" +
                 "Please fix build errors first. The Test Engineer will retry when the PR is updated.", ct);
+
+            // Notify the author engineer via bus so they wake up and fix the build
+            await _messageBus.PublishAsync(new ChangesRequestedMessage
+            {
+                FromAgentId = Identity.Id,
+                ToAgentId = "*",
+                MessageType = "ChangesRequested",
+                PrNumber = pr.Number,
+                PrTitle = pr.Title,
+                ReviewerAgent = "TestEngineer",
+                Feedback = $"Build failed — cannot add tests until build errors are fixed:\n{buildErrorSummary}"
+            }, ct);
+
             // Don't mark as tested — allow retry after engineer fixes build
             _testedPRs.Remove(pr.Number);
             return;
