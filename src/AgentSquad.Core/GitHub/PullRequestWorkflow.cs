@@ -52,6 +52,49 @@ public partial class PullRequestWorkflow
     }
 
     /// <summary>
+    /// Removes all .agentsquad/*.task and .agentsquad/*.tracking files from the default branch.
+    /// Call on startup to prevent stale task locks from confusing a fresh run.
+    /// </summary>
+    public async Task CleanupStaleTaskFilesAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            var allFiles = await _github.GetRepositoryTreeAsync(_defaultBranch, ct);
+            var staleFiles = allFiles
+                .Where(f => f.StartsWith(".agentsquad/", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            if (staleFiles.Count == 0)
+            {
+                _logger.LogDebug("No stale .agentsquad task files found");
+                return;
+            }
+
+            _logger.LogInformation("Cleaning up {Count} stale .agentsquad task files from {Branch}",
+                staleFiles.Count, _defaultBranch);
+
+            foreach (var file in staleFiles)
+            {
+                try
+                {
+                    await _github.DeleteFileAsync(file, $"Cleanup stale task lock: {file}", _defaultBranch, ct);
+                    _logger.LogDebug("Deleted stale task file: {File}", file);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to delete stale task file {File}", file);
+                }
+            }
+
+            _logger.LogInformation("Cleaned up {Count} stale .agentsquad task files", staleFiles.Count);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to scan for stale .agentsquad task files");
+        }
+    }
+
+    /// <summary>
     /// Auto-corrects file paths that may be missing project subdirectory prefixes.
     /// Delegates to <see cref="ConflictDetector.ResolvePathsAsync"/> when available.
     /// Returns the input unchanged if no conflict detector is configured.

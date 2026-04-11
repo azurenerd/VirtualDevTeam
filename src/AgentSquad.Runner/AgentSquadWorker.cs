@@ -1,5 +1,6 @@
 using AgentSquad.Core.Agents;
 using AgentSquad.Core.Configuration;
+using AgentSquad.Core.GitHub;
 using AgentSquad.Orchestrator;
 using Microsoft.Extensions.Options;
 
@@ -10,6 +11,7 @@ public class AgentSquadWorker : BackgroundService
     private readonly AgentSpawnManager _spawnManager;
     private readonly AgentRegistry _registry;
     private readonly WorkflowStateMachine _workflow;
+    private readonly PullRequestWorkflow _prWorkflow;
     private readonly ILogger<AgentSquadWorker> _logger;
     private readonly AgentSquadConfig _config;
     private readonly List<Task> _agentTasks = new();
@@ -18,12 +20,14 @@ public class AgentSquadWorker : BackgroundService
         AgentSpawnManager spawnManager,
         AgentRegistry registry,
         WorkflowStateMachine workflow,
+        PullRequestWorkflow prWorkflow,
         ILogger<AgentSquadWorker> logger,
         IOptions<AgentSquadConfig> config)
     {
         _spawnManager = spawnManager ?? throw new ArgumentNullException(nameof(spawnManager));
         _registry = registry ?? throw new ArgumentNullException(nameof(registry));
         _workflow = workflow ?? throw new ArgumentNullException(nameof(workflow));
+        _prWorkflow = prWorkflow ?? throw new ArgumentNullException(nameof(prWorkflow));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _config = config?.Value ?? throw new ArgumentNullException(nameof(config));
     }
@@ -51,6 +55,10 @@ public class AgentSquadWorker : BackgroundService
         {
             _logger.LogInformation("Resumed from checkpoint — workflow phase: {Phase}", _workflow.CurrentPhase);
         }
+
+        // Clean up stale .agentsquad task lock files from the repo so they don't
+        // confuse fresh runs with phantom "in-progress" tasks from previous sessions
+        await _prWorkflow.CleanupStaleTaskFilesAsync(ct);
 
         // Spawn all core agents
         var roles = new[]
