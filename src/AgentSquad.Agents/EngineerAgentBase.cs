@@ -2506,10 +2506,13 @@ public abstract class EngineerAgentBase : AgentBase
     {
         if (Workspace?.RepoPath is null) return;
 
-        // Check if .sln already exists on disk or in AI output
+        // Check if .sln already exists at the repo root (on disk or in AI output).
+        // Only root-level .sln counts — nested ones (e.g. "Sub/App.sln") won't be found by `dotnet build` at repo root.
         var slnOnDisk = Directory.GetFiles(Workspace.RepoPath, "*.sln").Length > 0;
-        var slnInOutput = codeFiles.Any(f => f.Path.EndsWith(".sln", StringComparison.OrdinalIgnoreCase));
-        if (slnOnDisk || slnInOutput) return;
+        var slnInOutputAtRoot = codeFiles.Any(f =>
+            f.Path.EndsWith(".sln", StringComparison.OrdinalIgnoreCase) &&
+            !f.Path.Contains('/') && !f.Path.Contains('\\'));
+        if (slnOnDisk || slnInOutputAtRoot) return;
 
         // Find all .csproj files (on disk + from AI output)
         var csprojPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
