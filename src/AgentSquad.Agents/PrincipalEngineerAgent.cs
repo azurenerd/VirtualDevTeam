@@ -1174,8 +1174,25 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                     var codeFiles = AgentSquad.Core.AI.CodeFileParser.ParseFiles(stepImpl);
                     if (codeFiles.Count > 0)
                     {
-                        await PrWorkflow.CommitCodeFilesToPRAsync(
-                            pr.Number, codeFiles, $"Step {stepNumber}/{steps.Count}: {Truncate(step, 72)}", ct);
+                        if (Workspace is not null && BuildRunnerSvc is not null)
+                        {
+                            var committed = await CommitViaLocalWorkspaceAsync(pr, codeFiles,
+                                $"Step {stepNumber}/{steps.Count}: {Truncate(step, 72)}",
+                                stepNumber, steps.Count, step, chat, ct);
+                            if (!committed)
+                            {
+                                Logger.LogWarning("PE step {Step}/{Total} blocked by build errors on PR #{PrNumber}",
+                                    stepNumber, steps.Count, pr.Number);
+                                await GitHub.AddPullRequestCommentAsync(pr.Number,
+                                    $"❌ **Build Blocked:** Step {stepNumber}/{steps.Count} could not produce a buildable commit.", ct);
+                                return;
+                            }
+                        }
+                        else
+                        {
+                            await PrWorkflow.CommitCodeFilesToPRAsync(
+                                pr.Number, codeFiles, $"Step {stepNumber}/{steps.Count}: {Truncate(step, 72)}", ct);
+                        }
                         Logger.LogInformation(
                             "PE committed {FileCount} files for step {Step}/{Total} on PR #{PrNumber}",
                             codeFiles.Count, stepNumber, steps.Count, pr.Number);
@@ -1212,7 +1229,24 @@ public class PrincipalEngineerAgent : EngineerAgentBase
 
                 var codeFiles = AgentSquad.Core.AI.CodeFileParser.ParseFiles(implementation);
                 if (codeFiles.Count > 0)
-                    await PrWorkflow.CommitCodeFilesToPRAsync(pr.Number, codeFiles, $"Implement {task.Name}", ct);
+                {
+                    if (Workspace is not null && BuildRunnerSvc is not null)
+                    {
+                        var committed = await CommitViaLocalWorkspaceAsync(pr, codeFiles,
+                            $"Implement {task.Name}", 1, 1, task.Name, chat, ct);
+                        if (!committed)
+                        {
+                            Logger.LogWarning("PE single-pass implementation blocked by build errors on PR #{PrNumber}", pr.Number);
+                            await GitHub.AddPullRequestCommentAsync(pr.Number,
+                                $"❌ **Build Blocked:** Single-pass implementation could not produce a buildable commit.", ct);
+                            return;
+                        }
+                    }
+                    else
+                    {
+                        await PrWorkflow.CommitCodeFilesToPRAsync(pr.Number, codeFiles, $"Implement {task.Name}", ct);
+                    }
+                }
             }
 
             // Sync branch with main before marking ready — ensures PR is merge-clean
@@ -1871,8 +1905,25 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 var codeFiles = AgentSquad.Core.AI.CodeFileParser.ParseFiles(stepImpl);
                 if (codeFiles.Count > 0)
                 {
-                    await PrWorkflow.CommitCodeFilesToPRAsync(
-                        pr.Number, codeFiles, $"Step {stepNumber}/{steps.Count}: {Truncate(step, 72)}", ct);
+                    if (Workspace is not null && BuildRunnerSvc is not null)
+                    {
+                        var committed = await CommitViaLocalWorkspaceAsync(pr, codeFiles,
+                            $"Step {stepNumber}/{steps.Count}: {Truncate(step, 72)}",
+                            stepNumber, steps.Count, step, chat, ct);
+                        if (!committed)
+                        {
+                            Logger.LogWarning("PE rework step {Step}/{Total} blocked by build errors on PR #{PrNumber}",
+                                stepNumber, steps.Count, pr.Number);
+                            await GitHub.AddPullRequestCommentAsync(pr.Number,
+                                $"❌ **Build Blocked:** Rework step {stepNumber}/{steps.Count} could not produce a buildable commit.", ct);
+                            return;
+                        }
+                    }
+                    else
+                    {
+                        await PrWorkflow.CommitCodeFilesToPRAsync(
+                            pr.Number, codeFiles, $"Step {stepNumber}/{steps.Count}: {Truncate(step, 72)}", ct);
+                    }
                     Logger.LogInformation(
                         "PE committed {FileCount} files for step {Step}/{Total} on PR #{PrNumber}",
                         codeFiles.Count, stepNumber, steps.Count, pr.Number);
@@ -2375,8 +2426,23 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 branchName,
                 ct);
 
-            await PrWorkflow.CommitCodeFilesToPRAsync(
-                pr.Number, codeFiles, "Integration fixes: wiring, config, and cross-module references", ct);
+            if (Workspace is not null && BuildRunnerSvc is not null)
+            {
+                var committed = await CommitViaLocalWorkspaceAsync(pr, codeFiles,
+                    "Integration fixes: wiring, config, and cross-module references",
+                    1, 1, "Final Integration", chat, ct);
+                if (!committed)
+                {
+                    Logger.LogWarning("PE integration PR #{PrNumber} blocked by build errors", pr.Number);
+                    await GitHub.AddPullRequestCommentAsync(pr.Number,
+                        "❌ **Build Blocked:** Integration fixes could not produce a buildable commit.", ct);
+                }
+            }
+            else
+            {
+                await PrWorkflow.CommitCodeFilesToPRAsync(
+                    pr.Number, codeFiles, "Integration fixes: wiring, config, and cross-module references", ct);
+            }
 
             CurrentPrNumber = pr.Number;
             Identity.AssignedPullRequest = pr.Number.ToString();

@@ -521,8 +521,9 @@ public class TestEngineerAgent : AgentBase
                 ? string.Join("\n", baseBuild.ParsedErrors.Take(10))
                 : truncatedErrors;
 
-            await _github.AddPullRequestCommentAsync(pr.Number,
-                "⚠️ **Test Engineer:** Cannot add tests — the PR's code doesn't build.\n\n" +
+            // Use the standard CHANGES REQUESTED pattern so GetPendingChangesRequestedAsync detects this on restart
+            await _prWorkflow.RequestChangesAsync(pr.Number, "TestEngineer",
+                "⚠️ Cannot add tests — the PR's code doesn't build.\n\n" +
                 $"**Build errors:**\n```\n{buildErrorSummary}\n```\n\n" +
                 "Please fix build errors first. The Test Engineer will retry when the PR is updated.", ct);
 

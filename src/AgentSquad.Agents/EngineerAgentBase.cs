@@ -1860,7 +1860,7 @@ public abstract class EngineerAgentBase : AgentBase
     /// This ensures no code reaches GitHub until it actually compiles and passes tests.
     /// Returns false if the step was blocked due to unresolvable build errors.
     /// </summary>
-    private async Task<bool> CommitViaLocalWorkspaceAsync(
+    protected async Task<bool> CommitViaLocalWorkspaceAsync(
         AgentPullRequest pr,
         IReadOnlyList<AgentSquad.Core.AI.CodeFileParser.CodeFile> codeFiles,
         string commitMsg,
