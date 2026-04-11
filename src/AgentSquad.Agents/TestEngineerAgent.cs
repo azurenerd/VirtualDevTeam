@@ -107,6 +107,21 @@ public class TestEngineerAgent : AgentBase
                     Logger);
                 await _workspace.InitializeAsync(ct);
                 Logger.LogInformation("TestEngineer initialized local workspace at {Path}", _workspace.RepoPath);
+
+                // Pre-install Playwright browsers so UI tests don't skip during test runs.
+                // This is done once during init — idempotent, ~80MB cached in shared directory.
+                if (_config.Workspace.EnableUITests && _playwrightRunner is not null)
+                {
+                    try
+                    {
+                        await _playwrightRunner.EnsureBrowsersInstalledAsync(_config.Workspace, _workspace.RepoPath, ct);
+                        Logger.LogInformation("TestEngineer: Playwright browsers ready");
+                    }
+                    catch (Exception pwEx)
+                    {
+                        Logger.LogWarning(pwEx, "TestEngineer: Failed to pre-install Playwright browsers, UI tests may skip");
+                    }
+                }
             }
             catch (Exception ex)
             {
@@ -573,12 +588,29 @@ public class TestEngineerAgent : AgentBase
             var uiCommand = wsConfig.UITestCommand;
             if (!string.IsNullOrWhiteSpace(uiCommand) && _playwrightRunner is not null)
             {
-                await _playwrightRunner.EnsureBrowsersInstalledAsync(_config.Workspace, _workspace!.RepoPath, ct);
-                var uiResult = await RunTestTierWithRetryAsync(
-                    TestTier.UI, uiCommand,
-                    wsConfig.UITestTimeoutSeconds, wsConfig, ct);
-                if (uiResult is not null)
+                try
+                {
+                    await _playwrightRunner.EnsureBrowsersInstalledAsync(_config.Workspace, _workspace!.RepoPath, ct);
+
+                    var uiResult = await _playwrightRunner.RunUITestsAsync(
+                        _workspace.RepoPath, _config.Workspace,
+                        uiCommand,
+                        wsConfig.UITestTimeoutSeconds, ct);
                     tierResults.Add(uiResult);
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogWarning(ex, "TestEngineer: UI test execution failed for PR #{Number}", pr.Number);
+                    tierResults.Add(new TestResult
+                    {
+                        Success = false,
+                        Output = $"UI test execution error: {ex.Message}",
+                        Passed = 0, Failed = 0, Skipped = 0,
+                        Duration = TimeSpan.Zero,
+                        Tier = TestTier.UI,
+                        FailureDetails = [ex.Message]
+                    });
+                }
             }
         }
 
@@ -723,6 +755,14 @@ public class TestEngineerAgent : AgentBase
         var kernel = _modelRegistry.GetKernel(Identity.ModelTier, Identity.Id);
         var chat = kernel.GetRequiredService<IChatCompletionService>();
 
+        // First try auto-restoring missing packages (cheap — no AI call needed)
+        if (await TryAutoRestoreMissingPackagesAsync(buildResult, ct))
+        {
+            buildResult = await _buildRunner!.BuildAsync(
+                _workspace!.RepoPath, wsConfig.BuildCommand, wsConfig.BuildTimeoutSeconds, ct);
+            if (buildResult.Success) return buildResult;
+        }
+
         for (int attempt = 0; attempt < wsConfig.MaxBuildRetries && !buildResult.Success; attempt++)
         {
             Logger.LogInformation(
@@ -737,7 +777,9 @@ public class TestEngineerAgent : AgentBase
             fixHistory.AddSystemMessage(
                 "You are a test engineer fixing build errors in test files. " +
                 "The test files were added to an existing PR branch and won't compile. " +
-                "Fix ONLY the test code — do NOT modify the source code under test.\n\n" +
+                "Fix ONLY the test code — do NOT modify the source code under test.\n" +
+                "COMMON FIX: If errors are 'type or namespace not found', ensure the .csproj includes the missing " +
+                "NuGet PackageReference (e.g., FluentAssertions, Shouldly). Output the corrected .csproj too.\n\n" +
                 "Output ONLY corrected files using:\nFILE: path/to/file.ext\n```language\n<content>\n```");
             fixHistory.AddUserMessage(
                 $"Build attempt {attempt + 1}/{wsConfig.MaxBuildRetries} failed.\n\n" +
@@ -764,6 +806,103 @@ public class TestEngineerAgent : AgentBase
         }
 
         return buildResult;
+    }
+
+    /// <summary>
+    /// Auto-detect missing NuGet packages from CS0246 build errors and install them via dotnet add package.
+    /// Returns true if any packages were added (caller should rebuild).
+    /// </summary>
+    private async Task<bool> TryAutoRestoreMissingPackagesAsync(BuildResult buildResult, CancellationToken ct)
+    {
+        if (_workspace?.RepoPath is null || buildResult.Success) return false;
+
+        // Well-known mapping: namespace → NuGet package name
+        var namespaceToPackage = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["FluentAssertions"] = "FluentAssertions",
+            ["Shouldly"] = "Shouldly",
+            ["NSubstitute"] = "NSubstitute",
+            ["AutoFixture"] = "AutoFixture",
+            ["Bogus"] = "Bogus",
+            ["FakeItEasy"] = "FakeItEasy",
+            ["Moq"] = "Moq",
+            ["bunit"] = "bunit",
+            ["Bunit"] = "bunit",
+            ["AngleSharp"] = "AngleSharp",
+            ["Verify"] = "Verify.Xunit",
+            ["Microsoft.Playwright"] = "Microsoft.Playwright",
+        };
+
+        // Parse CS0246 errors: "The type or namespace name 'X' could not be found"
+        var missingNamespaces = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var allErrors = string.Join("\n", buildResult.ParsedErrors);
+        if (string.IsNullOrEmpty(allErrors))
+            allErrors = buildResult.Errors;
+
+        // Match CS0246 pattern
+        var cs0246Regex = new System.Text.RegularExpressions.Regex(
+            @"error CS0246:.*?'(\w+)'", System.Text.RegularExpressions.RegexOptions.None);
+        foreach (System.Text.RegularExpressions.Match match in cs0246Regex.Matches(allErrors))
+        {
+            missingNamespaces.Add(match.Groups[1].Value);
+        }
+
+        if (missingNamespaces.Count == 0) return false;
+
+        // Find test .csproj files to add packages to
+        var testCsprojs = Directory.GetFiles(
+            Path.Combine(_workspace.RepoPath, "tests"), "*.csproj", SearchOption.AllDirectories);
+
+        if (testCsprojs.Length == 0) return false;
+
+        var addedAny = false;
+        foreach (var ns in missingNamespaces)
+        {
+            if (!namespaceToPackage.TryGetValue(ns, out var packageName)) continue;
+
+            // Add to each test project that doesn't already have it
+            foreach (var csproj in testCsprojs)
+            {
+                var content = await File.ReadAllTextAsync(csproj, ct);
+                if (content.Contains(packageName, StringComparison.OrdinalIgnoreCase)) continue;
+
+                try
+                {
+                    var process = new System.Diagnostics.Process
+                    {
+                        StartInfo = new System.Diagnostics.ProcessStartInfo
+                        {
+                            FileName = "dotnet",
+                            Arguments = $"add \"{csproj}\" package {packageName}",
+                            WorkingDirectory = _workspace.RepoPath,
+                            RedirectStandardOutput = true,
+                            RedirectStandardError = true,
+                            UseShellExecute = false,
+                            CreateNoWindow = true
+                        }
+                    };
+                    process.Start();
+                    await process.WaitForExitAsync(ct);
+
+                    if (process.ExitCode == 0)
+                    {
+                        Logger.LogInformation("Auto-added missing package {Package} to {Csproj}", packageName, Path.GetFileName(csproj));
+                        addedAny = true;
+                    }
+                    else
+                    {
+                        var stderr = await process.StandardError.ReadToEndAsync(ct);
+                        Logger.LogWarning("Failed to add package {Package}: {Error}", packageName, stderr);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogWarning(ex, "Error adding package {Package}", packageName);
+                }
+            }
+        }
+
+        return addedAny;
     }
 
     /// <summary>
@@ -1276,9 +1415,15 @@ public class TestEngineerAgent : AgentBase
         var basePrompt = $"You are an expert test engineer writing tests for a {techStack} project.\n" +
             "Your job is to generate REAL, RUNNABLE test code — not documentation or test plans.\n" +
             "Write actual test files that can be compiled and executed.\n\n" +
-            "CRITICAL: You MUST also generate the test project file (.csproj) if one doesn't exist.\n" +
-            "The .csproj file must include all required NuGet package references and a ProjectReference\n" +
-            "to the source project being tested.\n\n" +
+            "CRITICAL RULE — DEPENDENCY MANAGEMENT:\n" +
+            "Before using ANY library, package, framework, or external dependency in your code, you MUST:\n" +
+            "1. Check the project's existing dependency manifest (e.g., .csproj, package.json, requirements.txt,\n" +
+            "   Cargo.toml, go.mod, build.gradle, pom.xml, Gemfile, etc.) to see what is already installed\n" +
+            "2. If a dependency you want to use is NOT already listed, you MUST add it to the manifest file\n" +
+            "3. ALWAYS output the complete dependency manifest with ALL needed dependencies — never assume one exists\n" +
+            "4. This applies to test frameworks, assertion libraries, mocking libraries, browser automation tools,\n" +
+            "   and ANY other third-party code. If you import/using/require it, it must be in the manifest.\n" +
+            "Missing dependencies are the #1 cause of build failures. Prevent this by always including the manifest.\n\n" +
             "Output each test file using this exact format:\n\n" +
             "FILE: tests/path/to/TestFile.ext\n```language\n<complete file content>\n```\n\n" +
             "Every file MUST use the FILE: marker format so it can be parsed and committed.\n\n";
@@ -1397,6 +1542,7 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include=""bunit"" Version=""1.28.9"" />
+    <PackageReference Include=""FluentAssertions"" Version=""6.12.0"" />
     <PackageReference Include=""Microsoft.NET.Test.Sdk"" Version=""17.9.0"" />
     <PackageReference Include=""Moq"" Version=""4.20.70"" />
     <PackageReference Include=""xunit"" Version=""2.7.0"" />
@@ -1586,7 +1732,8 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
     <IsPackable>false</IsPackable>
   </PropertyGroup>
   <ItemGroup>
-{blazorPackages}    <PackageReference Include=""Microsoft.NET.Test.Sdk"" Version=""17.9.0"" />
+{blazorPackages}    <PackageReference Include=""FluentAssertions"" Version=""6.12.0"" />
+    <PackageReference Include=""Microsoft.NET.Test.Sdk"" Version=""17.9.0"" />
     <PackageReference Include=""Moq"" Version=""4.20.70"" />
     <PackageReference Include=""xunit"" Version=""2.7.0"" />
     <PackageReference Include=""xunit.runner.visualstudio"" Version=""2.5.7"" />
@@ -1866,6 +2013,16 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
 
         if (!buildResult.Success)
         {
+            // First try auto-restoring missing packages (cheap — no AI call needed)
+            if (await TryAutoRestoreMissingPackagesAsync(buildResult, ct))
+            {
+                buildResult = await _buildRunner.BuildAsync(
+                    _workspace.RepoPath, wsConfig.BuildCommand, wsConfig.BuildTimeoutSeconds, ct);
+            }
+        }
+
+        if (!buildResult.Success)
+        {
             Logger.LogWarning("TestEngineer: test build failed, attempting AI fix (errors: {Errors})",
                 buildResult.ParsedErrors.Count > 0
                     ? string.Join("; ", buildResult.ParsedErrors.Take(5))
@@ -1884,6 +2041,8 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
                 fixHistory.AddSystemMessage(
                     "You are a test engineer fixing build errors in test files. " +
                     "You have full context about the project structure.\n" +
+                    "COMMON FIX: If errors are 'type or namespace not found', the .csproj is likely missing a " +
+                    "NuGet PackageReference. Output a corrected .csproj with the missing packages added.\n" +
                     (IsBlazorProject() ? GetBlazorTestGuidance() : "") +
                     "Output ONLY corrected files using:\nFILE: path/to/file.ext\n```language\n<content>\n```\n" +
                     "If a .csproj file is missing or has wrong references, include the corrected .csproj in your output.");

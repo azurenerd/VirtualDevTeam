@@ -936,7 +936,11 @@ public abstract class EngineerAgentBase : AgentBase
             "Focus ONLY on the current step described below. " +
             "Produce clean, production-quality code for this step only. " +
             "If files from previous steps need updating, include the COMPLETE updated file. " +
-            "Be thorough for this step but do not implement future steps.";
+            "Be thorough for this step but do not implement future steps.\n\n" +
+            "DEPENDENCY RULE: Before using ANY external library, package, or framework, check the project's " +
+            "dependency manifest (e.g., .csproj, package.json, requirements.txt, Cargo.toml, go.mod, pom.xml, etc.). " +
+            "If a dependency is not already listed, add it to the manifest file and include that file in your output. " +
+            "Never assume a package is available — always verify and declare dependencies explicitly.";
     }
 
     /// <summary>Parses numbered list lines (e.g., "1. Do X") into a list of step descriptions.</summary>
@@ -1682,6 +1686,8 @@ public abstract class EngineerAgentBase : AgentBase
             "Carefully read the feedback, understand what needs to be fixed, and produce " +
             "an updated implementation that addresses ALL the feedback points. " +
             "Be thorough — every feedback item must be resolved.\n\n" +
+            "DEPENDENCY RULE: Before using ANY external library/package/framework, check the project's " +
+            "dependency manifest. If a dependency is not already listed, add it and include the updated manifest.\n\n" +
             "CRITICAL: Your response MUST start with a CHANGES SUMMARY that addresses EACH numbered " +
             "feedback item from the reviewer using the SAME numbers (1. 2. 3.). For each item, state " +
             "in one sentence what you changed or why no change was needed. This summary is posted as " +

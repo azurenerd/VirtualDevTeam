@@ -105,7 +105,11 @@ public class PrincipalEngineerAgent : EngineerAgentBase
         "and acceptance criteria for this specific task. " +
         "Produce detailed, production-quality code. " +
         "Ensure the implementation fulfills the business goals from the PM spec. " +
-        "Be thorough — this is the most critical part of the system.";
+        "Be thorough — this is the most critical part of the system.\n\n" +
+        "DEPENDENCY RULE: Before using ANY external library, package, or framework, check the project's " +
+        "dependency manifest (e.g., .csproj, package.json, requirements.txt, etc.). " +
+        "If a dependency is not already listed, add it to the manifest and include that file in your output. " +
+        "Never import/using/require a package without ensuring it is declared in the project.";
 
     protected override string GetReworkSystemPrompt(string techStack) =>
         $"You are a Principal Engineer addressing review feedback on your pull request. " +
