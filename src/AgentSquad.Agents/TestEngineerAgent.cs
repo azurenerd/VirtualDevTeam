@@ -512,7 +512,7 @@ public class TestEngineerAgent : AgentBase
             return;
         }
 
-        var testFiles = CodeFileParser.ParseFiles(testOutput);
+        var testFiles = FilterToTestFilesOnly(CodeFileParser.ParseFiles(testOutput));
         if (testFiles.Count == 0)
         {
             Logger.LogWarning("No parseable test files from AI output for PR #{Number}", pr.Number);
@@ -790,6 +790,8 @@ public class TestEngineerAgent : AgentBase
                 "Fix ONLY the test code — do NOT modify the source code under test.\n" +
                 "COMMON FIX: If errors are 'type or namespace not found', check the project structure below for REAL namespaces. " +
                 "Do NOT invent namespaces — use ONLY those that actually exist in the project.\n" +
+                "CRITICAL: All output files MUST be under tests/ directories. Do NOT output files under src/. " +
+                "If model types exist in the source project, use 'using' directives — do NOT redefine them.\n" +
                 "Also ensure the .csproj includes the missing NuGet PackageReference. Output the corrected .csproj too.\n\n" +
                 "Output ONLY corrected files using:\nFILE: path/to/file.ext\n```language\n<content>\n```");
             fixHistory.AddUserMessage(
@@ -802,7 +804,7 @@ public class TestEngineerAgent : AgentBase
                 "\n\nFix ALL build errors. Only modify test files.");
 
             var fixResponse = await chat.GetChatMessageContentAsync(fixHistory, cancellationToken: ct);
-            var fixedFiles = CodeFileParser.ParseFiles(fixResponse.Content ?? "");
+            var fixedFiles = FilterToTestFilesOnly(CodeFileParser.ParseFiles(fixResponse.Content ?? ""));
 
             if (fixedFiles.Count == 0)
             {
@@ -1273,8 +1275,8 @@ public class TestEngineerAgent : AgentBase
             return;
         }
 
-        // Parse the AI output into code files
-        var testFiles = CodeFileParser.ParseFiles(testOutput);
+        // Parse the AI output into code files — filter to test paths only
+        var testFiles = FilterToTestFilesOnly(CodeFileParser.ParseFiles(testOutput));
 
         if (testFiles.Count == 0)
         {
@@ -1680,6 +1682,53 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
     /// Ensures a test project .csproj exists for unit/integration test files.
     /// If the AI didn't generate one, creates a fallback .csproj with standard references.
     /// </summary>
+    /// <summary>
+    /// Filters AI-generated files to only include paths under test directories.
+    /// Prevents the AI from overwriting source files (src/) with test helper stubs
+    /// that cause CS0101 "namespace already contains a definition" errors.
+    /// </summary>
+    private IReadOnlyList<CodeFileParser.CodeFile> FilterToTestFilesOnly(
+        IReadOnlyList<CodeFileParser.CodeFile> files)
+    {
+        var filtered = new List<CodeFileParser.CodeFile>();
+        foreach (var file in files)
+        {
+            var normalized = file.Path.Replace('\\', '/');
+
+            // Allow files in test directories
+            if (normalized.StartsWith("tests/", StringComparison.OrdinalIgnoreCase) ||
+                normalized.StartsWith("test/", StringComparison.OrdinalIgnoreCase) ||
+                normalized.Contains("/tests/", StringComparison.OrdinalIgnoreCase) ||
+                normalized.Contains("/test/", StringComparison.OrdinalIgnoreCase) ||
+                normalized.Contains("Test", StringComparison.OrdinalIgnoreCase))
+            {
+                filtered.Add(file);
+                continue;
+            }
+
+            // Reject files that target source directories — AI should not modify source code
+            if (normalized.StartsWith("src/", StringComparison.OrdinalIgnoreCase) ||
+                normalized.Contains("/src/", StringComparison.OrdinalIgnoreCase))
+            {
+                Logger.LogWarning(
+                    "Filtered out AI-generated file targeting source directory: {Path}", file.Path);
+                continue;
+            }
+
+            // Allow root-level config files (.csproj, .sln, etc.)
+            filtered.Add(file);
+        }
+
+        if (filtered.Count < files.Count)
+        {
+            Logger.LogInformation(
+                "Filtered {Removed} non-test files from AI output ({Kept} kept)",
+                files.Count - filtered.Count, filtered.Count);
+        }
+
+        return filtered;
+    }
+
     private void EnsureTestProjectExists(IReadOnlyList<CodeFileParser.CodeFile> testFiles)
     {
         if (_workspace?.RepoPath is null) return;
@@ -1963,7 +2012,9 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
                 context.AppendLine("## Project Structure (IMPORTANT — Use These Real Namespaces)");
                 context.AppendLine("The target project has the following actual files and namespaces.");
                 context.AppendLine("You MUST use only namespaces and types that exist below.");
-                context.AppendLine("Do NOT invent namespaces like 'ProjectName.Models' or 'ProjectName.Components' unless they appear here.\n");
+                context.AppendLine("Do NOT invent namespaces like 'ProjectName.Models' or 'ProjectName.Components' unless they appear here.");
+                context.AppendLine("CRITICAL: ALL test files MUST be placed under tests/ directories. Do NOT create files under src/.");
+                context.AppendLine("If you need model types, use 'using' directives to reference the existing source project — do NOT redefine them.\n");
                 context.AppendLine(projectStructure);
                 context.AppendLine();
             }
@@ -2284,7 +2335,7 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
                     "If namespace errors occur, check the actual project namespace and fix the using statements.");
 
                 var fixResponse = await chat.GetChatMessageContentAsync(fixHistory, cancellationToken: ct);
-                var fixedFiles = CodeFileParser.ParseFiles(fixResponse.Content ?? "");
+                var fixedFiles = FilterToTestFilesOnly(CodeFileParser.ParseFiles(fixResponse.Content ?? ""));
                 foreach (var file in fixedFiles)
                     await _workspace.WriteFileAsync(file.Path, file.Content, ct);
 
@@ -2426,7 +2477,7 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
                     "Only fix test bugs — don't mask real code bugs.");
 
                 var fixResponse = await chat.GetChatMessageContentAsync(fixHistory, cancellationToken: ct);
-                var fixedFiles = CodeFileParser.ParseFiles(fixResponse.Content ?? "");
+                var fixedFiles = FilterToTestFilesOnly(CodeFileParser.ParseFiles(fixResponse.Content ?? ""));
                 foreach (var file in fixedFiles)
                     await _workspace.WriteFileAsync(file.Path, file.Content, ct);
 
