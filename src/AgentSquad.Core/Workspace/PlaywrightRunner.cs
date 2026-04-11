@@ -41,24 +41,68 @@ public class PlaywrightRunner
 
         _logger.LogInformation("Installing Playwright Chromium browsers to {Path}", browsersPath);
 
-        // Try .NET Playwright PowerShell script first (from NuGet package)
+        // Strategy 1: Use the node-based Playwright CLI from the built test project
+        // This is the most reliable method — the .playwright folder ships with the NuGet package
+        var nodeCliPair = FindNodePlaywrightCli(workspacePath);
+        if (nodeCliPair is not null)
+        {
+            _logger.LogInformation("Using node-based Playwright CLI: {Cli}", nodeCliPair.Value.cliJs);
+            await RunInstallCommandAsync(
+                nodeCliPair.Value.nodeExe,
+                $"\"{nodeCliPair.Value.cliJs}\" install chromium",
+                browsersPath, ct);
+            return;
+        }
+
+        // Strategy 2: Try .NET Playwright PowerShell script (from NuGet package)
         var dotnetPlaywrightScript = FindDotNetPlaywrightScript(workspacePath);
         if (dotnetPlaywrightScript is not null)
         {
             await RunInstallCommandAsync(
                 "pwsh", $"-NoProfile -ExecutionPolicy Bypass -File \"{dotnetPlaywrightScript}\" install chromium",
                 browsersPath, ct);
-        }
-        else
-        {
-            // Fallback to npx (Node.js projects) — use --yes to skip "Ok to proceed?" prompt
-            await RunInstallCommandAsync(
-                OperatingSystem.IsWindows() ? "cmd" : "npx",
-                OperatingSystem.IsWindows() ? "/c npx --yes playwright install chromium" : "--yes playwright install chromium",
-                browsersPath, ct);
+            return;
         }
 
+        // Strategy 3: Fallback to npx (Node.js projects)
+        await RunInstallCommandAsync(
+            OperatingSystem.IsWindows() ? "cmd" : "npx",
+            OperatingSystem.IsWindows() ? "/c npx --yes playwright install chromium" : "--yes playwright install chromium",
+            browsersPath, ct);
+
         _logger.LogInformation("Playwright browser installation complete");
+    }
+
+    /// <summary>
+    /// Finds the node.exe and cli.js pair from a built test project's .playwright folder.
+    /// </summary>
+    private (string nodeExe, string cliJs)? FindNodePlaywrightCli(string workspacePath)
+    {
+        try
+        {
+            // Search in bin output directories for the .playwright folder
+            var searchPaths = new[] { workspacePath };
+            foreach (var searchPath in searchPaths)
+            {
+                if (!Directory.Exists(searchPath)) continue;
+                var playwrightDirs = Directory.GetDirectories(searchPath, ".playwright", SearchOption.AllDirectories);
+                foreach (var pwDir in playwrightDirs)
+                {
+                    var nodeExe = Path.Combine(pwDir, "node", "win32_x64", "node.exe");
+                    if (!OperatingSystem.IsWindows())
+                        nodeExe = Path.Combine(pwDir, "node", "linux-x64", "node");
+                    var cliJs = Path.Combine(pwDir, "package", "cli.js");
+
+                    if (File.Exists(nodeExe) && File.Exists(cliJs))
+                        return (nodeExe, cliJs);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Error searching for node-based Playwright CLI");
+        }
+        return null;
     }
 
     /// <summary>

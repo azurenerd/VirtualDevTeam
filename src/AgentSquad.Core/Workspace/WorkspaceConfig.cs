@@ -99,10 +99,22 @@ public class WorkspaceConfig
     /// <summary>
     /// Resolved path for Playwright browser cache. Uses explicit config or auto-derives from RootPath.
     /// </summary>
-    public string GetPlaywrightBrowsersPath() =>
-        !string.IsNullOrWhiteSpace(PlaywrightBrowsersCachePath)
-            ? PlaywrightBrowsersCachePath
-            : Path.Combine(RootPath ?? @"C:\Agents", ".playwright-browsers");
+    public string GetPlaywrightBrowsersPath()
+    {
+        if (!string.IsNullOrWhiteSpace(PlaywrightBrowsersCachePath))
+            return PlaywrightBrowsersCachePath;
+
+        // Use standard Playwright browser cache location (where 'playwright install' puts them)
+        var standardPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "ms-playwright");
+        if (Directory.Exists(standardPath) &&
+            Directory.GetDirectories(standardPath, "chromium*", SearchOption.TopDirectoryOnly).Length > 0)
+            return standardPath;
+
+        // Fallback to workspace-local path
+        return Path.Combine(RootPath ?? @"C:\Agents", ".playwright-browsers");
+    }
 
     #endregion
 
