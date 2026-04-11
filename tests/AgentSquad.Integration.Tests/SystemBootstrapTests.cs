@@ -60,6 +60,7 @@ public class SystemBootstrapTests : IDisposable
 
         // Mock GitHub service
         var mockGitHub = new Mock<IGitHubService>();
+        mockGitHub.Setup(g => g.RepositoryFullName).Returns("test-owner/test-repo");
         services.AddSingleton(mockGitHub.Object);
 
         // Core services

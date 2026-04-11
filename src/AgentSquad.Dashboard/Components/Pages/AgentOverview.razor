@@ -90,13 +90,13 @@ else
                 <div class="agent-card-body">
                     <div class="agent-detail">
                         <span class="detail-label">Task</span>
-                        @if (agent.AssignedPullRequest is not null)
-                        {
-                            <span class="detail-value task-active" title="@agent.AssignedPullRequest">@agent.AssignedPullRequest</span>
-                        }
-                        else if (!string.IsNullOrEmpty(agent.StatusReason))
+                        @if (!string.IsNullOrEmpty(agent.StatusReason))
                         {
                             <span class="detail-value task-active" title="@agent.StatusReason">@TruncateTask(agent.StatusReason)</span>
+                        }
+                        else if (agent.AssignedPullRequest is not null)
+                        {
+                            <span class="detail-value task-active">PR #@agent.AssignedPullRequest</span>
                         }
                         else
                         {

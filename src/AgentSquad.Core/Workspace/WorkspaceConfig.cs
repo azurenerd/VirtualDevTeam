@@ -24,7 +24,7 @@ public class WorkspaceConfig
     /// Command to run ALL tests (fallback when tier-specific commands are not configured).
     /// Examples: "dotnet test --no-build --verbosity normal", "npm test", "cargo test"
     /// </summary>
-    public string TestCommand { get; set; } = "dotnet test --no-build --verbosity normal";
+    public string TestCommand { get; set; } = "dotnet test --verbosity normal";
 
     #region Multi-Tier Test Commands
 

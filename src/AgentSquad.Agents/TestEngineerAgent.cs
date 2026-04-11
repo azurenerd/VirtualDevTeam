@@ -815,6 +815,70 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
     }
 
     /// <summary>
+    /// Adds discovered test .csproj files to the solution so dotnet build/test can find them.
+    /// Without this, test projects written to disk are invisible to solution-level commands.
+    /// </summary>
+    private async Task AddTestProjectsToSolutionAsync(
+        IReadOnlyList<CodeFileParser.CodeFile> testFiles, CancellationToken ct)
+    {
+        if (_workspace?.RepoPath is null) return;
+
+        // Find solution file
+        var slnFiles = Directory.GetFiles(_workspace.RepoPath, "*.sln", SearchOption.TopDirectoryOnly);
+        if (slnFiles.Length == 0)
+        {
+            Logger.LogDebug("TestEngineer: no .sln file found, skipping dotnet sln add");
+            return;
+        }
+
+        var slnPath = slnFiles[0];
+        var slnContent = await File.ReadAllTextAsync(slnPath, ct);
+
+        // Find all test .csproj files on disk under tests/
+        var testsDir = Path.Combine(_workspace.RepoPath, "tests");
+        if (!Directory.Exists(testsDir)) return;
+
+        var testProjects = Directory.GetFiles(testsDir, "*.csproj", SearchOption.AllDirectories);
+        foreach (var csproj in testProjects)
+        {
+            var relativePath = Path.GetRelativePath(_workspace.RepoPath, csproj).Replace('/', '\\');
+
+            // Skip if already in the solution
+            if (slnContent.Contains(relativePath, StringComparison.OrdinalIgnoreCase) ||
+                slnContent.Contains(relativePath.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            try
+            {
+                var process = new System.Diagnostics.Process
+                {
+                    StartInfo = new System.Diagnostics.ProcessStartInfo
+                    {
+                        FileName = "dotnet",
+                        Arguments = $"sln \"{slnPath}\" add \"{csproj}\"",
+                        WorkingDirectory = _workspace.RepoPath,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    }
+                };
+                process.Start();
+                await process.WaitForExitAsync(ct);
+                if (process.ExitCode == 0)
+                    Logger.LogInformation("TestEngineer: added {Project} to solution", relativePath);
+                else
+                    Logger.LogWarning("TestEngineer: failed to add {Project} to solution (exit {Code})",
+                        relativePath, process.ExitCode);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex, "TestEngineer: error adding {Project} to solution", relativePath);
+            }
+        }
+    }
+
+    /// <summary>
     /// Extracts the test project directory from a test file path (e.g., "tests/Foo.Tests/Unit/Bar.cs" → "tests/Foo.Tests").
     /// </summary>
     private static string? GetTestProjectDir(string filePath)
@@ -1128,6 +1192,9 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
 
         // Ensure a unit/integration test .csproj exists — scaffold one if AI didn't generate it
         EnsureTestProjectExists(testFiles);
+
+        // Add test projects to the solution so dotnet build/test can discover them
+        await AddTestProjectsToSolutionAsync(testFiles, ct);
 
         // Build to verify test files compile
         var buildResult = await _buildRunner!.BuildAsync(

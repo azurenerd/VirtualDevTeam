@@ -1,6 +1,7 @@
 @page "/agent/{AgentId}"
 @rendermode InteractiveServer
 @using AgentSquad.Core.Agents
+@using AgentSquad.Core.GitHub
 @using AgentSquad.Core.Persistence
 @using AgentSquad.Dashboard.Services
 @using AgentSquad.Orchestrator
@@ -8,6 +9,7 @@
 @inject DashboardDataService DataService
 @inject AgentSpawnManager SpawnManager
 @inject NavigationManager Navigation
+@inject IGitHubService GitHubService
 
 <PageTitle>AgentSquad — @(_agent?.DisplayName ?? "Agent Detail")</PageTitle>
 
@@ -81,33 +83,41 @@ else
             <div class="detail-card">
                 <div class="detail-card-title">Current Task</div>
                 <div class="detail-card-body">
-                    @if (_agent.Status == AgentStatus.Working && _agent.AssignedPullRequest is not null)
+                    @if (_agent.Status == AgentStatus.Working || _agent.Status == AgentStatus.Idle)
                     {
-                        <div class="detail-task-active">
-                            <span class="detail-field-label">Pull Request</span>
-                            <a class="detail-pr-link" href="@_agent.AssignedPullRequest" target="_blank" rel="noopener noreferrer">
-                                @_agent.AssignedPullRequest
-                                <span class="external-icon">↗</span>
-                            </a>
-                        </div>
-                        <div class="detail-task-duration">
-                            <span class="detail-field-label">Time on Task</span>
-                            <span class="detail-duration-value task-active">@FormatDuration(DateTime.UtcNow - _agent.LastStatusChange)</span>
-                        </div>
-                    }
-                    else if (_agent.AssignedPullRequest is not null)
-                    {
-                        <div class="detail-task-active">
-                            <span class="detail-field-label">Assigned PR</span>
-                            <a class="detail-pr-link" href="@_agent.AssignedPullRequest" target="_blank" rel="noopener noreferrer">
-                                @_agent.AssignedPullRequest
-                                <span class="external-icon">↗</span>
-                            </a>
-                        </div>
+                        @if (!string.IsNullOrEmpty(_agent.StatusReason))
+                        {
+                            <div class="detail-task-active">
+                                <span class="detail-field-label">Activity</span>
+                                <span class="detail-task-text">@_agent.StatusReason</span>
+                            </div>
+                        }
+                        @if (_agent.AssignedPullRequest is not null)
+                        {
+                            var prUrl = $"https://github.com/{GitHubService.RepositoryFullName}/pull/{_agent.AssignedPullRequest}";
+                            <div class="detail-task-active">
+                                <span class="detail-field-label">Pull Request</span>
+                                <a class="detail-pr-link" href="@prUrl" target="_blank" rel="noopener noreferrer">
+                                    PR #@_agent.AssignedPullRequest
+                                    <span class="external-icon">↗</span>
+                                </a>
+                            </div>
+                        }
+                        @if (_agent.Status == AgentStatus.Working)
+                        {
+                            <div class="detail-task-duration">
+                                <span class="detail-field-label">Time on Task</span>
+                                <span class="detail-duration-value task-active">@FormatDuration(DateTime.UtcNow - _agent.LastStatusChange)</span>
+                            </div>
+                        }
+                        @if (string.IsNullOrEmpty(_agent.StatusReason) && _agent.AssignedPullRequest is null)
+                        {
+                            <div class="detail-idle-message">Waiting for work</div>
+                        }
                     }
                     else
                     {
-                        <div class="detail-idle-message">No task assigned — agent is idle</div>
+                        <div class="detail-idle-message">No task assigned — agent is @_agent.Status.ToString().ToLowerInvariant()</div>
                     }
                 </div>
             </div>

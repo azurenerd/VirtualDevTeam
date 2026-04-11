@@ -15,6 +15,8 @@ public class GitHubService : IGitHubService
     private readonly ILogger<GitHubService> _logger;
     private readonly RateLimitManager _rl;
 
+    public string RepositoryFullName => $"{_owner}/{_repo}";
+
     public GitHubService(IOptions<AgentSquadConfig> config, RateLimitManager rateLimitManager, ILogger<GitHubService> logger)
     {
         _logger = logger;

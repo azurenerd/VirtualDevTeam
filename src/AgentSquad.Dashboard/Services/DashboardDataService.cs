@@ -352,7 +352,8 @@ public sealed class DashboardDataService : BackgroundService
                 {
                     Status = e.NewStatus,
                     StatusReason = e.Reason,
-                    LastStatusChange = statusChangeTime
+                    LastStatusChange = statusChangeTime,
+                    AssignedPullRequest = e.Agent.AssignedPullRequest
                 };
             }
         }

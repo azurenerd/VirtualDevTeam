@@ -4,6 +4,9 @@ using AgentSquad.Core.GitHub.Models;
 
 public interface IGitHubService
 {
+    /// <summary>The "owner/repo" identifier for the target repository.</summary>
+    string RepositoryFullName { get; }
+
     // Pull Requests
     Task<AgentPullRequest> CreatePullRequestAsync(string title, string body, string headBranch, string baseBranch, string[] labels, CancellationToken ct = default);
     Task<AgentPullRequest?> GetPullRequestAsync(int number, CancellationToken ct = default);
