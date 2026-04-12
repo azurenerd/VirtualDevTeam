@@ -948,8 +948,8 @@ public class GitHubService : IGitHubService
             _logger.LogInformation("Committed binary file {Path} ({Size} bytes) to {Branch}",
                 path, content.Length, branch);
 
-            // Return the raw URL for embedding in markdown
-            return $"https://raw.githubusercontent.com/{_owner}/{_repo}/{branch}/{path}";
+            // Return the raw URL using the commit SHA (permanent, survives branch deletion)
+            return $"https://raw.githubusercontent.com/{_owner}/{_repo}/{commitResult.Sha}/{path}";
         }, ct);
     }
 
