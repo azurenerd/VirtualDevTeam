@@ -1814,37 +1814,15 @@ public class ProgramManagerAgent : AgentBase
             // Read actual code files from the PR branch
             var codeContext = await _prWorkflow.GetPRCodeContextAsync(pr.Number, pr.HeadBranch, ct: ct);
 
-            // Gather TE visual evidence (screenshots/videos) from PR comments for Phase 3 validation
-            var visualContext = "";
+            // Gather ALL screenshot evidence from PR comments (PE screenshots, TE screenshots, standalone)
+            var screenshotContext = "";
             try
             {
-                var comments = await _github.GetPullRequestCommentsAsync(pr.Number, ct);
-                var teVisualComments = comments
-                    .Where(c => c.Body.Contains("[Test Engineer]", StringComparison.OrdinalIgnoreCase) ||
-                                c.Body.Contains("[TestEngineer]", StringComparison.OrdinalIgnoreCase))
-                    .Where(c => c.Body.Contains("screenshot", StringComparison.OrdinalIgnoreCase) ||
-                                c.Body.Contains("![", StringComparison.Ordinal) ||
-                                c.Body.Contains("video", StringComparison.OrdinalIgnoreCase) ||
-                                c.Body.Contains(".png", StringComparison.OrdinalIgnoreCase) ||
-                                c.Body.Contains(".mp4", StringComparison.OrdinalIgnoreCase))
-                    .ToList();
-
-                if (teVisualComments.Count > 0)
-                {
-                    var sb = new System.Text.StringBuilder();
-                    sb.AppendLine("## Test Engineer Visual Evidence");
-                    sb.AppendLine("The Test Engineer has posted the following screenshots/videos of the feature:");
-                    foreach (var comment in teVisualComments)
-                    {
-                        sb.AppendLine();
-                        sb.AppendLine(comment.Body);
-                    }
-                    visualContext = sb.ToString();
-                }
+                screenshotContext = await _prWorkflow.GetPRScreenshotContextAsync(pr.Number, ct);
             }
             catch (Exception ex)
             {
-                Logger.LogDebug(ex, "Could not fetch TE visual comments for PR #{Number}", pr.Number);
+                Logger.LogDebug(ex, "Could not fetch screenshot context for PR #{Number}", pr.Number);
             }
 
             var history = new ChatHistory();
@@ -1856,12 +1834,14 @@ public class ProgramManagerAgent : AgentBase
                 "1. Are the acceptance criteria from the user story met?\n" +
                 "2. Does the feature align with the PM Spec vision for this area of the product?\n";
 
-            if (!string.IsNullOrEmpty(visualContext))
+            if (!string.IsNullOrEmpty(screenshotContext))
             {
                 systemPrompt +=
-                    "3. VISUAL VALIDATION: The Test Engineer has posted screenshots/videos. " +
-                    "Review them to verify the UI matches the design expectations from the PM Spec. " +
-                    "Check layout, styling, content accuracy, and user experience quality.\n";
+                    "3. VISUAL VALIDATION: Screenshots have been posted on this PR (by engineers and/or Test Engineer). " +
+                    "Review them to verify the app renders correctly:\n" +
+                    "   - Does the screenshot show a working app (no error pages, no unhandled exceptions, no blank screens)?\n" +
+                    "   - Does the visual output match what the PR description and acceptance criteria say it should do?\n" +
+                    "   - If the screenshot shows an error page or broken UI, this is a REQUEST_CHANGES issue.\n";
             }
 
             systemPrompt +=
@@ -1891,8 +1871,8 @@ public class ProgramManagerAgent : AgentBase
                 $"## Pull Request #{pr.Number}: {pr.Title}\n{pr.Body}\n\n" +
                 codeContext;
 
-            if (!string.IsNullOrEmpty(visualContext))
-                userMessage += $"\n\n{visualContext}";
+            if (!string.IsNullOrEmpty(screenshotContext))
+                userMessage += $"\n\n{screenshotContext}";
 
             history.AddUserMessage(userMessage);
 

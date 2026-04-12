@@ -908,6 +908,63 @@ public partial class PullRequestWorkflow
     }
 
     /// <summary>
+    /// Extracts screenshot/image URLs from PR comments (posted by PE or TE agents).
+    /// Returns a formatted context string describing each screenshot for AI reviewers.
+    /// </summary>
+    public async Task<string> GetPRScreenshotContextAsync(int prNumber, CancellationToken ct = default)
+    {
+        var comments = await _github.GetPullRequestCommentsAsync(prNumber, ct);
+        var screenshots = new List<(string url, string context)>();
+
+        foreach (var comment in comments)
+        {
+            // Match markdown image syntax: ![alt](url)
+            var matches = System.Text.RegularExpressions.Regex.Matches(
+                comment.Body, @"!\[([^\]]*)\]\((https?://[^\)]+\.(?:png|jpg|jpeg|gif|webp))\)");
+            foreach (System.Text.RegularExpressions.Match match in matches)
+            {
+                var alt = match.Groups[1].Value;
+                var url = match.Groups[2].Value;
+
+                // Extract surrounding context (what step, what agent posted it)
+                var lines = comment.Body.Split('\n');
+                var contextLines = lines
+                    .Where(l => l.Contains("Step", StringComparison.OrdinalIgnoreCase)
+                             || l.Contains("Preview", StringComparison.OrdinalIgnoreCase)
+                             || l.Contains("Captured", StringComparison.OrdinalIgnoreCase)
+                             || l.Contains("screenshot", StringComparison.OrdinalIgnoreCase))
+                    .Take(3);
+                var ctx = string.Join(" ", contextLines).Trim();
+                if (string.IsNullOrEmpty(ctx)) ctx = alt;
+
+                screenshots.Add((url, ctx));
+            }
+        }
+
+        if (screenshots.Count == 0)
+            return "";
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("## 📸 Application Screenshots from PR Comments\n");
+        sb.AppendLine("The following screenshots show how the application looks when running.");
+        sb.AppendLine("**IMPORTANT**: Review these screenshots carefully:");
+        sb.AppendLine("- Does the app render correctly without errors?");
+        sb.AppendLine("- Are there any error pages, exception messages, or blank screens?");
+        sb.AppendLine("- Does the visual output match what the PR claims to implement?");
+        sb.AppendLine("- If the screenshot shows an error page or unhandled exception, this is a REWORK issue.\n");
+
+        for (var i = 0; i < screenshots.Count; i++)
+        {
+            var (url, ctx) = screenshots[i];
+            sb.AppendLine($"### Screenshot {i + 1}: {ctx}");
+            sb.AppendLine($"URL: {url}");
+            sb.AppendLine();
+        }
+
+        return sb.ToString();
+    }
+
+    /// <summary>
     /// Reads the actual code files from a PR's changed file list and returns them as a
     /// formatted context string suitable for inclusion in an AI review prompt.
     /// Skips non-code files (markdown, images, config) and truncates large files.

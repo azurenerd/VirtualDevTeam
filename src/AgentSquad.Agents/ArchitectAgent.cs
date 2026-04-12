@@ -664,31 +664,39 @@ public class ArchitectAgent : AgentBase
             // Read actual code files from the PR branch
             var codeContext = await _prWorkflow.GetPRCodeContextAsync(pr.Number, pr.HeadBranch, ct: ct);
 
+            // Get screenshot context if any screenshots have been posted
+            var screenshotContext = await _prWorkflow.GetPRScreenshotContextAsync(pr.Number, ct);
+
             var history = new ChatHistory();
             history.AddSystemMessage(
-                "You are a software architect reviewing a PR for architecture alignment ONLY.\n\n" +
+                "You are a software architect reviewing a PR for architecture alignment.\n\n" +
                 "SCOPE: This PR is ONE task. Review only the parts it touches against the architecture doc.\n\n" +
                 "CHECK: component boundaries, folder structure, tech stack compliance, architectural patterns.\n" +
-                "IGNORE: code quality, null checks, naming, tests, business requirements.\n\n" +
+                "ALSO CHECK: If screenshots are provided, verify the app renders correctly without errors.\n" +
+                "  - Error pages, unhandled exceptions, or blank screens visible in screenshots = REWORK.\n" +
+                "  - The visual output should match what the PR description says it implements.\n" +
+                "IGNORE: code quality, null checks, naming, tests.\n\n" +
                 "IMPORTANT: Code may appear truncated in your review context due to length limits — " +
                 "this is a tooling limitation, NOT a code defect. Do NOT flag truncated code.\n\n" +
                 "Only request REWORK for real architectural violations (wrong boundaries, wrong tech stack, " +
-                "wrong patterns). Minor issues → APPROVE.\n\n" +
+                "wrong patterns) OR runtime errors visible in screenshots. Minor issues → APPROVE.\n\n" +
                 "RESPONSE FORMAT — your ENTIRE response must be ONLY:\n" +
                 "- First line: APPROVED or REWORK\n" +
                 "- If REWORK: a **numbered list** (1. 2. 3.) starting on the SECOND line. " +
-                "Each item states the architectural violation. Nothing else. " +
+                "Each item states the architectural violation or screenshot issue. Nothing else. " +
                 "No preamble, no thinking, no analysis narration.\n" +
                 "- If APPROVED: one sentence or empty after the verdict. No recap.\n\n" +
                 "WRONG: 'Let me review the architecture... 1. Violation'\n" +
-                "RIGHT: 'REWORK\\n1. **Services/** folder violates layered boundary'");
+                "RIGHT: 'REWORK\\n1. **Services/** folder violates layered boundary\\n" +
+                "2. Screenshot shows unhandled exception on app load'");
 
             history.AddUserMessage(
                 $"## Architecture Document\n{architectureDoc}\n\n" +
                 $"## PM Specification\n{pmSpec}\n\n" +
                 issueContext +
                 $"## Pull Request #{pr.Number}: {pr.Title}\n{pr.Body}\n\n" +
-                codeContext);
+                codeContext +
+                (string.IsNullOrEmpty(screenshotContext) ? "" : $"\n\n{screenshotContext}"));
 
             var response = await chat.GetChatMessageContentAsync(
                 history, cancellationToken: ct);
