@@ -25,11 +25,12 @@ public class TestRunner
         string workspacePath,
         string testCommand,
         int timeoutSeconds = 300,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        Dictionary<string, string>? environmentVariables = null)
     {
         _logger.LogInformation("Running tests in {Path}: {Command}", workspacePath, testCommand);
 
-        var result = await RunCommandAsync(workspacePath, testCommand, timeoutSeconds, ct);
+        var result = await RunCommandAsync(workspacePath, testCommand, timeoutSeconds, ct, environmentVariables);
         var combinedOutput = result.StandardOutput + "\n" + result.StandardError;
 
         var (passed, failed, skipped) = ParseTestCounts(combinedOutput);
@@ -211,7 +212,8 @@ public class TestRunner
     }
 
     private async Task<ProcessResult> RunCommandAsync(
-        string workDir, string command, int timeoutSeconds, CancellationToken ct)
+        string workDir, string command, int timeoutSeconds, CancellationToken ct,
+        Dictionary<string, string>? environmentVariables = null)
     {
         var (exe, args) = BuildRunner.ParseCommand(command);
 
@@ -225,6 +227,13 @@ public class TestRunner
             UseShellExecute = false,
             CreateNoWindow = true
         };
+
+        // Apply environment variables (e.g., PLAYWRIGHT_BROWSERS_PATH for UI tests)
+        if (environmentVariables is not null)
+        {
+            foreach (var (key, value) in environmentVariables)
+                startInfo.EnvironmentVariables[key] = value;
+        }
 
         var sw = Stopwatch.StartNew();
         using var process = new Process { StartInfo = startInfo };

@@ -31,11 +31,13 @@ public class PlaywrightRunner
         var browsersPath = config.GetPlaywrightBrowsersPath();
         Directory.CreateDirectory(browsersPath);
 
-        // Check if chromium directory already exists (quick skip)
-        if (Directory.Exists(browsersPath) &&
-            Directory.GetDirectories(browsersPath, "chromium*", SearchOption.TopDirectoryOnly).Length > 0)
+        // Set env var so all child processes (including dotnet test) find the browsers
+        Environment.SetEnvironmentVariable("PLAYWRIGHT_BROWSERS_PATH", browsersPath);
+
+        // Check for actual chrome executable — not just the directory
+        if (IsBrowserExecutablePresent(browsersPath))
         {
-            _logger.LogDebug("Playwright Chromium already installed at {Path}", browsersPath);
+            _logger.LogDebug("Playwright Chromium executable found at {Path}", browsersPath);
             return;
         }
 
@@ -71,6 +73,37 @@ public class PlaywrightRunner
             browsersPath, ct);
 
         _logger.LogInformation("Playwright browser installation complete");
+
+        // Verify after install
+        if (!IsBrowserExecutablePresent(browsersPath))
+            _logger.LogWarning("Playwright install completed but browser executable not found at {Path}", browsersPath);
+    }
+
+    /// <summary>
+    /// Check if the actual Chromium executable exists (not just the directory).
+    /// Playwright stores browsers as: {browsersPath}/chromium-{version}/chrome-win/chrome.exe (Windows)
+    /// or {browsersPath}/chromium-{version}/chrome-linux/chrome (Linux)
+    /// </summary>
+    internal static bool IsBrowserExecutablePresent(string browsersPath)
+    {
+        if (!Directory.Exists(browsersPath)) return false;
+
+        var chromiumDirs = Directory.GetDirectories(browsersPath, "chromium*", SearchOption.TopDirectoryOnly);
+        foreach (var dir in chromiumDirs)
+        {
+            // Windows: chromium-{ver}/chrome-win/chrome.exe
+            var winExe = Path.Combine(dir, "chrome-win", "chrome.exe");
+            if (File.Exists(winExe)) return true;
+
+            // Linux: chromium-{ver}/chrome-linux/chrome
+            var linuxExe = Path.Combine(dir, "chrome-linux", "chrome");
+            if (File.Exists(linuxExe)) return true;
+
+            // macOS: chromium-{ver}/chrome-mac/Chromium.app
+            var macApp = Path.Combine(dir, "chrome-mac", "Chromium.app");
+            if (Directory.Exists(macApp)) return true;
+        }
+        return false;
     }
 
     /// <summary>
@@ -534,12 +567,12 @@ public class PlaywrightRunner
         try
         {
             var browsersPath = config.GetPlaywrightBrowsersPath();
-            if (!Directory.Exists(browsersPath) ||
-                Directory.GetDirectories(browsersPath, "chromium*", SearchOption.TopDirectoryOnly).Length == 0)
+            if (!IsBrowserExecutablePresent(browsersPath))
             {
-                _logger.LogDebug("Playwright browsers not installed, skipping HTML screenshot");
+                _logger.LogDebug("Playwright browser executable not found, skipping HTML screenshot");
                 return null;
             }
+            Environment.SetEnvironmentVariable("PLAYWRIGHT_BROWSERS_PATH", browsersPath);
 
             var playwright = await Microsoft.Playwright.Playwright.CreateAsync();
             try
@@ -624,12 +657,12 @@ public class PlaywrightRunner
         try
         {
             var browsersPath = config.GetPlaywrightBrowsersPath();
-            if (!Directory.Exists(browsersPath) ||
-                Directory.GetDirectories(browsersPath, "chromium*", SearchOption.TopDirectoryOnly).Length == 0)
+            if (!IsBrowserExecutablePresent(browsersPath))
             {
-                _logger.LogDebug("Playwright browsers not installed, skipping screenshot");
+                _logger.LogDebug("Playwright browser executable not found, skipping screenshot");
                 return null;
             }
+            Environment.SetEnvironmentVariable("PLAYWRIGHT_BROWSERS_PATH", browsersPath);
 
             // Derive or use configured app start command
             var appStartCommand = config.AppStartCommand;

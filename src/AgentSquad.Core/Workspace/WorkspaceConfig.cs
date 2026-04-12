@@ -105,11 +105,11 @@ public class WorkspaceConfig
             return PlaywrightBrowsersCachePath;
 
         // Use standard Playwright browser cache location (where 'playwright install' puts them)
+        // but verify the actual executable exists, not just the directory
         var standardPath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "ms-playwright");
-        if (Directory.Exists(standardPath) &&
-            Directory.GetDirectories(standardPath, "chromium*", SearchOption.TopDirectoryOnly).Length > 0)
+        if (PlaywrightRunner.IsBrowserExecutablePresent(standardPath))
             return standardPath;
 
         // Fallback to workspace-local path

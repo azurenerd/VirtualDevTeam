@@ -2763,8 +2763,14 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
     {
         UpdateStatus(AgentStatus.Working, $"Running {tier} tests");
 
+        // Pass PLAYWRIGHT_BROWSERS_PATH so dotnet test child processes find Chromium
+        var envVars = new Dictionary<string, string>
+        {
+            ["PLAYWRIGHT_BROWSERS_PATH"] = wsConfig.GetPlaywrightBrowsersPath()
+        };
+
         var testResult = await _testRunner!.RunTestsAsync(
-            _workspace!.RepoPath, testCommand, timeoutSeconds, ct);
+            _workspace!.RepoPath, testCommand, timeoutSeconds, ct, envVars);
         testResult = testResult with { Tier = tier };
 
         if (!testResult.Success)
@@ -2804,7 +2810,7 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
                 }
 
                 testResult = await _testRunner.RunTestsAsync(
-                    _workspace.RepoPath, testCommand, timeoutSeconds, ct);
+                    _workspace.RepoPath, testCommand, timeoutSeconds, ct, envVars);
                 testResult = testResult with { Tier = tier };
             }
 
@@ -3034,8 +3040,12 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
             }
 
             // Verify remaining tests pass
+            var envVarsForRetest = new Dictionary<string, string>
+            {
+                ["PLAYWRIGHT_BROWSERS_PATH"] = wsConfig.GetPlaywrightBrowsersPath()
+            };
             var result = await _testRunner!.RunTestsAsync(
-                _workspace.RepoPath, testCommand, timeoutSeconds, ct);
+                _workspace.RepoPath, testCommand, timeoutSeconds, ct, envVarsForRetest);
             result = result with { Tier = tier };
 
             if (result.Success)
