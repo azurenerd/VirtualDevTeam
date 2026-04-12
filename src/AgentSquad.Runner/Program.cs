@@ -1,6 +1,7 @@
 using AgentSquad.Core.Configuration;
 using AgentSquad.Core.Messaging;
 using AgentSquad.Core.GitHub;
+using AgentSquad.Core.Notifications;
 using AgentSquad.Core.Persistence;
 using AgentSquad.Core.Workspace;
 using AgentSquad.Orchestrator;
@@ -71,7 +72,12 @@ builder.Services.AddSingleton<PlaywrightRunner>();
 builder.Services.AddSingleton<TestStrategyAnalyzer>();
 builder.Services.AddSingleton<AgentSquad.Core.Metrics.BuildTestMetrics>();
 
-// Human interaction gate service
+// Human interaction gate service + notification system
+builder.Services.AddSingleton<AgentSquad.Core.Notifications.GateNotificationService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<AgentSquad.Core.Notifications.GateNotificationService>());
+builder.Services.AddSingleton<INotificationChannel, AgentSquad.Core.Notifications.EmailNotificationChannel>();
+builder.Services.AddSingleton<INotificationChannel, AgentSquad.Core.Notifications.TeamsNotificationChannel>();
+builder.Services.AddSingleton<INotificationChannel, AgentSquad.Core.Notifications.SlackNotificationChannel>();
 builder.Services.AddSingleton<IGateCheckService, GateCheckService>();
 
 // Orchestrator (registry, health monitor, deadlock detector, spawn manager, workflow)

@@ -1,4 +1,5 @@
 using AgentSquad.Core.GitHub;
+using AgentSquad.Core.Notifications;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -17,16 +18,19 @@ public class GateCheckService : IGateCheckService
 
     private readonly HumanInteractionConfig _config;
     private readonly IGitHubService _github;
+    private readonly GateNotificationService? _notificationService;
     private readonly ILogger<GateCheckService> _logger;
 
     public GateCheckService(
         IOptions<AgentSquadConfig> config,
         IGitHubService github,
-        ILogger<GateCheckService> logger)
+        ILogger<GateCheckService> logger,
+        GateNotificationService? notificationService = null)
     {
         _config = config.Value.HumanInteraction;
         _github = github;
         _logger = logger;
+        _notificationService = notificationService;
     }
 
     public bool IsEnabled => _config.Enabled;
@@ -86,6 +90,19 @@ public class GateCheckService : IGateCheckService
             }
         }
 
+        // Notify via dashboard + any enabled channels
+        if (_notificationService is not null)
+        {
+            try
+            {
+                await _notificationService.AddNotificationAsync(gateId, context, resourceNumber, ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to dispatch gate notification for {GateId}", gateId);
+            }
+        }
+
         return GateResult.WaitingForHuman;
     }
 
@@ -102,6 +119,7 @@ public class GateCheckService : IGateCheckService
             if (pr?.Labels?.Contains(HumanApprovedLabel) == true)
             {
                 _logger.LogInformation("Gate {GateId} approved via label on PR #{Number}", gateId, resourceNumber);
+                _notificationService?.Resolve(gateId, resourceNumber);
                 return true;
             }
 
@@ -116,6 +134,7 @@ public class GateCheckService : IGateCheckService
                 if (body.Contains("approved") || body.Contains("lgtm") || body.Contains("ship it"))
                 {
                     _logger.LogInformation("Gate {GateId} approved via comment on PR #{Number}", gateId, resourceNumber);
+                    _notificationService?.Resolve(gateId, resourceNumber);
 
                     // Remove awaiting label, add approved label
                     if (pr is not null)

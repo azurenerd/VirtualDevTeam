@@ -4931,3 +4931,1297 @@ div[title] .config-agent-name {
     text-align: center;
     font-size: 0.85rem;
 }
+    border-radius: 6px;
+    transition: background 0.2s;
+}
+
+.config-gate-item:hover {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.config-gate-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.config-gate-name {
+    font-size: 0.82rem;
+    color: #c9d1d9;
+}
+
+.config-gate-badge {
+    font-size: 0.7rem;
+    padding: 0.15rem 0.4rem;
+    border-radius: 4px;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.config-gate-auto {
+    background: rgba(63, 185, 80, 0.12);
+    color: #3fb950;
+}
+
+.config-gate-human {
+    background: rgba(210, 153, 34, 0.12);
+    color: #d29922;
+}
+
+.config-toggle-sm {
+    transform: scale(0.8);
+}
+
+.config-gate-disabled-notice {
+    padding: 1rem;
+    background: rgba(56, 139, 253, 0.06);
+    border: 1px solid rgba(56, 139, 253, 0.15);
+    border-radius: 8px;
+    color: #8b949e;
+    text-align: center;
+    font-size: 0.85rem;
+}
+    border-radius: 6px;
+    transition: background 0.2s;
+}
+
+.config-gate-item:hover {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.config-gate-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.config-gate-name {
+    font-size: 0.82rem;
+    color: #c9d1d9;
+}
+
+.config-gate-badge {
+    font-size: 0.7rem;
+    padding: 0.15rem 0.4rem;
+    border-radius: 4px;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.config-gate-auto {
+    background: rgba(63, 185, 80, 0.12);
+    color: #3fb950;
+}
+
+.config-gate-human {
+    background: rgba(210, 153, 34, 0.12);
+    color: #d29922;
+}
+
+.config-toggle-sm {
+    transform: scale(0.8);
+}
+
+.config-gate-disabled-notice {
+    padding: 1rem;
+    background: rgba(56, 139, 253, 0.06);
+    border: 1px solid rgba(56, 139, 253, 0.15);
+    border-radius: 8px;
+    color: #8b949e;
+    text-align: center;
+    font-size: 0.85rem;
+}
+    border-radius: 6px;
+    transition: background 0.2s;
+}
+
+.config-gate-item:hover {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.config-gate-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.config-gate-name {
+    font-size: 0.82rem;
+    color: #c9d1d9;
+}
+
+.config-gate-badge {
+    font-size: 0.7rem;
+    padding: 0.15rem 0.4rem;
+    border-radius: 4px;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.config-gate-auto {
+    background: rgba(63, 185, 80, 0.12);
+    color: #3fb950;
+}
+
+.config-gate-human {
+    background: rgba(210, 153, 34, 0.12);
+    color: #d29922;
+}
+
+.config-toggle-sm {
+    transform: scale(0.8);
+}
+
+.config-gate-disabled-notice {
+    padding: 1rem;
+    background: rgba(56, 139, 253, 0.06);
+    border: 1px solid rgba(56, 139, 253, 0.15);
+    border-radius: 8px;
+    color: #8b949e;
+    text-align: center;
+    font-size: 0.85rem;
+}
+    border-radius: 6px;
+    transition: background 0.2s;
+}
+
+.config-gate-item:hover {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.config-gate-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.config-gate-name {
+    font-size: 0.82rem;
+    color: #c9d1d9;
+}
+
+.config-gate-badge {
+    font-size: 0.7rem;
+    padding: 0.15rem 0.4rem;
+    border-radius: 4px;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.config-gate-auto {
+    background: rgba(63, 185, 80, 0.12);
+    color: #3fb950;
+}
+
+.config-gate-human {
+    background: rgba(210, 153, 34, 0.12);
+    color: #d29922;
+}
+
+.config-toggle-sm {
+    transform: scale(0.8);
+}
+
+.config-gate-disabled-notice {
+    padding: 1rem;
+    background: rgba(56, 139, 253, 0.06);
+    border: 1px solid rgba(56, 139, 253, 0.15);
+    border-radius: 8px;
+    color: #8b949e;
+    text-align: center;
+    font-size: 0.85rem;
+}
+    border-radius: 6px;
+    transition: background 0.2s;
+}
+
+.config-gate-item:hover {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.config-gate-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.config-gate-name {
+    font-size: 0.82rem;
+    color: #c9d1d9;
+}
+
+.config-gate-badge {
+    font-size: 0.7rem;
+    padding: 0.15rem 0.4rem;
+    border-radius: 4px;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.config-gate-auto {
+    background: rgba(63, 185, 80, 0.12);
+    color: #3fb950;
+}
+
+.config-gate-human {
+    background: rgba(210, 153, 34, 0.12);
+    color: #d29922;
+}
+
+.config-toggle-sm {
+    transform: scale(0.8);
+}
+
+.config-gate-disabled-notice {
+    padding: 1rem;
+    background: rgba(56, 139, 253, 0.06);
+    border: 1px solid rgba(56, 139, 253, 0.15);
+    border-radius: 8px;
+    color: #8b949e;
+    text-align: center;
+    font-size: 0.85rem;
+}
+    border-radius: 6px;
+    transition: background 0.2s;
+}
+
+.config-gate-item:hover {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.config-gate-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.config-gate-name {
+    font-size: 0.82rem;
+    color: #c9d1d9;
+}
+
+.config-gate-badge {
+    font-size: 0.7rem;
+    padding: 0.15rem 0.4rem;
+    border-radius: 4px;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.config-gate-auto {
+    background: rgba(63, 185, 80, 0.12);
+    color: #3fb950;
+}
+
+.config-gate-human {
+    background: rgba(210, 153, 34, 0.12);
+    color: #d29922;
+}
+
+.config-toggle-sm {
+    transform: scale(0.8);
+}
+
+.config-gate-disabled-notice {
+    padding: 1rem;
+    background: rgba(56, 139, 253, 0.06);
+    border: 1px solid rgba(56, 139, 253, 0.15);
+    border-radius: 8px;
+    color: #8b949e;
+    text-align: center;
+    font-size: 0.85rem;
+}
+    border-radius: 6px;
+    transition: background 0.2s;
+}
+
+.config-gate-item:hover {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.config-gate-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.config-gate-name {
+    font-size: 0.82rem;
+    color: #c9d1d9;
+}
+
+.config-gate-badge {
+    font-size: 0.7rem;
+    padding: 0.15rem 0.4rem;
+    border-radius: 4px;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.config-gate-auto {
+    background: rgba(63, 185, 80, 0.12);
+    color: #3fb950;
+}
+
+.config-gate-human {
+    background: rgba(210, 153, 34, 0.12);
+    color: #d29922;
+}
+
+.config-toggle-sm {
+    transform: scale(0.8);
+}
+
+.config-gate-disabled-notice {
+    padding: 1rem;
+    background: rgba(56, 139, 253, 0.06);
+    border: 1px solid rgba(56, 139, 253, 0.15);
+    border-radius: 8px;
+    color: #8b949e;
+    text-align: center;
+    font-size: 0.85rem;
+}
+    border-radius: 6px;
+    transition: background 0.2s;
+}
+
+.config-gate-item:hover {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.config-gate-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.config-gate-name {
+    font-size: 0.82rem;
+    color: #c9d1d9;
+}
+
+.config-gate-badge {
+    font-size: 0.7rem;
+    padding: 0.15rem 0.4rem;
+    border-radius: 4px;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.config-gate-auto {
+    background: rgba(63, 185, 80, 0.12);
+    color: #3fb950;
+}
+
+.config-gate-human {
+    background: rgba(210, 153, 34, 0.12);
+    color: #d29922;
+}
+
+.config-toggle-sm {
+    transform: scale(0.8);
+}
+
+.config-gate-disabled-notice {
+    padding: 1rem;
+    background: rgba(56, 139, 253, 0.06);
+    border: 1px solid rgba(56, 139, 253, 0.15);
+    border-radius: 8px;
+    color: #8b949e;
+    text-align: center;
+    font-size: 0.85rem;
+}
+    border-radius: 6px;
+    transition: background 0.2s;
+}
+
+.config-gate-item:hover {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.config-gate-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.config-gate-name {
+    font-size: 0.82rem;
+    color: #c9d1d9;
+}
+
+.config-gate-badge {
+    font-size: 0.7rem;
+    padding: 0.15rem 0.4rem;
+    border-radius: 4px;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.config-gate-auto {
+    background: rgba(63, 185, 80, 0.12);
+    color: #3fb950;
+}
+
+.config-gate-human {
+    background: rgba(210, 153, 34, 0.12);
+    color: #d29922;
+}
+
+.config-toggle-sm {
+    transform: scale(0.8);
+}
+
+.config-gate-disabled-notice {
+    padding: 1rem;
+    background: rgba(56, 139, 253, 0.06);
+    border: 1px solid rgba(56, 139, 253, 0.15);
+    border-radius: 8px;
+    color: #8b949e;
+    text-align: center;
+    font-size: 0.85rem;
+}
+    border-radius: 6px;
+    transition: background 0.2s;
+}
+
+.config-gate-item:hover {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.config-gate-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.config-gate-name {
+    font-size: 0.82rem;
+    color: #c9d1d9;
+}
+
+.config-gate-badge {
+    font-size: 0.7rem;
+    padding: 0.15rem 0.4rem;
+    border-radius: 4px;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.config-gate-auto {
+    background: rgba(63, 185, 80, 0.12);
+    color: #3fb950;
+}
+
+.config-gate-human {
+    background: rgba(210, 153, 34, 0.12);
+    color: #d29922;
+}
+
+.config-toggle-sm {
+    transform: scale(0.8);
+}
+
+.config-gate-disabled-notice {
+    padding: 1rem;
+    background: rgba(56, 139, 253, 0.06);
+    border: 1px solid rgba(56, 139, 253, 0.15);
+    border-radius: 8px;
+    color: #8b949e;
+    text-align: center;
+    font-size: 0.85rem;
+}
+    border-radius: 6px;
+    transition: background 0.2s;
+}
+
+.config-gate-item:hover {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.config-gate-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.config-gate-name {
+    font-size: 0.82rem;
+    color: #c9d1d9;
+}
+
+.config-gate-badge {
+    font-size: 0.7rem;
+    padding: 0.15rem 0.4rem;
+    border-radius: 4px;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.config-gate-auto {
+    background: rgba(63, 185, 80, 0.12);
+    color: #3fb950;
+}
+
+.config-gate-human {
+    background: rgba(210, 153, 34, 0.12);
+    color: #d29922;
+}
+
+.config-toggle-sm {
+    transform: scale(0.8);
+}
+
+.config-gate-disabled-notice {
+    padding: 1rem;
+    background: rgba(56, 139, 253, 0.06);
+    border: 1px solid rgba(56, 139, 253, 0.15);
+    border-radius: 8px;
+    color: #8b949e;
+    text-align: center;
+    font-size: 0.85rem;
+}
+    border-radius: 6px;
+    transition: background 0.2s;
+}
+
+.config-gate-item:hover {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.config-gate-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.config-gate-name {
+    font-size: 0.82rem;
+    color: #c9d1d9;
+}
+
+.config-gate-badge {
+    font-size: 0.7rem;
+    padding: 0.15rem 0.4rem;
+    border-radius: 4px;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.config-gate-auto {
+    background: rgba(63, 185, 80, 0.12);
+    color: #3fb950;
+}
+
+.config-gate-human {
+    background: rgba(210, 153, 34, 0.12);
+    color: #d29922;
+}
+
+.config-toggle-sm {
+    transform: scale(0.8);
+}
+
+.config-gate-disabled-notice {
+    padding: 1rem;
+    background: rgba(56, 139, 253, 0.06);
+    border: 1px solid rgba(56, 139, 253, 0.15);
+    border-radius: 8px;
+    color: #8b949e;
+    text-align: center;
+    font-size: 0.85rem;
+}
+    border-radius: 6px;
+    transition: background 0.2s;
+}
+
+.config-gate-item:hover {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.config-gate-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.config-gate-name {
+    font-size: 0.82rem;
+    color: #c9d1d9;
+}
+
+.config-gate-badge {
+    font-size: 0.7rem;
+    padding: 0.15rem 0.4rem;
+    border-radius: 4px;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.config-gate-auto {
+    background: rgba(63, 185, 80, 0.12);
+    color: #3fb950;
+}
+
+.config-gate-human {
+    background: rgba(210, 153, 34, 0.12);
+    color: #d29922;
+}
+
+.config-toggle-sm {
+    transform: scale(0.8);
+}
+
+.config-gate-disabled-notice {
+    padding: 1rem;
+    background: rgba(56, 139, 253, 0.06);
+    border: 1px solid rgba(56, 139, 253, 0.15);
+    border-radius: 8px;
+    color: #8b949e;
+    text-align: center;
+    font-size: 0.85rem;
+}
+    border-radius: 6px;
+    transition: background 0.2s;
+}
+
+.config-gate-item:hover {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.config-gate-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.config-gate-name {
+    font-size: 0.82rem;
+    color: #c9d1d9;
+}
+
+.config-gate-badge {
+    font-size: 0.7rem;
+    padding: 0.15rem 0.4rem;
+    border-radius: 4px;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.config-gate-auto {
+    background: rgba(63, 185, 80, 0.12);
+    color: #3fb950;
+}
+
+.config-gate-human {
+    background: rgba(210, 153, 34, 0.12);
+    color: #d29922;
+}
+
+.config-toggle-sm {
+    transform: scale(0.8);
+}
+
+.config-gate-disabled-notice {
+    padding: 1rem;
+    background: rgba(56, 139, 253, 0.06);
+    border: 1px solid rgba(56, 139, 253, 0.15);
+    border-radius: 8px;
+    color: #8b949e;
+    text-align: center;
+    font-size: 0.85rem;
+}
+    border-radius: 6px;
+    transition: background 0.2s;
+}
+
+.config-gate-item:hover {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.config-gate-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.config-gate-name {
+    font-size: 0.82rem;
+    color: #c9d1d9;
+}
+
+.config-gate-badge {
+    font-size: 0.7rem;
+    padding: 0.15rem 0.4rem;
+    border-radius: 4px;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.config-gate-auto {
+    background: rgba(63, 185, 80, 0.12);
+    color: #3fb950;
+}
+
+.config-gate-human {
+    background: rgba(210, 153, 34, 0.12);
+    color: #d29922;
+}
+
+.config-toggle-sm {
+    transform: scale(0.8);
+}
+
+.config-gate-disabled-notice {
+    padding: 1rem;
+    background: rgba(56, 139, 253, 0.06);
+    border: 1px solid rgba(56, 139, 253, 0.15);
+    border-radius: 8px;
+    color: #8b949e;
+    text-align: center;
+    font-size: 0.85rem;
+}
+    border-radius: 6px;
+    transition: background 0.2s;
+}
+
+.config-gate-item:hover {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.config-gate-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.config-gate-name {
+    font-size: 0.82rem;
+    color: #c9d1d9;
+}
+
+.config-gate-badge {
+    font-size: 0.7rem;
+    padding: 0.15rem 0.4rem;
+    border-radius: 4px;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.config-gate-auto {
+    background: rgba(63, 185, 80, 0.12);
+    color: #3fb950;
+}
+
+.config-gate-human {
+    background: rgba(210, 153, 34, 0.12);
+    color: #d29922;
+}
+
+.config-toggle-sm {
+    transform: scale(0.8);
+}
+
+.config-gate-disabled-notice {
+    padding: 1rem;
+    background: rgba(56, 139, 253, 0.06);
+    border: 1px solid rgba(56, 139, 253, 0.15);
+    border-radius: 8px;
+    color: #8b949e;
+    text-align: center;
+    font-size: 0.85rem;
+}
+    border-radius: 6px;
+    transition: background 0.2s;
+}
+
+.config-gate-item:hover {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.config-gate-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.config-gate-name {
+    font-size: 0.82rem;
+    color: #c9d1d9;
+}
+
+.config-gate-badge {
+    font-size: 0.7rem;
+    padding: 0.15rem 0.4rem;
+    border-radius: 4px;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.config-gate-auto {
+    background: rgba(63, 185, 80, 0.12);
+    color: #3fb950;
+}
+
+.config-gate-human {
+    background: rgba(210, 153, 34, 0.12);
+    color: #d29922;
+}
+
+.config-toggle-sm {
+    transform: scale(0.8);
+}
+
+.config-gate-disabled-notice {
+    padding: 1rem;
+    background: rgba(56, 139, 253, 0.06);
+    border: 1px solid rgba(56, 139, 253, 0.15);
+    border-radius: 8px;
+    color: #8b949e;
+    text-align: center;
+    font-size: 0.85rem;
+}
+    border-radius: 6px;
+    transition: background 0.2s;
+}
+
+.config-gate-item:hover {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.config-gate-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.config-gate-name {
+    font-size: 0.82rem;
+    color: #c9d1d9;
+}
+
+.config-gate-badge {
+    font-size: 0.7rem;
+    padding: 0.15rem 0.4rem;
+    border-radius: 4px;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.config-gate-auto {
+    background: rgba(63, 185, 80, 0.12);
+    color: #3fb950;
+}
+
+.config-gate-human {
+    background: rgba(210, 153, 34, 0.12);
+    color: #d29922;
+}
+
+.config-toggle-sm {
+    transform: scale(0.8);
+}
+
+.config-gate-disabled-notice {
+    padding: 1rem;
+    background: rgba(56, 139, 253, 0.06);
+    border: 1px solid rgba(56, 139, 253, 0.15);
+    border-radius: 8px;
+    color: #8b949e;
+    text-align: center;
+    font-size: 0.85rem;
+}
+    border-radius: 6px;
+    transition: background 0.2s;
+}
+
+.config-gate-item:hover {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.config-gate-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.config-gate-name {
+    font-size: 0.82rem;
+    color: #c9d1d9;
+}
+
+.config-gate-badge {
+    font-size: 0.7rem;
+    padding: 0.15rem 0.4rem;
+    border-radius: 4px;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.config-gate-auto {
+    background: rgba(63, 185, 80, 0.12);
+    color: #3fb950;
+}
+
+.config-gate-human {
+    background: rgba(210, 153, 34, 0.12);
+    color: #d29922;
+}
+
+.config-toggle-sm {
+    transform: scale(0.8);
+}
+
+.config-gate-disabled-notice {
+    padding: 1rem;
+    background: rgba(56, 139, 253, 0.06);
+    border: 1px solid rgba(56, 139, 253, 0.15);
+    border-radius: 8px;
+    color: #8b949e;
+    text-align: center;
+    font-size: 0.85rem;
+}
+    border-radius: 6px;
+    transition: background 0.2s;
+}
+
+.config-gate-item:hover {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.config-gate-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+
+}
+
+/* ========================================
+   NOTIFICATION SYSTEM
+   ======================================== */
+
+/* Top bar */
+.top-bar {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    padding: 0.5rem 1.5rem;
+    background: var(--card-bg, #161b22);
+    border-bottom: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+    position: sticky;
+    top: 0;
+    z-index: 100;
+}
+
+.top-bar-spacer {
+    flex: 1;
+}
+
+/* Bell button */
+.notification-container {
+    position: relative;
+}
+
+.notification-bell {
+    background: transparent;
+    border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+    border-radius: 8px;
+    padding: 0.4rem 0.6rem;
+    cursor: pointer;
+    position: relative;
+    font-size: 1.2rem;
+    transition: background 150ms, border-color 150ms;
+    color: var(--text-secondary, #8b949e);
+}
+
+.notification-bell:hover {
+    background: rgba(255, 255, 255, 0.06);
+    border-color: rgba(255, 255, 255, 0.15);
+}
+
+.bell-icon {
+    display: inline-block;
+}
+
+/* Badge */
+.notification-badge {
+    position: absolute;
+    top: -6px;
+    right: -6px;
+    background: var(--red, #f85149);
+    color: #fff;
+    font-size: 0.65rem;
+    font-weight: 700;
+    min-width: 18px;
+    height: 18px;
+    border-radius: 9px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 4px;
+    font-family: var(--font-mono, 'JetBrains Mono', monospace);
+    box-shadow: 0 0 8px rgba(248, 81, 73, 0.5);
+    animation: badge-pulse 2s ease-in-out infinite;
+}
+
+@keyframes badge-pulse {
+    0%, 100% { box-shadow: 0 0 8px rgba(248, 81, 73, 0.5); }
+    50% { box-shadow: 0 0 16px rgba(248, 81, 73, 0.8); }
+}
+
+/* Overlay */
+.notification-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 199;
+}
+
+/* Popup */
+.notification-popup {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    width: 420px;
+    max-height: 520px;
+    background: var(--card-bg-elevated, #1c2130);
+    border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+    border-radius: 12px;
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5), 0 0 1px rgba(255, 255, 255, 0.1);
+    z-index: 200;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    animation: popup-enter 0.15s ease-out;
+}
+
+@keyframes popup-enter {
+    from { opacity: 0; transform: translateY(-8px) scale(0.97); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.notification-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+}
+
+.notification-header h3 {
+    margin: 0;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text-primary, #e6edf3);
+}
+
+.notification-mark-all {
+    background: transparent;
+    border: none;
+    color: var(--accent, #00d4ff);
+    font-size: 0.75rem;
+    cursor: pointer;
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    transition: background 150ms;
+}
+
+.notification-mark-all:hover {
+    background: rgba(0, 212, 255, 0.1);
+}
+
+/* List */
+.notification-list {
+    overflow-y: auto;
+    flex: 1;
+    padding: 0.5rem;
+}
+
+/* Empty state */
+.notification-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 2rem 1rem;
+    color: var(--text-secondary, #8b949e);
+}
+
+.notification-empty .empty-icon {
+    font-size: 2rem;
+    margin-bottom: 0.5rem;
+}
+
+.notification-empty p {
+    margin: 0.2rem 0;
+    font-size: 0.85rem;
+}
+
+.notification-empty .empty-sub {
+    font-size: 0.75rem;
+    opacity: 0.6;
+}
+
+/* Notification item */
+.notification-item {
+    padding: 0.75rem;
+    border-radius: 8px;
+    margin-bottom: 0.25rem;
+    transition: background 150ms;
+    border-left: 3px solid transparent;
+}
+
+.notification-item.unread {
+    background: rgba(0, 212, 255, 0.04);
+    border-left-color: var(--accent, #00d4ff);
+}
+
+.notification-item.read {
+    opacity: 0.75;
+}
+
+.notification-item.resolved {
+    opacity: 0.5;
+    border-left-color: var(--green, #3fb950);
+}
+
+.notification-item:hover {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.notification-item-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.35rem;
+}
+
+.notification-gate-badge {
+    background: rgba(255, 215, 0, 0.12);
+    color: var(--gold, #d29922);
+    font-size: 0.7rem;
+    font-weight: 600;
+    padding: 0.15rem 0.5rem;
+    border-radius: 4px;
+    letter-spacing: 0.02em;
+}
+
+.notification-time {
+    font-size: 0.7rem;
+    color: var(--text-secondary, #8b949e);
+    font-family: var(--font-mono, 'JetBrains Mono', monospace);
+}
+
+.notification-context {
+    margin: 0 0 0.4rem;
+    font-size: 0.8rem;
+    color: var(--text-secondary, #8b949e);
+    line-height: 1.4;
+}
+
+.notification-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.notification-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    font-size: 0.75rem;
+    color: var(--accent, #00d4ff);
+    text-decoration: none;
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    border: 1px solid rgba(0, 212, 255, 0.2);
+    transition: background 150ms, border-color 150ms;
+}
+
+.notification-link:hover {
+    background: rgba(0, 212, 255, 0.1);
+    border-color: rgba(0, 212, 255, 0.4);
+    text-decoration: none;
+    color: var(--accent, #00d4ff);
+}
+
+.notification-resolved-badge {
+    font-size: 0.7rem;
+    color: var(--green, #3fb950);
+    font-weight: 600;
+}
+/* Notification filters */
+.notification-filters {
+    display: flex;
+    gap: 2px;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+    background: rgba(0, 0, 0, 0.15);
+}
+
+.notification-filter-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-secondary, #8b949e);
+    font-size: 0.75rem;
+    font-weight: 500;
+    padding: 0.3rem 0.6rem;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 150ms, color 150ms;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+
+.notification-filter-btn:hover {
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text-primary, #e6edf3);
+}
+
+.notification-filter-btn.active {
+    background: rgba(0, 212, 255, 0.1);
+    color: var(--accent, #00d4ff);
+}
+
+.filter-count {
+    background: var(--accent, #00d4ff);
+    color: #000;
+    font-size: 0.6rem;
+    font-weight: 700;
+    min-width: 16px;
+    height: 16px;
+    border-radius: 8px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 3px;
+}
+
+.filter-count.resolved {
+    background: var(--green, #3fb950);
+}
+
+/* Status badges in items */
+.notification-status-pending {
+    font-size: 0.65rem;
+    color: var(--gold, #d29922);
+    font-weight: 600;
+}
+
+.notification-status-resolved {
+    font-size: 0.65rem;
+    color: var(--green, #3fb950);
+    font-weight: 600;
+}
+
+.notification-gate-badge.gate-resolved {
+    background: rgba(63, 185, 80, 0.12);
+    color: var(--green, #3fb950);
+}
+
+/* Footer row with time + actions */
+.notification-item-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 0.25rem;
+}

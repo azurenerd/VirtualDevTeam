@@ -1,0 +1,189 @@
+@using AgentSquad.Core.Notifications
+@inject GateNotificationService NotificationService
+@implements IDisposable
+
+<div class="notification-container">
+    <button class="notification-bell" @onclick="TogglePopup" title="Gate Notifications">
+        <span class="bell-icon">🔔</span>
+        @if (_unreadCount > 0)
+        {
+            <span class="notification-badge">@(_unreadCount > 99 ? "99+" : _unreadCount.ToString())</span>
+        }
+    </button>
+
+    @if (_showPopup)
+    {
+        <div class="notification-overlay" @onclick="ClosePopup"></div>
+        <div class="notification-popup">
+            <div class="notification-header">
+                <h3>🚦 Gate Notifications</h3>
+                @if (_unreadCount > 0)
+                {
+                    <button class="notification-mark-all" @onclick="MarkAllRead" title="Mark all as read">
+                        ✓ Mark all read
+                    </button>
+                }
+            </div>
+
+            <div class="notification-filters">
+                <button class="notification-filter-btn @(_currentFilter == NotificationFilter.Open ? "active" : "")"
+                        @onclick="() => SetFilter(NotificationFilter.Open)">
+                    Open
+                    @if (_openCount > 0) { <span class="filter-count">@_openCount</span> }
+                </button>
+                <button class="notification-filter-btn @(_currentFilter == NotificationFilter.Resolved ? "active" : "")"
+                        @onclick="() => SetFilter(NotificationFilter.Resolved)">
+                    Resolved
+                    @if (_resolvedCount > 0) { <span class="filter-count resolved">@_resolvedCount</span> }
+                </button>
+                <button class="notification-filter-btn @(_currentFilter == NotificationFilter.All ? "active" : "")"
+                        @onclick="() => SetFilter(NotificationFilter.All)">
+                    All
+                </button>
+            </div>
+
+            <div class="notification-list">
+                @if (!_notifications.Any())
+                {
+                    <div class="notification-empty">
+                        @if (_currentFilter == NotificationFilter.Open)
+                        {
+                            <span class="empty-icon">✅</span>
+                            <p>No pending gate approvals</p>
+                            <p class="empty-sub">All gates are running in autonomous mode</p>
+                        }
+                        else if (_currentFilter == NotificationFilter.Resolved)
+                        {
+                            <span class="empty-icon">📭</span>
+                            <p>No resolved notifications yet</p>
+                        }
+                        else
+                        {
+                            <span class="empty-icon">📭</span>
+                            <p>No gate notifications</p>
+                            <p class="empty-sub">Notifications appear when human gates are enabled</p>
+                        }
+                    </div>
+                }
+                else
+                {
+                    @foreach (var notification in _notifications)
+                    {
+                        <div class="notification-item @(notification.IsRead ? "read" : "unread") @(notification.IsResolved ? "resolved" : "")">
+                            <div class="notification-item-header">
+                                <span class="notification-gate-badge @(notification.IsResolved ? "gate-resolved" : "")">
+                                    @notification.GateName
+                                </span>
+                                @if (notification.IsResolved)
+                                {
+                                    <span class="notification-status-resolved">✅ Approved</span>
+                                }
+                                else
+                                {
+                                    <span class="notification-status-pending">⏳ Awaiting</span>
+                                }
+                            </div>
+                            <p class="notification-context">@notification.Context</p>
+                            <div class="notification-item-footer">
+                                <span class="notification-time">
+                                    @if (notification.IsResolved && notification.ResolvedAt.HasValue)
+                                    {
+                                        @:Approved @FormatTime(notification.ResolvedAt.Value)
+                                    }
+                                    else
+                                    {
+                                        @:Created @FormatTime(notification.CreatedAt)
+                                    }
+                                </span>
+                                <div class="notification-actions">
+                                    @if (!string.IsNullOrEmpty(notification.GitHubUrl))
+                                    {
+                                        <a href="@notification.GitHubUrl"
+                                           target="_blank"
+                                           rel="noopener noreferrer"
+                                           class="notification-link"
+                                           @onclick="() => OnLinkClicked(notification)">
+                                            @(notification.ResourceType == "PR" ? "🔀" : "📋")
+                                            #@notification.ResourceNumber ↗
+                                        </a>
+                                    }
+                                </div>
+                            </div>
+                        </div>
+                    }
+                }
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private bool _showPopup;
+    private int _unreadCount;
+    private int _openCount;
+    private int _resolvedCount;
+    private NotificationFilter _currentFilter = NotificationFilter.Open;
+    private IReadOnlyList<GateNotification> _notifications = Array.Empty<GateNotification>();
+
+    protected override void OnInitialized()
+    {
+        NotificationService.OnChange += HandleNotificationChange;
+        RefreshData();
+    }
+
+    private void HandleNotificationChange()
+    {
+        InvokeAsync(() =>
+        {
+            RefreshData();
+            StateHasChanged();
+        });
+    }
+
+    private void RefreshData()
+    {
+        _unreadCount = NotificationService.UnreadCount;
+        _openCount = NotificationService.OpenCount;
+        _resolvedCount = NotificationService.ResolvedCount;
+        _notifications = NotificationService.GetByStatus(_currentFilter);
+    }
+
+    private void SetFilter(NotificationFilter filter)
+    {
+        _currentFilter = filter;
+        RefreshData();
+    }
+
+    private void TogglePopup()
+    {
+        _showPopup = !_showPopup;
+        if (_showPopup)
+            RefreshData();
+    }
+
+    private void ClosePopup() => _showPopup = false;
+
+    private void MarkAllRead()
+    {
+        NotificationService.MarkAllAsRead();
+    }
+
+    private void OnLinkClicked(GateNotification notification)
+    {
+        NotificationService.MarkAsRead(notification.Id);
+    }
+
+    private static string FormatTime(DateTime utcTime)
+    {
+        var elapsed = DateTime.UtcNow - utcTime;
+        return elapsed.TotalMinutes < 1 ? "just now"
+            : elapsed.TotalMinutes < 60 ? $"{(int)elapsed.TotalMinutes}m ago"
+            : elapsed.TotalHours < 24 ? $"{(int)elapsed.TotalHours}h ago"
+            : utcTime.ToString("MMM d, HH:mm");
+    }
+
+    public void Dispose()
+    {
+        NotificationService.OnChange -= HandleNotificationChange;
+    }
+}
