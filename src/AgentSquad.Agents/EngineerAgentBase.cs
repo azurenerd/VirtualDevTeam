@@ -2107,6 +2107,31 @@ public abstract class EngineerAgentBase : AgentBase
                 Include the COMPLETE file content for each file that needs changes.
                 """;
 
+            // Include the current content of failing files so the AI can see what to fix
+            var failingFilePaths = ExtractFilePathsFromBuildErrors(buildResult.ParsedErrors, Workspace!.RepoPath);
+            if (failingFilePaths.Count > 0)
+            {
+                var fileContext = new System.Text.StringBuilder();
+                fileContext.AppendLine("\n\nCURRENT FILE CONTENTS (fix these files):");
+                foreach (var filePath in failingFilePaths.Take(10)) // Limit to 10 files
+                {
+                    try
+                    {
+                        var content = await Workspace.ReadFileAsync(filePath, ct);
+                        if (content is not null)
+                        {
+                            var ext = Path.GetExtension(filePath).TrimStart('.');
+                            fileContext.AppendLine($"\nFILE: {filePath}");
+                            fileContext.AppendLine($"```{ext}");
+                            fileContext.AppendLine(content);
+                            fileContext.AppendLine("```");
+                        }
+                    }
+                    catch { /* skip unreadable files */ }
+                }
+                fixPrompt += fileContext.ToString();
+            }
+
             var fixHistory = new ChatHistory();
             fixHistory.AddUserMessage(fixPrompt);
             var fixResponse = await chat.GetChatMessageContentAsync(fixHistory, cancellationToken: ct);
@@ -2117,6 +2142,35 @@ public abstract class EngineerAgentBase : AgentBase
         }
 
         return (false, lastErrorSummary);
+    }
+
+    /// <summary>
+    /// Extract relative file paths from build error messages.
+    /// Errors look like: "C:\full\path\repo\src\File.cs(50,48): error CS1503: ..."
+    /// Returns paths relative to the repo root (e.g., "src/File.cs").
+    /// </summary>
+    private static HashSet<string> ExtractFilePathsFromBuildErrors(
+        IReadOnlyList<string> parsedErrors, string repoPath)
+    {
+        var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var normalizedRepo = repoPath.Replace('\\', '/').TrimEnd('/') + "/";
+
+        foreach (var error in parsedErrors)
+        {
+            // Match pattern: path(line,col): error/warning
+            var match = System.Text.RegularExpressions.Regex.Match(
+                error, @"^(.+?)\(\d+,\d+\)\s*:");
+            if (!match.Success) continue;
+
+            var fullPath = match.Groups[1].Value.Replace('\\', '/');
+            if (fullPath.StartsWith(normalizedRepo, StringComparison.OrdinalIgnoreCase))
+            {
+                var relativePath = fullPath[normalizedRepo.Length..];
+                paths.Add(relativePath);
+            }
+        }
+
+        return paths;
     }
 
     /// <summary>
