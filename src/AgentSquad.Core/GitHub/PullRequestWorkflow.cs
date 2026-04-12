@@ -311,18 +311,37 @@ public partial class PullRequestWorkflow
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(agentName);
 
-        // Check if already marked ready-for-review to avoid duplicate label changes
+        // Check if already marked ready-for-review to avoid duplicate comments
         var pr = await _github.GetPullRequestAsync(prNumber, ct);
         if (pr is not null && pr.Labels.Contains(Labels.ReadyForReview, StringComparer.OrdinalIgnoreCase))
         {
-            // Label already exists, but ALWAYS post the "ready for review" comment.
-            // NeedsReviewFromAsync() uses this comment to detect rework after changes-requested,
-            // so skipping it would prevent reviewers from re-reviewing after rework.
-            _logger.LogInformation("PR #{Number} already has ready-for-review label, posting rework-ready comment", prNumber);
-            await _github.AddPullRequestCommentAsync(
-                prNumber,
-                $"✅ **{agentName}** has marked this PR as ready for review.\n\nRework complete — ready for re-review.",
-                ct);
+            // Label already exists. Only post a comment if there's been a changes-requested
+            // review since the last "ready for review" comment (i.e., actual rework happened).
+            var comments = await _github.GetPullRequestCommentsAsync(prNumber, ct);
+            var lastReadyComment = comments
+                .Where(c => c.Body.Contains("has marked this PR as ready for review"))
+                .OrderByDescending(c => c.CreatedAt)
+                .FirstOrDefault();
+            var lastChangesRequested = comments
+                .Where(c => c.Body.Contains("requested changes", StringComparison.OrdinalIgnoreCase)
+                          || c.Body.Contains("changes requested", StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(c => c.CreatedAt)
+                .FirstOrDefault();
+
+            // Only post rework-ready comment if changes were requested AFTER the last ready comment
+            if (lastChangesRequested is not null &&
+                (lastReadyComment is null || lastChangesRequested.CreatedAt > lastReadyComment.CreatedAt))
+            {
+                _logger.LogInformation("PR #{Number} has rework after changes-requested, posting rework-ready comment", prNumber);
+                await _github.AddPullRequestCommentAsync(
+                    prNumber,
+                    $"✅ **{agentName}** has marked this PR as ready for review.\n\nRework complete — ready for re-review.",
+                    ct);
+            }
+            else
+            {
+                _logger.LogInformation("PR #{Number} already has ready-for-review label and no rework needed, skipping duplicate comment", prNumber);
+            }
             return;
         }
 
