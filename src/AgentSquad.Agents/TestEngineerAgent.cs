@@ -60,6 +60,8 @@ public class TestEngineerAgent : AgentBase
     private bool _pendingWorkspaceCleanup;
     private readonly HashSet<int> _testedPRs = new();
     private readonly HashSet<int> _sessionTestedPRs = new(); // Only PRs actually tested this session (not skipped old ones)
+    private readonly Dictionary<int, int> _testFailureAttempts = new(); // Track transient failure retries per PR
+    private const int MaxTestFailureRetries = 2;
     private readonly List<IDisposable> _subscriptions = new();
     private readonly ConcurrentQueue<(int PrNumber, string PrTitle, string Feedback, string Reviewer)> _reworkQueue = new();
     private readonly Dictionary<int, int> _reworkAttempts = new();
@@ -443,7 +445,21 @@ public class TestEngineerAgent : AgentBase
                 Logger.LogWarning(ex, "Failed to add inline tests to PR #{Number}", pr.Number);
                 RecordError($"Inline test failure for PR #{pr.Number}: {ex.Message}",
                     Microsoft.Extensions.Logging.LogLevel.Warning, ex);
-                _testedPRs.Add(pr.Number); // Don't retry indefinitely
+
+                // Allow retries for transient errors (network, auth), but cap to prevent infinite loops
+                _testFailureAttempts.TryGetValue(pr.Number, out var attempts);
+                _testFailureAttempts[pr.Number] = attempts + 1;
+                if (attempts + 1 >= MaxTestFailureRetries)
+                {
+                    _testedPRs.Add(pr.Number); // Give up after max retries
+                    Logger.LogWarning("PR #{Number} failed {Attempts} times — marking as tested to prevent infinite retry",
+                        pr.Number, attempts + 1);
+                }
+                else
+                {
+                    Logger.LogInformation("PR #{Number} failed (attempt {Attempt}/{Max}) — will retry next cycle",
+                        pr.Number, attempts + 1, MaxTestFailureRetries);
+                }
 
                 // Post a comment so the team knows what happened
                 try
