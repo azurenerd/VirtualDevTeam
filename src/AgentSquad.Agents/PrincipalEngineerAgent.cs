@@ -1844,6 +1844,68 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 Labels = new List<string>()
             };
 
+            // SinglePassMode: produce complete implementation in one prompt (same as initial implementation)
+            if (Config.CopilotCli.SinglePassMode)
+            {
+                Logger.LogInformation("PE using single-pass for continued implementation on PR #{PrNumber}", pr.Number);
+                UpdateStatus(AgentStatus.Working, $"PR #{pr.Number} step 1/1: {Truncate(pr.Title, 60)}");
+
+                var history = new ChatHistory();
+                history.AddSystemMessage(GetImplementationSystemPrompt(techStack));
+
+                var ctx = new System.Text.StringBuilder();
+                ctx.AppendLine($"## PM Specification\n{pmSpecDoc}\n");
+                ctx.AppendLine($"## Architecture\n{architectureDoc}\n");
+                if (sourceIssue is not null)
+                    ctx.AppendLine($"## GitHub Issue #{sourceIssue.Number}: {sourceIssue.Title}\n{sourceIssue.Body}\n");
+                ctx.AppendLine($"## Task: {pr.Title}\n{pr.Body}\n");
+                if (!string.IsNullOrEmpty(existingFiles))
+                    ctx.AppendLine($"## Existing Files in PR (may have build errors — fix or replace as needed)\n{existingFiles}\n");
+
+                ctx.AppendLine("Produce a complete implementation for this task. " +
+                    "Output each file using this exact format:\n\n" +
+                    "FILE: path/to/file.ext\n```language\n<file content>\n```\n\n" +
+                    $"Use the {techStack} technology stack. " +
+                    "CRITICAL: You MUST include a .csproj project file at the project root AND a .sln solution file at the repository root. " +
+                    "Without these, `dotnet build` will fail. The .sln must reference the .csproj. " +
+                    "Include all source code files, configuration, and tests. " +
+                    "Every file MUST use the FILE: marker format so it can be parsed and committed.");
+
+                history.AddUserMessage(ctx.ToString());
+                var response = await chat.GetChatMessageContentAsync(history, cancellationToken: ct);
+                var codeFiles = AgentSquad.Core.AI.CodeFileParser.ParseFiles(response.Content?.Trim() ?? "");
+
+                if (codeFiles.Count > 0 && Workspace is not null && BuildRunnerSvc is not null)
+                {
+                    var committed = await CommitViaLocalWorkspaceAsync(pr, codeFiles,
+                        $"Implement {pr.Title}", 1, 1, pr.Title, chat, ct);
+                    if (!committed)
+                    {
+                        Logger.LogWarning("PE single-pass continuation blocked by build errors on PR #{PrNumber}", pr.Number);
+                        await GitHub.AddPullRequestCommentAsync(pr.Number,
+                            $"❌ **Build Blocked:** Single-pass continuation could not produce a buildable commit.", ct);
+                        return;
+                    }
+                }
+                else if (codeFiles.Count > 0)
+                {
+                    await PrWorkflow.CommitCodeFilesToPRAsync(pr.Number, codeFiles, $"Implement {pr.Title}", ct);
+                }
+
+                await SyncBranchWithMainAsync(pr.Number, ct);
+                await PrWorkflow.MarkReadyForReviewAsync(pr.Number, Identity.DisplayName, ct);
+                await MessageBus.PublishAsync(new ReviewRequestMessage
+                {
+                    FromAgentId = Identity.Id,
+                    ToAgentId = "*",
+                    MessageType = "ReviewRequest",
+                    PrNumber = pr.Number,
+                    PrTitle = pr.Title,
+                    ReviewType = "CodeReview"
+                }, ct);
+                return;
+            }
+
             var steps = await GenerateImplementationStepsAsync(
                 chat, pr, syntheticIssue, pmSpecDoc, architectureDoc, techStack, ct);
 
