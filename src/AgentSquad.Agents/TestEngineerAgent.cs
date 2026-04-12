@@ -679,30 +679,37 @@ public class TestEngineerAgent : AgentBase
         UpdateStatus(AgentStatus.Working, $"Running tests for PR #{pr.Number}");
         var tierResults = new List<TestResult>();
 
-        // Unit tests (always run)
-        var unitResult = await RunTestTierWithRetryAsync(
-            TestTier.Unit,
-            wsConfig.UnitTestCommand ?? wsConfig.TestCommand,
-            wsConfig.UnitTestTimeoutSeconds, wsConfig, ct);
-        if (unitResult is not null)
-            tierResults.Add(unitResult);
-
-        // Integration tests (only if unit tests passed and command configured)
-        if (unitResult is null or { Success: true })
+        if (!wsConfig.UITestsOnly)
         {
-            var intCommand = wsConfig.IntegrationTestCommand;
-            if (!string.IsNullOrWhiteSpace(intCommand))
+            // Unit tests (always run unless UITestsOnly)
+            var unitResult = await RunTestTierWithRetryAsync(
+                TestTier.Unit,
+                wsConfig.UnitTestCommand ?? wsConfig.TestCommand,
+                wsConfig.UnitTestTimeoutSeconds, wsConfig, ct);
+            if (unitResult is not null)
+                tierResults.Add(unitResult);
+
+            // Integration tests (only if unit tests passed and command configured)
+            if (unitResult is null or { Success: true })
             {
-                var intResult = await RunTestTierWithRetryAsync(
-                    TestTier.Integration, intCommand,
-                    wsConfig.IntegrationTestTimeoutSeconds, wsConfig, ct);
-                if (intResult is not null)
-                    tierResults.Add(intResult);
+                var intCommand = wsConfig.IntegrationTestCommand;
+                if (!string.IsNullOrWhiteSpace(intCommand))
+                {
+                    var intResult = await RunTestTierWithRetryAsync(
+                        TestTier.Integration, intCommand,
+                        wsConfig.IntegrationTestTimeoutSeconds, wsConfig, ct);
+                    if (intResult is not null)
+                        tierResults.Add(intResult);
+                }
             }
         }
+        else
+        {
+            Logger.LogInformation("UITestsOnly mode — skipping unit and integration tests for PR #{Number}", pr.Number);
+        }
 
-        // UI tests (only if prior tiers passed, enabled, and command configured)
-        if (tierResults.All(r => r.Success) && wsConfig.EnableUITests)
+        // UI tests (only if prior tiers passed or UITestsOnly, enabled, and command configured)
+        if ((wsConfig.UITestsOnly || tierResults.All(r => r.Success)) && wsConfig.EnableUITests)
         {
             var uiCommand = wsConfig.UITestCommand;
             if (!string.IsNullOrWhiteSpace(uiCommand) && _playwrightRunner is not null)
@@ -1646,6 +1653,13 @@ public class TestEngineerAgent : AgentBase
         var memoryContext = await GetMemoryContextAsync(ct: ct);
 
         var useSinglePass = _config.CopilotCli.SinglePassMode;
+
+        // When UITestsOnly, override strategy to skip unit/integration generation
+        if (_config.Workspace.UITestsOnly)
+        {
+            strategy = strategy with { NeedsUnitTests = false, NeedsIntegrationTests = false, NeedsUITests = true };
+            Logger.LogInformation("UITestsOnly mode — overriding strategy to UI tests only for PR #{Number}", pr.Number);
+        }
 
         if (useSinglePass)
         {

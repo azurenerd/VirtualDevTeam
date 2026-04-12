@@ -43,6 +43,29 @@ public class PlaywrightRunner
 
         _logger.LogInformation("Installing Playwright Chromium browsers to {Path}", browsersPath);
 
+        // Strategy 0: Use playwright.ps1 from the Runner's own bin directory
+        // This guarantees browser version matches the NuGet package version we're running
+        var runnerAssemblyDir = Path.GetDirectoryName(typeof(PlaywrightRunner).Assembly.Location);
+        if (runnerAssemblyDir is not null)
+        {
+            var runnerScript = Path.Combine(runnerAssemblyDir, "playwright.ps1");
+            if (File.Exists(runnerScript))
+            {
+                var dllPath = Path.Combine(runnerAssemblyDir, "Microsoft.Playwright.dll");
+                if (File.Exists(dllPath))
+                {
+                    _logger.LogInformation("Using Runner's playwright.ps1 at {Script}", runnerScript);
+                    await RunInstallCommandAsync(
+                        "pwsh", $"-NoProfile -ExecutionPolicy Bypass -File \"{runnerScript}\" install chromium",
+                        browsersPath, ct);
+
+                    if (IsBrowserExecutablePresent(browsersPath))
+                        return;
+                    _logger.LogWarning("Runner playwright.ps1 install did not produce expected browser executable");
+                }
+            }
+        }
+
         // Strategy 1: Use the node-based Playwright CLI from the built test project
         // This is the most reliable method — the .playwright folder ships with the NuGet package
         var nodeCliPair = FindNodePlaywrightCli(workspacePath);
@@ -91,13 +114,21 @@ public class PlaywrightRunner
         var chromiumDirs = Directory.GetDirectories(browsersPath, "chromium*", SearchOption.TopDirectoryOnly);
         foreach (var dir in chromiumDirs)
         {
-            // Windows: chromium-{ver}/chrome-win/chrome.exe
+            // Windows: chromium-{ver}/chrome-win/chrome.exe (older) or chrome-win64/chrome.exe (newer)
             var winExe = Path.Combine(dir, "chrome-win", "chrome.exe");
             if (File.Exists(winExe)) return true;
+            var winExe64 = Path.Combine(dir, "chrome-win64", "chrome.exe");
+            if (File.Exists(winExe64)) return true;
 
-            // Linux: chromium-{ver}/chrome-linux/chrome
+            // Headless shell variant: chromium_headless_shell-{ver}/chrome-headless-shell-win64/headless_shell.exe
+            var headlessExe = Path.Combine(dir, "chrome-headless-shell-win64", "headless_shell.exe");
+            if (File.Exists(headlessExe)) return true;
+
+            // Linux: chromium-{ver}/chrome-linux/chrome or chrome-linux64/chrome
             var linuxExe = Path.Combine(dir, "chrome-linux", "chrome");
             if (File.Exists(linuxExe)) return true;
+            var linuxExe64 = Path.Combine(dir, "chrome-linux64", "chrome");
+            if (File.Exists(linuxExe64)) return true;
 
             // macOS: chromium-{ver}/chrome-mac/Chromium.app
             var macApp = Path.Combine(dir, "chrome-mac", "Chromium.app");
@@ -702,8 +733,38 @@ public class PlaywrightRunner
 
             if (!ready)
             {
-                _logger.LogDebug("App not ready for screenshot at {Url}", config.AppBaseUrl);
-                return null;
+                _logger.LogWarning("App not ready for screenshot at {Url} — attempting build first", config.AppBaseUrl);
+                // Kill the failed process and try building before starting
+                try { if (!appProcess.HasExited) appProcess.Kill(entireProcessTree: true); } catch { }
+                appProcess.Dispose();
+                appProcess = null;
+
+                // Build first using dotnet build, then retry start
+                var buildPsi = new ProcessStartInfo("dotnet", "build --verbosity quiet")
+                {
+                    WorkingDirectory = workspacePath,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+                var buildProc = Process.Start(buildPsi);
+                if (buildProc is not null)
+                {
+                    await buildProc.WaitForExitAsync(ct);
+                    if (buildProc.ExitCode == 0)
+                    {
+                        _logger.LogInformation("Build succeeded, retrying app start");
+                        appProcess = await StartAppUnderTestAsync(workspacePath, config, envVars, ct);
+                        ready = await WaitForAppReadyAsync(config.AppBaseUrl, config.AppStartupTimeoutSeconds, ct);
+                    }
+                }
+
+                if (!ready)
+                {
+                    _logger.LogDebug("App still not ready after build+restart, giving up on screenshot");
+                    return null;
+                }
             }
 
             // Use Playwright to take a full-page screenshot

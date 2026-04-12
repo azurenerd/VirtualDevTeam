@@ -66,6 +66,12 @@ public class WorkspaceConfig
     public bool EnableUITests { get; set; } = true;
 
     /// <summary>
+    /// When true, skip unit and integration test generation/execution — only run UI tests.
+    /// Useful for debugging the UI test pipeline in isolation.
+    /// </summary>
+    public bool UITestsOnly { get; set; }
+
+    /// <summary>
     /// Path to cache Playwright browser binaries. Shared across all agent workspaces
     /// to avoid re-downloading ~150MB per agent. Set via PLAYWRIGHT_BROWSERS_PATH env var.
     /// When null, auto-derived as "{RootPath}/.playwright-browsers".
