@@ -1541,18 +1541,20 @@ public class PrincipalEngineerAgent : EngineerAgentBase
 
                 if (testFiles.Count == 0)
                 {
-                    Logger.LogWarning(
-                        "PR #{Number} has tests-added label but no test files found — skipping merge",
+                    // TE processed this PR but tests couldn't be built — still merge if PM approved
+                    Logger.LogInformation(
+                        "PR #{Number} has tests-added+pm-approved but no test files (TE build failed) — merging anyway",
                         pr.Number);
                     await GitHub.AddPullRequestCommentAsync(pr.Number,
-                        "⚠️ **PE Review:** PR has `tests-added` label but no test files were detected. " +
-                        "Waiting for actual test files to be committed.", ct);
-                    continue;
+                        "✅ **[PrincipalEngineer] Merge Review** — TE attempted testing but build failed. " +
+                        "PM has approved the code. Proceeding with merge.", ct);
                 }
-
-                // Post test review approval and merge
-                await GitHub.AddPullRequestCommentAsync(pr.Number,
-                    $"✅ **[PrincipalEngineer] Tests Reviewed** — {testFiles.Count} test file(s) verified. Merging.", ct);
+                else
+                {
+                    // Post test review approval
+                    await GitHub.AddPullRequestCommentAsync(pr.Number,
+                        $"✅ **[PrincipalEngineer] Tests Reviewed** — {testFiles.Count} test file(s) verified. Merging.", ct);
+                }
 
                 var result = await PrWorkflow.MergeApprovedTestedPRAsync(
                     pr.Number, "PrincipalEngineer", ct);

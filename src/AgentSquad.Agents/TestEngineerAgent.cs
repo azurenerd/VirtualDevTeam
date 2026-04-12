@@ -440,8 +440,13 @@ public class TestEngineerAgent : AgentBase
 
             if (codeFiles.Count == 0)
             {
-                Logger.LogDebug("Skipping approved PR #{Number} — no testable code files", pr.Number);
+                Logger.LogInformation("Skipping approved PR #{Number} — no testable code files, marking as tested", pr.Number);
                 _testedPRs.Add(pr.Number);
+                // Still apply tests-added label so PM can proceed with review
+                await ApplyTestsAddedLabelAsync(pr, ct);
+                await _github.AddPullRequestCommentAsync(pr.Number,
+                    "✅ **[TestEngineer] No Testable Code** — This PR contains only configuration/data files " +
+                    "with no testable code. Marking as tested to proceed with PM review.", ct);
                 continue;
             }
 
@@ -697,6 +702,9 @@ public class TestEngineerAgent : AgentBase
                 $"❌ **Test Engineer:** Could not make test code compile after " +
                 $"{wsConfig.MaxBuildRetries} attempts. Build errors prevented test addition.\n\n" +
                 $"The PR can still be merged without automated tests.", ct);
+            // Still apply tests-added label so PM can proceed with final review
+            // (TE has attempted testing — the label signals "TE processing complete")
+            await ApplyTestsAddedLabelAsync(pr, ct);
             return true; // Build failed but we reported it — consider handled
         }
 
