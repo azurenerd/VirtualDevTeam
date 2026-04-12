@@ -352,7 +352,12 @@ public class PlaywrightRunner
 
         if (candidates.Count > 0)
         {
-            var resolvedPath = Path.GetRelativePath(workspacePath, candidates[0]);
+            // Prefer src/ paths over root-level paths (PE typically puts app code in src/)
+            var preferred = candidates
+                .OrderByDescending(f => Path.GetRelativePath(workspacePath, f)
+                    .StartsWith("src", StringComparison.OrdinalIgnoreCase) ? 1 : 0)
+                .First();
+            var resolvedPath = Path.GetRelativePath(workspacePath, preferred);
             var newCommand = command.Replace(projectMatch.Groups[1].Value, resolvedPath);
             _logger.LogInformation(
                 "Auto-resolved app project path: {ConfiguredPath} -> {ResolvedPath}",
@@ -668,12 +673,21 @@ public class PlaywrightRunner
             var appStartCommand = config.AppStartCommand;
             if (string.IsNullOrWhiteSpace(appStartCommand))
             {
-                // Try to auto-detect — look for a .csproj in the workspace
-                var csproj = Directory.EnumerateFiles(workspacePath, "*.csproj", SearchOption.TopDirectoryOnly).FirstOrDefault();
+                // Auto-detect — prefer src/ paths over root-level, exclude test projects
+                var csproj = Directory.EnumerateFiles(workspacePath, "*.csproj", SearchOption.AllDirectories)
+                    .Where(f => !Path.GetRelativePath(workspacePath, f).Contains("test", StringComparison.OrdinalIgnoreCase))
+                    .OrderByDescending(f => Path.GetRelativePath(workspacePath, f)
+                        .StartsWith("src", StringComparison.OrdinalIgnoreCase) ? 1 : 0)
+                    .FirstOrDefault();
                 if (csproj is not null)
                     appStartCommand = $"dotnet run --project \"{csproj}\" --urls {config.AppBaseUrl}";
                 else
                     return null; // Can't start app without a command
+            }
+            else
+            {
+                // Use ResolveAppStartCommand to handle configured-but-missing paths
+                appStartCommand = ResolveAppStartCommand(workspacePath, config);
             }
 
             var envVars = new Dictionary<string, string>
