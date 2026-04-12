@@ -132,6 +132,20 @@ else if (_config is not null)
                         <textarea @bind="_config.Project.ResearchPrompt" class="config-textarea" rows="3" placeholder="Leave empty for auto-generated prompt"
                             title="Custom instructions for the Researcher agent. If blank, a prompt is auto-generated from the project description. Use this to focus research on specific topics."></textarea>
                     </div>
+                    <div class="config-field-row">
+                        <div class="config-field" title="When enabled, Researcher/PM/Architect produce minimal 1-paragraph documents using only the project description and tech stack. Dramatically reduces startup time for testing.">
+                            <label>Quick Document Creation</label>
+                            <label class="config-toggle">
+                                <input type="checkbox" @bind="_config.Project.QuickDocumentCreation" />
+                                <span class="config-toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="config-field">
+                            <label title="SHA of the baseline commit representing the clean repo state. Used by cleanup to reset files via Git Trees API. Leave empty to use preserve-files fallback.">Baseline Commit SHA <span class="config-hint">(optional)</span></label>
+                            <input type="text" @bind="_config.Project.BaselineCommitSha" class="config-input" placeholder="e.g. 0196a03..."
+                                title="The commit SHA to restore files from during cleanup. Set after initial repo setup." />
+                        </div>
+                    </div>
                 </div>
             }
         </div>
@@ -376,6 +390,28 @@ else if (_config is not null)
                                 title="Task threshold for auto-scaling. Default: 2. The spawn manager won't create new engineers unless this many tasks are waiting." />
                         </div>
                     </div>
+                    <div class="config-field-row">
+                        <div class="config-field">
+                            <label title="Max rework cycles for Architect when architecture review requests changes.">Max Architect Rework</label>
+                            <input type="number" @bind="_config.Limits.MaxArchitectReworkCycles" class="config-input config-input-number" min="1" max="10"
+                                title="How many times the Architect can revise Architecture.md after PE feedback. Default: 3." />
+                        </div>
+                        <div class="config-field">
+                            <label title="Max rework cycles for PM when PM spec review requests changes.">Max PM Rework</label>
+                            <input type="number" @bind="_config.Limits.MaxPmReworkCycles" class="config-input config-input-number" min="1" max="10"
+                                title="How many times the PM can revise PMSpec.md after feedback. Default: 3." />
+                        </div>
+                        <div class="config-field">
+                            <label title="Max rework cycles for Test Engineer when tests fail build/review.">Max Test Rework</label>
+                            <input type="number" @bind="_config.Limits.MaxTestReworkCycles" class="config-input config-input-number" min="1" max="10"
+                                title="How many times the TE can fix failed tests before giving up. Default: 2." />
+                        </div>
+                        <div class="config-field">
+                            <label title="Max rounds of source bug fix attempts before escalating to human.">Max Source Bug Rounds</label>
+                            <input type="number" @bind="_config.Limits.MaxSourceBugRounds" class="config-input config-input-number" min="1" max="10"
+                                title="How many times the engineer can attempt to fix a source bug found by TE. Default: 2." />
+                        </div>
+                    </div>
                 </div>
             }
         </div>
@@ -437,6 +473,32 @@ else if (_config is not null)
                     </div>
                     <div class="config-field-row">
                         <div class="config-field">
+                            <label title="Test workflow mode: 'inline' pushes tests to source PR, 'separate' creates a separate test PR.">Test Workflow</label>
+                            <select @bind="_config.Workspace.TestWorkflow" class="config-input">
+                                <option value="inline">Inline (tests in source PR)</option>
+                                <option value="separate">Separate (test PR per source PR)</option>
+                            </select>
+                        </div>
+                        <div class="config-field">
+                            <label title="Command to start the application for UI/E2E testing. Leave empty if not using UI tests.">App Start Command <span class="config-hint">(for UI tests)</span></label>
+                            <input type="text" @bind="_config.Workspace.AppStartCommand" class="config-input" placeholder="e.g. dotnet run --project src/MyApp"
+                                title="Shell command to start the app for Playwright tests. The app must be running before UI tests execute." />
+                        </div>
+                    </div>
+                    <div class="config-field-row">
+                        <div class="config-field">
+                            <label title="Base URL of the running application for UI tests.">App Base URL</label>
+                            <input type="text" @bind="_config.Workspace.AppBaseUrl" class="config-input" placeholder="http://localhost:5000"
+                                title="URL where the running app is accessible for Playwright tests. Default: http://localhost:5000" />
+                        </div>
+                        <div class="config-field">
+                            <label title="How long to wait for the app to start before running UI tests.">App Startup Timeout (sec)</label>
+                            <input type="number" @bind="_config.Workspace.AppStartupTimeoutSeconds" class="config-input config-input-number" min="10" max="300"
+                                title="Seconds to wait for the app to start responding before timing out. Default: 90." />
+                        </div>
+                    </div>
+                    <div class="config-field-row">
+                        <div class="config-field">
                             <label title="Maximum time for a build command before it's killed. Prevents hung builds from blocking agents.">Build Timeout (sec)</label>
                             <input type="number" @bind="_config.Workspace.BuildTimeoutSeconds" class="config-input config-input-number" min="10" max="600"
                                 title="Build timeout in seconds. Default: 120. Increase for large solutions or first-time NuGet restore." />
@@ -451,12 +513,31 @@ else if (_config is not null)
                             <input type="number" @bind="_config.Workspace.MaxBuildRetries" class="config-input config-input-number" min="0" max="10"
                                 title="Build retry count with AI fix attempts between retries. Default: 3. Set to 0 to fail immediately on build errors." />
                         </div>
+                        <div class="config-field">
+                            <label title="How many times to retry failed tests before giving up.">Max Test Retries</label>
+                            <input type="number" @bind="_config.Workspace.MaxTestRetries" class="config-input config-input-number" min="0" max="10"
+                                title="Test retry count. Default: 3. Set to 0 to fail immediately on test failures." />
+                        </div>
                     </div>
                     <div class="config-field-row">
                         <div class="config-field" title="Enable Playwright-based end-to-end UI tests. When on, the Test Engineer can generate and run browser-based tests.">
                             <label>Enable UI Tests</label>
                             <label class="config-toggle">
                                 <input type="checkbox" @bind="_config.Workspace.EnableUITests" />
+                                <span class="config-toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="config-field" title="When enabled, only UI/E2E tests are generated (skips unit and integration). Useful for UI-focused projects.">
+                            <label>UI Tests Only</label>
+                            <label class="config-toggle">
+                                <input type="checkbox" @bind="_config.Workspace.UITestsOnly" />
+                                <span class="config-toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="config-field" title="Capture screenshots during UI test runs for visual verification.">
+                            <label>Capture Screenshots</label>
+                            <label class="config-toggle">
+                                <input type="checkbox" @bind="_config.Workspace.CaptureScreenshots" />
                                 <span class="config-toggle-slider"></span>
                             </label>
                         </div>
