@@ -68,6 +68,13 @@ public class LocalWorkspace
                 // Ensure all directories in the path exist (root + agent subdirectory)
                 Directory.CreateDirectory(Path.GetDirectoryName(RepoPath)!);
 
+                // If directory exists but has no .git (partial clone from prior failed attempt), clean it
+                if (Directory.Exists(RepoPath))
+                {
+                    _logger.LogWarning("[{Agent}] Removing stale partial clone at {Path}", _agentId, RepoPath);
+                    await ForceDeleteDirectoryAsync(RepoPath, ct);
+                }
+
                 // Clone with token embedded in URL for auth (retry up to 3 times on timeout)
                 for (var attempt = 1; attempt <= 3; attempt++)
                 {
@@ -79,20 +86,8 @@ public class LocalWorkspace
                     catch (Exception ex) when (attempt < 3 && (ex is TimeoutException || ex is OperationCanceledException == false))
                     {
                         _logger.LogWarning("[{Agent}] Clone attempt {Attempt}/3 failed ({Error}), retrying...", _agentId, attempt, ex.GetType().Name);
-                        // Wait for OS to release file locks from killed git process
                         await Task.Delay(TimeSpan.FromSeconds(10), ct);
-                        try
-                        {
-                            if (Directory.Exists(RepoPath))
-                                Directory.Delete(RepoPath, true);
-                        }
-                        catch (Exception cleanupEx)
-                        {
-                            _logger.LogWarning("[{Agent}] Could not clean partial clone dir: {Error}", _agentId, cleanupEx.Message);
-                            // Force-kill any lingering git processes then retry cleanup
-                            await Task.Delay(TimeSpan.FromSeconds(5), ct);
-                            try { if (Directory.Exists(RepoPath)) Directory.Delete(RepoPath, true); } catch { /* best effort */ }
-                        }
+                        await ForceDeleteDirectoryAsync(RepoPath, ct);
                     }
                 }
 
@@ -326,6 +321,38 @@ public class LocalWorkspace
         finally
         {
             _gitLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Force-delete a directory, handling locked files on Windows by clearing read-only
+    /// attributes and retrying after a short delay.
+    /// </summary>
+    private async Task ForceDeleteDirectoryAsync(string path, CancellationToken ct)
+    {
+        if (!Directory.Exists(path)) return;
+
+        for (var retry = 0; retry < 3; retry++)
+        {
+            try
+            {
+                // Clear read-only attributes that git sets on pack files
+                foreach (var file in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories))
+                {
+                    try { File.SetAttributes(file, FileAttributes.Normal); } catch { /* best effort */ }
+                }
+                Directory.Delete(path, true);
+                return;
+            }
+            catch when (retry < 2)
+            {
+                _logger.LogDebug("[{Agent}] Retry {Retry} deleting {Path}", _agentId, retry + 1, path);
+                await Task.Delay(TimeSpan.FromSeconds(3), ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning("[{Agent}] Could not force-delete {Path}: {Error}", _agentId, path, ex.Message);
+            }
         }
     }
 
