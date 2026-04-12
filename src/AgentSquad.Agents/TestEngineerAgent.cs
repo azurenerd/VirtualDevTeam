@@ -58,6 +58,7 @@ public class TestEngineerAgent : AgentBase
     private readonly PlaywrightRunner? _playwrightRunner;
     private readonly TestStrategyAnalyzer? _testStrategyAnalyzer;
     private readonly Core.Metrics.BuildTestMetrics? _metrics;
+    private readonly IGateCheckService _gateCheck;
 
     private LocalWorkspace? _workspace;
     private bool _pendingWorkspaceCleanup;
@@ -92,6 +93,7 @@ public class TestEngineerAgent : AgentBase
         ModelRegistry modelRegistry,
         AgentMemoryStore memoryStore,
         IOptions<AgentSquadConfig> config,
+        IGateCheckService gateCheck,
         ILogger<AgentBase> logger,
         BuildRunner? buildRunner = null,
         TestRunner? testRunner = null,
@@ -106,6 +108,7 @@ public class TestEngineerAgent : AgentBase
         _projectFiles = projectFiles ?? throw new ArgumentNullException(nameof(projectFiles));
         _modelRegistry = modelRegistry ?? throw new ArgumentNullException(nameof(modelRegistry));
         _config = config?.Value ?? throw new ArgumentNullException(nameof(config));
+        _gateCheck = gateCheck ?? throw new ArgumentNullException(nameof(gateCheck));
         _buildRunner = buildRunner;
         _testRunner = testRunner;
         _playwrightRunner = playwrightRunner;
@@ -944,6 +947,12 @@ public class TestEngineerAgent : AgentBase
                     }
                 }
 
+                // === Gate: SourceBugEscalation — human reviews before escalating source bug ===
+                await _gateCheck.WaitForGateAsync(
+                    GateIds.SourceBugEscalation,
+                    $"TE found source bugs in PR #{pr.Number}, requesting engineer fix",
+                    pr.Number, ct: ct);
+
                 await RequestSourceBugFixesAsync(pr, sourceBugs, ct);
                 // Don't add tests-added label yet — waiting for engineer to fix source bugs
                 _testedPRs.Remove(pr.Number); // Allow re-test after engineer fixes
@@ -1273,6 +1282,12 @@ public class TestEngineerAgent : AgentBase
     /// </summary>
     private async Task ApplyTestsAddedLabelAsync(AgentPullRequest pr, CancellationToken ct)
     {
+        // === Gate: TestResults — human reviews test results before proceeding ===
+        await _gateCheck.WaitForGateAsync(
+            GateIds.TestResults,
+            $"Tests completed on PR #{pr.Number}, results ready for human review",
+            pr.Number, ct: ct);
+
         try
         {
             var updatedLabels = pr.Labels
@@ -1472,6 +1487,12 @@ public class TestEngineerAgent : AgentBase
                 Logger.LogDebug(ex, "Standalone screenshot capture failed for PR #{PrNumber}", pr.Number);
             }
         }
+
+        // === Gate: TestScreenshots — human reviews screenshots before proceeding ===
+        await _gateCheck.WaitForGateAsync(
+            GateIds.TestScreenshots,
+            $"Screenshots captured for PR #{pr.Number}, ready for human review",
+            pr.Number, ct: ct);
 
         // File list
         sb.AppendLine("<details><summary>Test Files</summary>");

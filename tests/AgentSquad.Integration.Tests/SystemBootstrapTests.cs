@@ -84,6 +84,7 @@ public class SystemBootstrapTests : IDisposable
                 sp.GetRequiredService<ILogger<PullRequestWorkflow>>()));
         services.AddSingleton<IssueWorkflow>();
         services.AddSingleton<ConflictResolver>();
+        services.AddSingleton<IGateCheckService, GateCheckService>();
 
         // Orchestrator
         services.AddOrchestrator();

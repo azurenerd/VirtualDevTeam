@@ -1,6 +1,7 @@
 namespace AgentSquad.Orchestrator;
 
 using AgentSquad.Core.Agents;
+using AgentSquad.Core.Configuration;
 using AgentSquad.Core.Persistence;
 using Microsoft.Extensions.Logging;
 using System.Text.Json;
@@ -42,6 +43,7 @@ public class WorkflowStateMachine
 {
     private readonly AgentRegistry _registry;
     private readonly AgentStateStore _stateStore;
+    private readonly IGateCheckService _gateCheck;
     private readonly ILogger<WorkflowStateMachine> _logger;
 
     private readonly object _lock = new();
@@ -66,10 +68,12 @@ public class WorkflowStateMachine
     public WorkflowStateMachine(
         AgentRegistry registry,
         AgentStateStore stateStore,
+        IGateCheckService gateCheck,
         ILogger<WorkflowStateMachine> logger)
     {
         _registry = registry ?? throw new ArgumentNullException(nameof(registry));
         _stateStore = stateStore ?? throw new ArgumentNullException(nameof(stateStore));
+        _gateCheck = gateCheck ?? throw new ArgumentNullException(nameof(gateCheck));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -134,6 +138,16 @@ public class WorkflowStateMachine
                 _logger.LogInformation(
                     "Cannot advance from {Current} to {Next}: {Blockers}",
                     _currentPhase, nextPhase, blockerReason);
+                return false;
+            }
+
+            // === Gate: FinalReview — human approves phase transition to completion ===
+            if (_currentPhase == ProjectPhase.Review && _gateCheck.RequiresHuman(GateIds.FinalReview))
+            {
+                _logger.LogWarning(
+                    "FinalReview gate requires human approval before transitioning to Completion. " +
+                    "Use async gate check or approve via GitHub to proceed.");
+                blockerReason = "FinalReview gate requires human approval before transitioning to Completion.";
                 return false;
             }
 

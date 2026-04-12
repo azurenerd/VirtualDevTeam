@@ -28,6 +28,7 @@ public abstract class EngineerAgentBase : AgentBase
     protected readonly ModelRegistry Models;
     protected readonly AgentSquadConfig Config;
     protected readonly AgentStateStore StateStore;
+    private readonly IGateCheckService _gateCheck;
 
     protected readonly HashSet<int> ProcessedIssueIds = new();
     protected readonly ConcurrentQueue<ReworkItem> ReworkQueue = new();
@@ -68,6 +69,7 @@ public abstract class EngineerAgentBase : AgentBase
         AgentStateStore stateStore,
         AgentSquadConfig config,
         AgentMemoryStore memoryStore,
+        IGateCheckService gateCheck,
         ILogger<AgentBase> logger,
         BuildRunner? buildRunner = null,
         TestRunner? testRunner = null,
@@ -83,6 +85,7 @@ public abstract class EngineerAgentBase : AgentBase
         Models = modelRegistry ?? throw new ArgumentNullException(nameof(modelRegistry));
         StateStore = stateStore ?? throw new ArgumentNullException(nameof(stateStore));
         Config = config ?? throw new ArgumentNullException(nameof(config));
+        _gateCheck = gateCheck ?? throw new ArgumentNullException(nameof(gateCheck));
         BuildRunnerSvc = buildRunner;
         TestRunnerSvc = testRunner;
         Metrics = metrics;
@@ -899,6 +902,13 @@ public abstract class EngineerAgentBase : AgentBase
     {
         // Sync branch with main before marking ready — ensures PR is merge-clean
         await SyncBranchWithMainAsync(pr.Number, ct);
+
+        // === Gate: PRCodeComplete — human reviews code before marking ready ===
+        await _gateCheck.WaitForGateAsync(
+            GateIds.PRCodeComplete,
+            $"Engineer code complete on PR #{pr.Number}, ready for human review before marking ready-for-review",
+            pr.Number, ct: ct);
+
         await PrWorkflow.MarkReadyForReviewAsync(pr.Number, Identity.DisplayName, ct);
 
         await MessageBus.PublishAsync(new ReviewRequestMessage
@@ -1057,6 +1067,13 @@ public abstract class EngineerAgentBase : AgentBase
 
         // Sync branch with main before marking ready — ensures PR is merge-clean
         await SyncBranchWithMainAsync(pr.Number, ct);
+
+        // === Gate: PRCodeComplete — human reviews code before marking ready ===
+        await _gateCheck.WaitForGateAsync(
+            GateIds.PRCodeComplete,
+            $"Engineer code complete on PR #{pr.Number}, ready for human review before marking ready-for-review",
+            pr.Number, ct: ct);
+
         await PrWorkflow.MarkReadyForReviewAsync(pr.Number, Identity.DisplayName, ct);
 
         await MessageBus.PublishAsync(new ReviewRequestMessage
@@ -1137,6 +1154,12 @@ public abstract class EngineerAgentBase : AgentBase
             Logger.LogWarning(
                 "{Role} {Name} reached max {CycleType} cycles ({Max}) for PR #{PrNumber}, requesting force-approval",
                 Identity.Role, Identity.DisplayName, cycleType, maxCycles, rework.PrNumber);
+
+            // === Gate: ReworkExhaustion — human decides on exhausted rework cycles ===
+            await _gateCheck.WaitForGateAsync(
+                GateIds.ReworkExhaustion,
+                $"PR #{rework.PrNumber} has exhausted rework cycles, human decision needed",
+                rework.PrNumber, ct: ct);
 
             // Only post the comment once per PR — check both in-memory set AND existing PR comments
             if (_forceApprovalSentPrs.Add(rework.PrNumber))
@@ -1672,6 +1695,13 @@ public abstract class EngineerAgentBase : AgentBase
 
             // Sync branch with main before marking ready — ensures PR is merge-clean
             await SyncBranchWithMainAsync(pr.Number, ct);
+
+            // === Gate: PRCodeComplete — human reviews code before marking ready ===
+            await _gateCheck.WaitForGateAsync(
+                GateIds.PRCodeComplete,
+                $"Engineer code complete on PR #{pr.Number}, ready for human review before marking ready-for-review",
+                pr.Number, ct: ct);
+
             await PrWorkflow.MarkReadyForReviewAsync(pr.Number, Identity.DisplayName, ct);
 
             await MessageBus.PublishAsync(new ReviewRequestMessage

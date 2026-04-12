@@ -28,13 +28,14 @@ public class SeniorEngineerAgent : EngineerAgentBase
         AgentStateStore stateStore,
         AgentMemoryStore memoryStore,
         IOptions<AgentSquadConfig> config,
+        IGateCheckService gateCheck,
         ILogger<SeniorEngineerAgent> logger,
         BuildRunner? buildRunner = null,
         TestRunner? testRunner = null,
         Core.Metrics.BuildTestMetrics? metrics = null,
         PlaywrightRunner? playwrightRunner = null)
         : base(identity, messageBus, github, prWorkflow, issueWorkflow,
-               projectFiles, modelRegistry, stateStore, config.Value, memoryStore, logger,
+               projectFiles, modelRegistry, stateStore, config.Value, memoryStore, gateCheck, logger,
                buildRunner, testRunner, metrics, playwrightRunner)
     {
     }

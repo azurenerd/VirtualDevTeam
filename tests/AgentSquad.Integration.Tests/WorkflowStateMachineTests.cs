@@ -1,6 +1,8 @@
+using AgentSquad.Core.Configuration;
 using AgentSquad.Core.Persistence;
 using AgentSquad.Orchestrator;
 using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
 
 namespace AgentSquad.Integration.Tests;
 
@@ -15,7 +17,8 @@ public class WorkflowStateMachineTests : IDisposable
         _registry = new AgentRegistry(NullLogger<AgentRegistry>.Instance);
         var dbPath = Path.Combine(Path.GetTempPath(), $"workflow-test-{Guid.NewGuid():N}.db");
         _stateStore = new AgentStateStore(dbPath);
-        _workflow = new WorkflowStateMachine(_registry, _stateStore, NullLogger<WorkflowStateMachine>.Instance);
+        _workflow = new WorkflowStateMachine(_registry, _stateStore,
+            new Mock<IGateCheckService>().Object, NullLogger<WorkflowStateMachine>.Instance);
     }
 
     public void Dispose()
@@ -109,7 +112,8 @@ public class WorkflowStateMachineTests : IDisposable
 
         // Create a new workflow instance (simulates crash + restart)
         var recovered = new WorkflowStateMachine(
-            _registry, _stateStore, NullLogger<WorkflowStateMachine>.Instance);
+            _registry, _stateStore,
+            new Mock<IGateCheckService>().Object, NullLogger<WorkflowStateMachine>.Instance);
 
         // Act
         var result = await recovered.RecoverAsync();

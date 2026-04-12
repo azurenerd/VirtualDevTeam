@@ -22,6 +22,7 @@ public class ArchitectAgent : AgentBase
     private readonly ProjectFileManager _projectFiles;
     private readonly ModelRegistry _modelRegistry;
     private readonly AgentSquadConfig _config;
+    private readonly IGateCheckService _gateCheck;
 
     private readonly Queue<ArchitectureDirective> _taskQueue = new();
     private readonly HashSet<int> _reviewedPrNumbers = new();
@@ -41,6 +42,7 @@ public class ArchitectAgent : AgentBase
         ModelRegistry modelRegistry,
         AgentMemoryStore memoryStore,
         IOptions<AgentSquadConfig> config,
+        IGateCheckService gateCheck,
         ILogger<ArchitectAgent> logger)
         : base(identity, logger, memoryStore)
     {
@@ -51,6 +53,7 @@ public class ArchitectAgent : AgentBase
         _projectFiles = projectFiles ?? throw new ArgumentNullException(nameof(projectFiles));
         _modelRegistry = modelRegistry ?? throw new ArgumentNullException(nameof(modelRegistry));
         _config = config?.Value ?? throw new ArgumentNullException(nameof(config));
+        _gateCheck = gateCheck ?? throw new ArgumentNullException(nameof(gateCheck));
     }
 
     protected override async Task OnInitializeAsync(CancellationToken ct)
@@ -468,6 +471,12 @@ public class ArchitectAgent : AgentBase
         } // end else (multi-turn)
 
         Logger.LogDebug("Architecture document compiled for {TaskId}", directive.TaskId);
+
+        // === Gate: ArchitectureDesign — human reviews architecture before merge ===
+        await _gateCheck.WaitForGateAsync(
+            GateIds.ArchitectureDesign,
+            "Architecture.md ready for human review before merge",
+            pr.Number, ct: ct);
 
         // Commit final content and auto-merge
         UpdateStatus(AgentStatus.Working, "Committing Architecture.md and merging PR");

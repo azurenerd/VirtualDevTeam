@@ -5,6 +5,7 @@ using AgentSquad.Core.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
+
 /// <summary>
 /// Dynamically spawns and manages agent lifecycle at runtime.
 /// Uses <see cref="IAgentFactory"/> to create agent instances and
@@ -14,6 +15,7 @@ public class AgentSpawnManager
 {
     private readonly AgentRegistry _registry;
     private readonly IAgentFactory _agentFactory;
+    private readonly IGateCheckService _gateCheck;
     private readonly AgentSquadConfig _config;
     private readonly ILogger<AgentSpawnManager> _logger;
 
@@ -36,11 +38,13 @@ public class AgentSpawnManager
     public AgentSpawnManager(
         AgentRegistry registry,
         IAgentFactory agentFactory,
+        IGateCheckService gateCheck,
         IOptions<AgentSquadConfig> config,
         ILogger<AgentSpawnManager> logger)
     {
         _registry = registry ?? throw new ArgumentNullException(nameof(registry));
         _agentFactory = agentFactory ?? throw new ArgumentNullException(nameof(agentFactory));
+        _gateCheck = gateCheck ?? throw new ArgumentNullException(nameof(gateCheck));
         _config = config?.Value ?? throw new ArgumentNullException(nameof(config));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
@@ -94,6 +98,12 @@ public class AgentSpawnManager
                 ModelTier = modelTier,
                 Rank = rank
             };
+
+            // === Gate: AgentTeamComposition — human approves agent spawn ===
+            await _gateCheck.WaitForGateAsync(
+                GateIds.AgentTeamComposition,
+                $"Ready to spawn agent: {identity.DisplayName}",
+                ct: ct);
 
             _logger.LogInformation(
                 "Spawning agent '{DisplayName}' ({Role}) with model tier '{ModelTier}', rank {Rank}.",

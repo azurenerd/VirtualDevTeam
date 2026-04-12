@@ -47,3 +47,45 @@ public enum GateResult
     /// <summary>Gate timed out and fallback action was applied.</summary>
     TimedOutWithFallback,
 }
+
+/// <summary>Extension methods for <see cref="IGateCheckService"/>.</summary>
+public static class GateCheckExtensions
+{
+    /// <summary>
+    /// Check a gate and, if human approval is required, poll until approved.
+    /// This is the primary method agents should call at gate points.
+    /// </summary>
+    /// <param name="gateCheck">The gate check service.</param>
+    /// <param name="gateId">Gate identifier from <see cref="GateIds"/>.</param>
+    /// <param name="context">Human-readable description of what's gated.</param>
+    /// <param name="resourceNumber">PR or Issue number for label/comment notifications.</param>
+    /// <param name="pollIntervalSeconds">Seconds between approval polls (default 30).</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>True if gate was activated (human was involved), false if auto-proceeded.</returns>
+    public static async Task<bool> WaitForGateAsync(
+        this IGateCheckService gateCheck,
+        string gateId,
+        string context,
+        int? resourceNumber = null,
+        int pollIntervalSeconds = 30,
+        CancellationToken ct = default)
+    {
+        var result = await gateCheck.CheckGateAsync(gateId, context, resourceNumber, ct);
+        if (result == GateResult.Proceed)
+            return false;
+
+        // Gate requires human — poll for approval
+        if (!resourceNumber.HasValue)
+            return true; // No resource to poll — caller must handle
+
+        while (!ct.IsCancellationRequested)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(pollIntervalSeconds), ct);
+            if (await gateCheck.IsGateApprovedAsync(gateId, resourceNumber.Value, ct))
+                return true;
+        }
+
+        ct.ThrowIfCancellationRequested();
+        return true;
+    }
+}

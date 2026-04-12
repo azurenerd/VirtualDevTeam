@@ -12,6 +12,7 @@ public class AgentSquadWorker : BackgroundService
     private readonly AgentRegistry _registry;
     private readonly WorkflowStateMachine _workflow;
     private readonly PullRequestWorkflow _prWorkflow;
+    private readonly IGateCheckService _gateCheck;
     private readonly ILogger<AgentSquadWorker> _logger;
     private readonly AgentSquadConfig _config;
     private readonly List<Task> _agentTasks = new();
@@ -21,6 +22,7 @@ public class AgentSquadWorker : BackgroundService
         AgentRegistry registry,
         WorkflowStateMachine workflow,
         PullRequestWorkflow prWorkflow,
+        IGateCheckService gateCheck,
         ILogger<AgentSquadWorker> logger,
         IOptions<AgentSquadConfig> config)
     {
@@ -28,6 +30,7 @@ public class AgentSquadWorker : BackgroundService
         _registry = registry ?? throw new ArgumentNullException(nameof(registry));
         _workflow = workflow ?? throw new ArgumentNullException(nameof(workflow));
         _prWorkflow = prWorkflow ?? throw new ArgumentNullException(nameof(prWorkflow));
+        _gateCheck = gateCheck ?? throw new ArgumentNullException(nameof(gateCheck));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _config = config?.Value ?? throw new ArgumentNullException(nameof(config));
     }
@@ -60,6 +63,12 @@ public class AgentSquadWorker : BackgroundService
         // If the runner crashed or the machine restarted, those locks reflect real in-progress
         // work that the recovered workflow state machine will resume. Task locks are only
         // cleaned during an explicit "full reset" via the Dashboard cleanup UI.
+
+        // === Gate: ProjectKickoff — human approves project start ===
+        await _gateCheck.WaitForGateAsync(
+            GateIds.ProjectKickoff,
+            "Project ready to start, awaiting human approval to begin agent workflow",
+            ct: ct);
 
         // Spawn all core agents
         var roles = new[]

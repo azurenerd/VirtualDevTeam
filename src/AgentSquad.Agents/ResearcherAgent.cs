@@ -20,6 +20,7 @@ public class ResearcherAgent : AgentBase
     private readonly ModelRegistry _modelRegistry;
     private readonly AgentSquadConfig _config;
     private readonly PlaywrightRunner? _playwrightRunner;
+    private readonly IGateCheckService _gateCheck;
 
     private readonly Queue<ResearchDirective> _researchQueue = new();
     private readonly List<IDisposable> _subscriptions = new();
@@ -34,6 +35,7 @@ public class ResearcherAgent : AgentBase
         ModelRegistry modelRegistry,
         AgentMemoryStore memoryStore,
         IOptions<AgentSquadConfig> config,
+        IGateCheckService gateCheck,
         ILogger<ResearcherAgent> logger,
         PlaywrightRunner? playwrightRunner = null)
         : base(identity, logger, memoryStore)
@@ -44,6 +46,7 @@ public class ResearcherAgent : AgentBase
         _projectFiles = projectFiles ?? throw new ArgumentNullException(nameof(projectFiles));
         _modelRegistry = modelRegistry ?? throw new ArgumentNullException(nameof(modelRegistry));
         _config = config?.Value ?? throw new ArgumentNullException(nameof(config));
+        _gateCheck = gateCheck ?? throw new ArgumentNullException(nameof(gateCheck));
         _playwrightRunner = playwrightRunner;
     }
 
@@ -135,6 +138,12 @@ public class ResearcherAgent : AgentBase
                         if (!string.IsNullOrWhiteSpace(_lastDesignSection))
                             updatedDoc += "\n\n" + _lastDesignSection;
                         updatedDoc += "\n";
+
+                        // === Gate: ResearchFindings — human reviews before merge ===
+                        await _gateCheck.WaitForGateAsync(
+                            GateIds.ResearchFindings,
+                            $"Research findings for '{directive.Topic}' ready for review",
+                            pr.Number, ct: ct);
 
                         // Commit final content and auto-merge
                         UpdateStatus(AgentStatus.Working, "Committing Research.md and merging PR");

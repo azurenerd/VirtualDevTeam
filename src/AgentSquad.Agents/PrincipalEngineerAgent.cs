@@ -23,6 +23,7 @@ namespace AgentSquad.Agents;
 public class PrincipalEngineerAgent : EngineerAgentBase
 {
     private readonly AgentRegistry _registry;
+    private readonly IGateCheckService _gateCheck;
     private readonly EngineeringTaskIssueManager _taskManager;
 
     private bool _planningComplete;
@@ -82,16 +83,18 @@ public class PrincipalEngineerAgent : EngineerAgentBase
         AgentRegistry registry,
         AgentMemoryStore memoryStore,
         IOptions<AgentSquadConfig> config,
+        IGateCheckService gateCheck,
         ILogger<PrincipalEngineerAgent> logger,
         BuildRunner? buildRunner = null,
         TestRunner? testRunner = null,
         Core.Metrics.BuildTestMetrics? metrics = null,
         PlaywrightRunner? playwrightRunner = null)
         : base(identity, messageBus, github, prWorkflow, issueWorkflow,
-               projectFiles, modelRegistry, stateStore, config.Value, memoryStore, logger,
+               projectFiles, modelRegistry, stateStore, config.Value, memoryStore, gateCheck, logger,
                buildRunner, testRunner, metrics, playwrightRunner)
     {
         _registry = registry ?? throw new ArgumentNullException(nameof(registry));
+        _gateCheck = gateCheck ?? throw new ArgumentNullException(nameof(gateCheck));
         _taskManager = new EngineeringTaskIssueManager(github, logger);
     }
 
@@ -611,6 +614,12 @@ public class PrincipalEngineerAgent : EngineerAgentBase
         // REQ-PE-009: Validate all PM enhancements have engineering tasks
         await ValidateEnhancementCoverageAsync(enhancementIssues, ct);
 
+        // === Gate: EngineeringPlan — human reviews plan before finalization ===
+        await _gateCheck.WaitForGateAsync(
+            GateIds.EngineeringPlan,
+            "Engineering plan ready for human review before finalization",
+            ct: ct);
+
         Logger.LogInformation("Engineering plan created with {Count} tasks from {IssueCount} issues",
             _taskManager.TotalCount, enhancementIssues.Count);
         LogActivity("task", $"📋 Engineering plan created: {_taskManager.TotalCount} tasks from {enhancementIssues.Count} issues");
@@ -884,6 +893,12 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 registeredEngineers.Add(new EngineerInfo { AgentId = agent.Identity.Id, Name = agent.Identity.DisplayName, Role = AgentRole.SeniorEngineer });
             foreach (var agent in _registry.GetAgentsByRole(AgentRole.JuniorEngineer))
                 registeredEngineers.Add(new EngineerInfo { AgentId = agent.Identity.Id, Name = agent.Identity.DisplayName, Role = AgentRole.JuniorEngineer });
+
+            // === Gate: TaskAssignment — human reviews task assignments ===
+            await _gateCheck.WaitForGateAsync(
+                GateIds.TaskAssignment,
+                $"Ready to assign {_taskManager.PendingCount} engineering tasks to available engineers",
+                ct: ct);
 
             foreach (var engineer in registeredEngineers)
             {
@@ -1427,6 +1442,15 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 if (reviewBody is null)
                     continue;
 
+                // === Gate: PRReviewApproval — human reviews before PE approval ===
+                if (approved)
+                {
+                    await _gateCheck.WaitForGateAsync(
+                        GateIds.PRReviewApproval,
+                        $"PE ready to approve PR #{prNumber}",
+                        prNumber, ct: ct);
+                }
+
                 if (approved)
                 {
                     var requireTests = Config.Workspace.IsInlineTestWorkflow;
@@ -1555,6 +1579,12 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                     await GitHub.AddPullRequestCommentAsync(pr.Number,
                         $"✅ **[PrincipalEngineer] Tests Reviewed** — {testFiles.Count} test file(s) verified. Merging.", ct);
                 }
+
+                // === Gate: FinalPRApproval — human reviews before final merge ===
+                await _gateCheck.WaitForGateAsync(
+                    GateIds.FinalPRApproval,
+                    $"PR #{pr.Number} has passed all reviews and tests, ready for final merge",
+                    pr.Number, ct: ct);
 
                 var result = await PrWorkflow.MergeApprovedTestedPRAsync(
                     pr.Number, "PrincipalEngineer", ct);

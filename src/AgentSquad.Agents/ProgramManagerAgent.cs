@@ -24,6 +24,7 @@ public class ProgramManagerAgent : AgentBase
     private readonly AgentSpawnManager _spawnManager;
     private readonly AgentRegistry _registry;
     private readonly AgentSquadConfig _config;
+    private readonly IGateCheckService _gateCheck;
 
     private readonly Dictionary<string, AgentTracking> _trackedAgents = new();
     private readonly HashSet<int> _processedIssueIds = new();
@@ -51,6 +52,7 @@ public class ProgramManagerAgent : AgentBase
         AgentRegistry registry,
         AgentMemoryStore memoryStore,
         IOptions<AgentSquadConfig> config,
+        IGateCheckService gateCheck,
         ILogger<ProgramManagerAgent> logger)
         : base(identity, logger, memoryStore)
     {
@@ -63,6 +65,7 @@ public class ProgramManagerAgent : AgentBase
         _spawnManager = spawnManager ?? throw new ArgumentNullException(nameof(spawnManager));
         _registry = registry ?? throw new ArgumentNullException(nameof(registry));
         _config = config?.Value ?? throw new ArgumentNullException(nameof(config));
+        _gateCheck = gateCheck ?? throw new ArgumentNullException(nameof(gateCheck));
     }
 
     protected override Task OnInitializeAsync(CancellationToken ct)
@@ -1220,6 +1223,13 @@ public class ProgramManagerAgent : AgentBase
         {
             _pmSpecCreated = true;
             Logger.LogInformation("Research complete signal received — generating PMSpec.md");
+
+            // === Gate: ResearchCompleteness — human reviews research before PM proceeds ===
+            await _gateCheck.WaitForGateAsync(
+                GateIds.ResearchCompleteness,
+                "Research phase complete, PM ready to create specification",
+                ct: ct);
+
             await CreatePMSpecAsync(ct);
         }
     }
@@ -1328,6 +1338,12 @@ public class ProgramManagerAgent : AgentBase
                     "Scope, Non-Functional Requirements. Keep the entire document under 300 words.");
                 var qResp = await qChat.GetChatMessageContentAsync(qHistory, cancellationToken: ct);
                 var qContent = $"# PM Specification: {projectName}\n\n{qResp.Content?.Trim() ?? ""}";
+
+                // === Gate: PMSpecification — human reviews PMSpec before merge ===
+                await _gateCheck.WaitForGateAsync(
+                    GateIds.PMSpecification,
+                    "PMSpec.md ready for human review before merge",
+                    qPr.Number, ct: ct);
 
                 await _prWorkflow.CommitAndMergeDocumentPRAsync(
                     qPr, Identity.DisplayName, "PMSpec.md", qContent,
@@ -1508,6 +1524,13 @@ public class ProgramManagerAgent : AgentBase
 
             // Commit final content and auto-merge
             UpdateStatus(AgentStatus.Working, "Committing PMSpec.md and merging PR");
+
+            // === Gate: PMSpecification — human reviews PMSpec before merge ===
+            await _gateCheck.WaitForGateAsync(
+                GateIds.PMSpecification,
+                "PMSpec.md ready for human review before merge",
+                pr.Number, ct: ct);
+
             await _prWorkflow.CommitAndMergeDocumentPRAsync(
                 pr,
                 Identity.DisplayName,
