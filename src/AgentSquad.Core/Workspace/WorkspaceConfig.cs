@@ -150,6 +150,13 @@ public class WorkspaceConfig
     public int MaxTestRetries { get; set; } = 3;
 
     /// <summary>
+    /// Maximum number of test methods to generate per tier (unit, integration, UI).
+    /// Controls AI test generation scope. Lower values = faster TE cycles.
+    /// Set to 0 for no limit (AI decides). Recommended: 3-5 for fast iterations.
+    /// </summary>
+    public int MaxTestsPerTier { get; set; } = 5;
+
+    /// <summary>
     /// Whether to delete agent workspaces when the project is complete (all issues closed).
     /// </summary>
     public bool CleanupOnProjectComplete { get; set; } = true;

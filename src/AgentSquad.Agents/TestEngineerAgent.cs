@@ -1818,14 +1818,22 @@ public class TestEngineerAgent : AgentBase
                 }
             }
 
-            // Scale test count to PR complexity — start minimal to validate pipeline
+            // Scale test count to PR complexity using configurable cap
             var totalSourceLines = sourceFiles.Values.Sum(c => c.Split('\n').Length);
             var fileCount = sourceFiles.Count;
+            var maxTests = _config.Workspace.MaxTestsPerTier;
 
             userPrompt.AppendLine($"## Test Scope Guidance");
             userPrompt.AppendLine($"This PR has {fileCount} source file(s) with ~{totalSourceLines} lines.");
-            userPrompt.AppendLine($"Generate exactly **1 test method** per tier. Just one focused, high-value smoke test that proves the feature works.");
-            userPrompt.AppendLine($"Keep it simple — one test file per tier with one test method. We can expand coverage later.\n");
+            if (maxTests > 0)
+            {
+                userPrompt.AppendLine($"Generate up to **{maxTests} test method(s)** per tier. Focus on the highest-value smoke tests that prove the feature works.");
+                userPrompt.AppendLine($"Keep it focused — at most {maxTests} test method(s) per tier.\n");
+            }
+            else
+            {
+                userPrompt.AppendLine($"Generate comprehensive tests covering key behaviors and edge cases.\n");
+            }
             userPrompt.AppendLine($"Generate {string.Join(", ", tiers)} tests for the above code using {techStack}.");
             userPrompt.AppendLine("Include ALL test tiers requested above in your response.");
 
@@ -1920,7 +1928,7 @@ public class TestEngineerAgent : AgentBase
             }
         }
 
-        userPrompt.AppendLine(GetTierUserSuffix(tier, techStack));
+        userPrompt.AppendLine(GetTierUserSuffix(tier, techStack, _config.Workspace.MaxTestsPerTier));
         history.AddUserMessage(userPrompt.ToString());
 
         var response = await chat.GetChatMessageContentAsync(history, cancellationToken: ct);
@@ -2326,26 +2334,27 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
 ";
     }
 
-    private static string GetTierUserSuffix(TestTier tier, string techStack)
+    private static string GetTierUserSuffix(TestTier tier, string techStack, int maxTestsPerTier = 5)
     {
+        var count = maxTestsPerTier > 0 ? $"up to {maxTestsPerTier}" : "comprehensive";
         return tier switch
         {
             TestTier.Unit =>
-                $"Generate exactly ONE unit test file with ONE test method for the above source code using {techStack}. " +
-                "Pick the single most important behavior to verify. Keep it simple and focused.",
+                $"Generate {count} unit test method(s) in a single test file for the above source code using {techStack}. " +
+                "Focus on the most important behaviors. Keep tests simple and focused.",
 
             TestTier.Integration =>
-                $"Generate exactly ONE integration test file with ONE test method for the above source code using {techStack}. " +
-                "Test the single most critical integration point. Keep it simple.",
+                $"Generate {count} integration test method(s) in a single test file for the above source code using {techStack}. " +
+                "Test the most critical integration points. Keep tests simple.",
 
             TestTier.UI =>
-                $"Generate exactly ONE Playwright UI test file with ONE test method for the above source code using {techStack}. " +
+                $"Generate {count} Playwright UI test method(s) in a single test file for the above source code using {techStack}. " +
                 "Test that the main page loads and renders key content. Use headless mode. " +
                 "IMPORTANT: Use xUnit ([Fact], IClassFixture<PlaywrightFixture>), NOT NUnit. " +
                 "PlaywrightFixture must implement IAsyncLifetime, NOT use [SetUpFixture]. " +
-                "Include the PlaywrightFixture class. Keep it minimal — one test method only.",
+                "Include the PlaywrightFixture class.",
 
-            _ => $"Generate one test file with one test method for the above source code using {techStack}."
+            _ => $"Generate {count} test method(s) in a single test file for the above source code using {techStack}."
         };
     }
 
