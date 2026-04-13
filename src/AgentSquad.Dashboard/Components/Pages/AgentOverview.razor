@@ -18,9 +18,26 @@
             @if (_hasDeadlock) { <span>⚠</span> } else { <span>●</span> }
             @HealthLabel
         </span>
-        <span class="header-badge">
-            🤖 @_agents.Count Agents
-        </span>
+        <div class="agent-filter-wrap">
+            <button class="header-badge agent-filter-toggle" @onclick="ToggleAgentFilter">
+                🤖 @_visibleAgents.Count Agents@(_hiddenAgentIds.Count > 0 ? $", {_hiddenAgentIds.Count} Hidden" : "")
+                <span class="agent-filter-chevron">▾</span>
+            </button>
+            @if (_showAgentFilter)
+            {
+                <div class="agent-filter-dropdown">
+                    @foreach (var agent in _agents)
+                    {
+                        var isHidden = _hiddenAgentIds.Contains(agent.Id);
+                        <button class="agent-filter-item @(isHidden ? "hidden-agent" : "")" @onclick="() => ToggleAgentVisibility(agent.Id)">
+                            <span class="agent-filter-check">@(isHidden ? "☐" : "☑")</span>
+                            <span class="agent-filter-name">@agent.DisplayName</span>
+                            <span class="agent-filter-status status-@(agent.Status.ToString().ToLowerInvariant())">@agent.Status</span>
+                        </button>
+                    }
+                </div>
+            }
+        </div>
         @{ var ncCount = _agents.Count(a => !a.DiagnosticCompliant); }
         @if (ncCount > 0)
         {
@@ -68,7 +85,7 @@
 else
 {
     <div class="agent-grid">
-        @foreach (var agent in _agents)
+        @foreach (var agent in _visibleAgents)
         {
             var statusClass = $"status-{agent.Status.ToString().ToLowerInvariant()}";
             var roleClass = $"role-{agent.Role.ToString().ToLowerInvariant()}";
@@ -271,6 +288,9 @@ else
 
 @code {
     private List<AgentSnapshot> _agents = [];
+    private HashSet<string> _hiddenAgentIds = [];
+    private bool _showAgentFilter;
+    private List<AgentSnapshot> _visibleAgents => _agents.Where(a => !_hiddenAgentIds.Contains(a.Id)).ToList();
     private string? _selectedAgentId;
     private bool _hasDeadlock;
     private List<string>? _deadlockCycle;
@@ -306,6 +326,14 @@ else
     {
         _agents = DataService.GetAllAgentSnapshots().ToList();
         _hasDeadlock = DataService.HasDeadlock(out _deadlockCycle);
+    }
+
+    private void ToggleAgentFilter() => _showAgentFilter = !_showAgentFilter;
+
+    private void ToggleAgentVisibility(string agentId)
+    {
+        if (!_hiddenAgentIds.Remove(agentId))
+            _hiddenAgentIds.Add(agentId);
     }
 
     private async Task ForceRefreshAsync()

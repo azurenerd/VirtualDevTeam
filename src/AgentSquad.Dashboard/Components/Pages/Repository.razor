@@ -1,0 +1,407 @@
+@page "/repository"
+@page "/repository/{Tab}"
+@page "/pullrequests"
+@page "/issues"
+@page "/github"
+@using AgentSquad.Core.GitHub.Models
+@using AgentSquad.Dashboard.Services
+@inject IDashboardDataService DataService
+@inject NavigationManager Navigation
+@rendermode InteractiveServer
+@implements IDisposable
+
+<PageTitle>AgentSquad — Repository</PageTitle>
+
+<div class="page-header">
+    <h1 class="page-title">📦 Repository</h1>
+    <div class="header-badges">
+        <span class="badge badge-success">@_prOpenCount Open PRs</span>
+        <span class="badge badge-purple">@_prMergedCount Merged</span>
+        <span class="badge badge-success">@_issueOpenCount Open Issues</span>
+        <span class="badge badge-purple">@_issueClosedCount Closed</span>
+    </div>
+</div>
+
+<div class="repo-tab-bar">
+    <button class="repo-tab @(_activeTab == "pull-requests" ? "active" : "")" @onclick='() => SwitchTab("pull-requests")'>
+        🔀 Pull Requests <span class="repo-tab-count">@_allPrs.Count</span>
+    </button>
+    <button class="repo-tab @(_activeTab == "issues" ? "active" : "")" @onclick='() => SwitchTab("issues")'>
+        📋 Issues <span class="repo-tab-count">@_allIssues.Count</span>
+    </button>
+</div>
+
+@if (_loading)
+{
+    <div class="pr-loading">Loading...</div>
+}
+else if (_activeTab == "pull-requests")
+{
+    @* ── Pull Requests sub-page ── *@
+    <div class="pr-filter-bar">
+        <button class="pr-filter-btn @(_prFilter == "open" ? "active" : "")" @onclick='() => SetPrFilter("open")'>
+            <span class="pr-state-icon pr-state-open">●</span> Open <span class="pr-filter-count">@_prOpenCount</span>
+        </button>
+        <button class="pr-filter-btn @(_prFilter == "merged" ? "active" : "")" @onclick='() => SetPrFilter("merged")'>
+            <span class="pr-state-icon pr-state-merged">●</span> Merged <span class="pr-filter-count">@_prMergedCount</span>
+        </button>
+        <button class="pr-filter-btn @(_prFilter == "closed" ? "active" : "")" @onclick='() => SetPrFilter("closed")'>
+            <span class="pr-state-icon pr-state-closed">●</span> Closed <span class="pr-filter-count">@_prClosedCount</span>
+        </button>
+        <button class="pr-filter-btn @(_prFilter == "all" ? "active" : "")" @onclick='() => SetPrFilter("all")'>
+            All <span class="pr-filter-count">@_allPrs.Count</span>
+        </button>
+    </div>
+
+    @if (_filteredPrs.Count == 0)
+    {
+        <div class="pr-empty">No pull requests match this filter.</div>
+    }
+    else
+    {
+        <div class="pr-list">
+            @foreach (var pr in _filteredPrs)
+            {
+                var stateClass = pr.IsMerged ? "merged" : pr.State == "open" ? "open" : "closed";
+                <div class="pr-card">
+                    <div class="pr-state-indicator pr-state-@stateClass"></div>
+                    <div class="pr-content">
+                        <div class="pr-title-row">
+                            <span class="pr-state-badge pr-state-@stateClass">
+                                @if (pr.IsMerged) { <span>⬤ Merged</span> }
+                                else if (pr.State == "open") { <span>⬤ Open</span> }
+                                else { <span>⬤ Closed</span> }
+                            </span>
+                            <a class="pr-title" href="@pr.Url" target="_blank" rel="noopener">@pr.Title</a>
+                            <span class="pr-number">#@pr.Number</span>
+                        </div>
+                        <div class="pr-meta">
+                            <span class="pr-branch" title="@pr.HeadBranch → @pr.BaseBranch">
+                                🌿 @pr.HeadBranch → @pr.BaseBranch
+                            </span>
+                            @if (!string.IsNullOrEmpty(pr.AssignedAgent))
+                            {
+                                <span class="pr-author">👤 @pr.AssignedAgent</span>
+                            }
+                            <span class="pr-date">
+                                @if (pr.IsMerged && pr.MergedAt.HasValue)
+                                {
+                                    <span>merged @FormatTimeAgo(DateTime.UtcNow - pr.MergedAt.Value)</span>
+                                }
+                                else
+                                {
+                                    <span>opened @FormatTimeAgo(DateTime.UtcNow - pr.CreatedAt)</span>
+                                }
+                            </span>
+                        </div>
+                        @if (pr.Labels.Count > 0)
+                        {
+                            <div class="pr-labels">
+                                @foreach (var label in pr.Labels)
+                                {
+                                    <span class="pr-label @GetPrLabelClass(label)">@label</span>
+                                }
+                            </div>
+                        }
+                    </div>
+                </div>
+            }
+        </div>
+    }
+}
+else
+{
+    @* ── Issues sub-page ── *@
+    <div class="issue-toolbar">
+        <div class="issue-filter-bar">
+            <button class="issue-filter-btn @(_issueStateFilter == "open" ? "active" : "")" @onclick='() => SetIssueStateFilter("open")'>
+                <span class="issue-state-icon issue-state-open">●</span> Open <span class="issue-filter-count">@_issueOpenCount</span>
+            </button>
+            <button class="issue-filter-btn @(_issueStateFilter == "closed" ? "active" : "")" @onclick='() => SetIssueStateFilter("closed")'>
+                <span class="issue-state-icon issue-state-closed">✔</span> Closed <span class="issue-filter-count">@_issueClosedCount</span>
+            </button>
+            <button class="issue-filter-btn @(_issueStateFilter == "all" ? "active" : "")" @onclick='() => SetIssueStateFilter("all")'>
+                All <span class="issue-filter-count">@_allIssues.Count</span>
+            </button>
+        </div>
+
+        <div class="issue-filters-right">
+            <div class="issue-dropdown">
+                <button class="issue-dropdown-btn" @onclick="ToggleLabelDropdown">Labels ▾</button>
+                @if (_showLabelDropdown)
+                {
+                    <div class="issue-dropdown-menu">
+                        <button class="issue-dropdown-item @(_labelFilter == null ? "active" : "")"
+                                @onclick="() => SetLabelFilter(null)">All labels</button>
+                        @foreach (var label in _availableLabels)
+                        {
+                            <button class="issue-dropdown-item @(_labelFilter == label ? "active" : "")"
+                                    @onclick="() => SetLabelFilter(label)">@label</button>
+                        }
+                    </div>
+                }
+            </div>
+
+            <div class="issue-dropdown">
+                <button class="issue-dropdown-btn" @onclick="ToggleAssigneeDropdown">Assignees ▾</button>
+                @if (_showAssigneeDropdown)
+                {
+                    <div class="issue-dropdown-menu">
+                        <button class="issue-dropdown-item @(_assigneeFilter == null ? "active" : "")"
+                                @onclick="() => SetAssigneeFilter(null)">All assignees</button>
+                        @foreach (var assignee in _availableAssignees)
+                        {
+                            <button class="issue-dropdown-item @(_assigneeFilter == assignee ? "active" : "")"
+                                    @onclick="() => SetAssigneeFilter(assignee)">@assignee</button>
+                        }
+                    </div>
+                }
+            </div>
+
+            <div class="issue-dropdown">
+                <button class="issue-dropdown-btn" @onclick="ToggleSortDropdown">⇅ @GetSortLabel() ▾</button>
+                @if (_showSortDropdown)
+                {
+                    <div class="issue-dropdown-menu">
+                        <button class="issue-dropdown-item @(_sortBy == "newest" ? "active" : "")" @onclick='() => SetSort("newest")'>Newest</button>
+                        <button class="issue-dropdown-item @(_sortBy == "oldest" ? "active" : "")" @onclick='() => SetSort("oldest")'>Oldest</button>
+                        <button class="issue-dropdown-item @(_sortBy == "most-commented" ? "active" : "")" @onclick='() => SetSort("most-commented")'>Most commented</button>
+                        <button class="issue-dropdown-item @(_sortBy == "recently-updated" ? "active" : "")" @onclick='() => SetSort("recently-updated")'>Recently updated</button>
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+
+    @if (_filteredIssues.Count == 0)
+    {
+        <div class="issue-empty">
+            <span class="issue-empty-icon">📭</span>
+            <span>No issues match this filter.</span>
+        </div>
+    }
+    else
+    {
+        <div class="issue-list">
+            @foreach (var issue in _filteredIssues)
+            {
+                var stateClass = issue.State == "open" ? "open" : "closed";
+                <div class="issue-card">
+                    <div class="issue-state-indicator issue-state-@stateClass"></div>
+                    <div class="issue-content">
+                        <div class="issue-title-row">
+                            <span class="issue-state-badge issue-state-@stateClass">
+                                @if (issue.State == "open") { <span title="Open">◉</span> }
+                                else { <span title="Closed">✔</span> }
+                            </span>
+                            <a class="issue-title" href="@issue.Url" target="_blank" rel="noopener">@issue.Title</a>
+                            @foreach (var label in issue.Labels)
+                            {
+                                <span class="issue-label @GetIssueLabelClass(label)">@label</span>
+                            }
+                        </div>
+                        <div class="issue-meta">
+                            <span class="issue-number">#@issue.Number</span>
+                            @if (!string.IsNullOrEmpty(issue.Author))
+                            {
+                                <span class="issue-author">by @issue.Author</span>
+                            }
+                            <span class="issue-date">
+                                @if (issue.ClosedAt.HasValue)
+                                {
+                                    <span>was closed @FormatTimeAgo(DateTime.UtcNow - issue.ClosedAt.Value)</span>
+                                }
+                                else
+                                {
+                                    <span>opened @FormatTimeAgo(DateTime.UtcNow - issue.CreatedAt)</span>
+                                }
+                            </span>
+                            @if (!string.IsNullOrEmpty(issue.AssignedAgent))
+                            {
+                                <span class="issue-assignee">→ @issue.AssignedAgent</span>
+                            }
+                        </div>
+                    </div>
+                    <div class="issue-stats">
+                        @if (issue.CommentCount > 0)
+                        {
+                            <span class="issue-comment-count" title="@issue.CommentCount comments">💬 @issue.CommentCount</span>
+                        }
+                    </div>
+                </div>
+            }
+        </div>
+    }
+}
+
+@code {
+    [Parameter] public string? Tab { get; set; }
+
+    // Shared state
+    private string _activeTab = "pull-requests";
+    private bool _loading = true;
+
+    // PR state
+    private List<AgentPullRequest> _allPrs = [];
+    private List<AgentPullRequest> _filteredPrs = [];
+    private string _prFilter = "all";
+    private int _prOpenCount => _allPrs.Count(p => p.State == "open" && !p.IsMerged);
+    private int _prMergedCount => _allPrs.Count(p => p.IsMerged);
+    private int _prClosedCount => _allPrs.Count(p => p.State != "open" && !p.IsMerged);
+
+    // Issue state
+    private List<AgentIssue> _allIssues = [];
+    private List<AgentIssue> _filteredIssues = [];
+    private string _issueStateFilter = "open";
+    private string? _labelFilter;
+    private string? _assigneeFilter;
+    private string _sortBy = "newest";
+    private bool _showLabelDropdown;
+    private bool _showAssigneeDropdown;
+    private bool _showSortDropdown;
+    private List<string> _availableLabels = [];
+    private List<string> _availableAssignees = [];
+    private int _issueOpenCount => _allIssues.Count(i => i.State == "open");
+    private int _issueClosedCount => _allIssues.Count(i => i.State != "open");
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Route legacy URLs to correct tab
+        var uri = Navigation.ToAbsoluteUri(Navigation.Uri);
+        var path = uri.AbsolutePath.TrimEnd('/');
+        if (path.EndsWith("/issues", StringComparison.OrdinalIgnoreCase))
+            _activeTab = "issues";
+        else if (path.EndsWith("/pullrequests", StringComparison.OrdinalIgnoreCase))
+            _activeTab = "pull-requests";
+        else if (!string.IsNullOrEmpty(Tab))
+            _activeTab = Tab;
+
+        DataService.OnChange += OnDataChanged;
+        await LoadDataAsync();
+    }
+
+    private async Task LoadDataAsync()
+    {
+        try
+        {
+            var prsTask = DataService.GetPullRequestsAsync();
+            var issuesTask = DataService.GetIssuesAsync();
+            await Task.WhenAll(prsTask, issuesTask);
+
+            _allPrs = prsTask.Result.ToList();
+            _allIssues = issuesTask.Result.ToList();
+
+            _availableLabels = _allIssues.SelectMany(i => i.Labels).Distinct().OrderBy(l => l).ToList();
+            _availableAssignees = _allIssues.Where(i => !string.IsNullOrEmpty(i.AssignedAgent))
+                .Select(i => i.AssignedAgent!).Distinct().OrderBy(a => a).ToList();
+
+            ApplyPrFilter();
+            ApplyIssueFilter();
+        }
+        catch { }
+        finally { _loading = false; }
+    }
+
+    private void SwitchTab(string tab)
+    {
+        _activeTab = tab;
+        _showLabelDropdown = false;
+        _showAssigneeDropdown = false;
+        _showSortDropdown = false;
+    }
+
+    // ── PR methods ──
+    private void SetPrFilter(string filter) { _prFilter = filter; ApplyPrFilter(); }
+
+    private void ApplyPrFilter()
+    {
+        _filteredPrs = _prFilter switch
+        {
+            "open" => _allPrs.Where(p => p.State == "open" && !p.IsMerged).ToList(),
+            "merged" => _allPrs.Where(p => p.IsMerged).ToList(),
+            "closed" => _allPrs.Where(p => p.State != "open" && !p.IsMerged).ToList(),
+            _ => _allPrs.ToList()
+        };
+    }
+
+    // ── Issue methods ──
+    private void SetIssueStateFilter(string f) { _issueStateFilter = f; ApplyIssueFilter(); }
+    private void SetLabelFilter(string? l) { _labelFilter = l; _showLabelDropdown = false; ApplyIssueFilter(); }
+    private void SetAssigneeFilter(string? a) { _assigneeFilter = a; _showAssigneeDropdown = false; ApplyIssueFilter(); }
+    private void SetSort(string s) { _sortBy = s; _showSortDropdown = false; ApplyIssueFilter(); }
+
+    private void ToggleLabelDropdown() { _showLabelDropdown = !_showLabelDropdown; _showAssigneeDropdown = false; _showSortDropdown = false; }
+    private void ToggleAssigneeDropdown() { _showAssigneeDropdown = !_showAssigneeDropdown; _showLabelDropdown = false; _showSortDropdown = false; }
+    private void ToggleSortDropdown() { _showSortDropdown = !_showSortDropdown; _showLabelDropdown = false; _showAssigneeDropdown = false; }
+
+    private void ApplyIssueFilter()
+    {
+        IEnumerable<AgentIssue> result = _issueStateFilter switch
+        {
+            "open" => _allIssues.Where(i => i.State == "open"),
+            "closed" => _allIssues.Where(i => i.State != "open"),
+            _ => _allIssues
+        };
+        if (_labelFilter is not null) result = result.Where(i => i.Labels.Contains(_labelFilter));
+        if (_assigneeFilter is not null) result = result.Where(i => i.AssignedAgent == _assigneeFilter);
+        result = _sortBy switch
+        {
+            "oldest" => result.OrderBy(i => i.CreatedAt),
+            "most-commented" => result.OrderByDescending(i => i.CommentCount),
+            "recently-updated" => result.OrderByDescending(i => i.UpdatedAt ?? i.CreatedAt),
+            _ => result.OrderByDescending(i => i.CreatedAt)
+        };
+        _filteredIssues = result.ToList();
+    }
+
+    private string GetSortLabel() => _sortBy switch
+    {
+        "oldest" => "Oldest",
+        "most-commented" => "Most commented",
+        "recently-updated" => "Recently updated",
+        _ => "Newest"
+    };
+
+    private async void OnDataChanged()
+    {
+        await LoadDataAsync();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private static string FormatTimeAgo(TimeSpan ts)
+    {
+        if (ts.TotalDays >= 1) return $"{(int)ts.TotalDays}d ago";
+        if (ts.TotalHours >= 1) return $"{(int)ts.TotalHours}h ago";
+        if (ts.TotalMinutes >= 1) return $"{(int)ts.TotalMinutes}m ago";
+        return "just now";
+    }
+
+    private static string GetPrLabelClass(string label) => label switch
+    {
+        "in-progress" => "label-progress",
+        "ready-for-review" => "label-review",
+        "blocker" => "label-blocker",
+        "agent-stuck" => "label-stuck",
+        _ => "label-default"
+    };
+
+    private static string GetIssueLabelClass(string label) => label switch
+    {
+        "in-progress" or "status:in-progress" => "label-progress",
+        "ready-for-review" => "label-review",
+        "blocker" => "label-blocker",
+        "agent-stuck" => "label-stuck",
+        "engineering-task" => "label-engineering",
+        "executive-request" => "label-executive",
+        "resource-request" => "label-resource",
+        "status:assigned" => "label-assigned",
+        "status:completed" => "label-completed",
+        _ when label.StartsWith("complexity:") => "label-complexity",
+        _ => "label-default"
+    };
+
+    public void Dispose()
+    {
+        DataService.OnChange -= OnDataChanged;
+    }
+}

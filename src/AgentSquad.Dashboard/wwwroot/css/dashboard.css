@@ -5097,6 +5097,78 @@ div[title] .config-agent-name {
 .ntl-detail-num.ntl-type-pr { color: #a371f7; }
 .ntl-detail-num.ntl-type-issue { color: #3fb950; }
 
+/* ── Repository tab bar ── */
+.repo-tab-bar {
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid #30363d;
+    margin-bottom: 16px;
+}
+.repo-tab {
+    padding: 10px 20px;
+    font-size: 0.85rem;
+    font-weight: 500;
+    border: none;
+    border-bottom: 2px solid transparent;
+    background: transparent;
+    color: #7d8590;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+.repo-tab:hover { color: #c9d1d9; }
+.repo-tab.active {
+    color: #58a6ff;
+    border-bottom-color: #58a6ff;
+}
+.repo-tab-count {
+    font-size: 0.7rem;
+    padding: 1px 6px;
+    border-radius: 10px;
+    background: rgba(110,118,129,0.15);
+    color: #7d8590;
+    margin-left: 4px;
+}
+
+/* ── Agent visibility filter ── */
+.agent-filter-wrap { position: relative; display: inline-block; }
+.agent-filter-toggle {
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+.agent-filter-chevron { font-size: 0.6rem; opacity: 0.6; }
+.agent-filter-dropdown {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    z-index: 100;
+    min-width: 220px;
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 6px 0;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+}
+.agent-filter-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 6px 12px;
+    border: none;
+    background: transparent;
+    color: #c9d1d9;
+    font-size: 0.8rem;
+    cursor: pointer;
+    text-align: left;
+}
+.agent-filter-item:hover { background: rgba(56,139,253,0.1); }
+.agent-filter-item.hidden-agent { opacity: 0.5; }
+.agent-filter-check { font-size: 0.85rem; }
+.agent-filter-name { flex: 1; }
+.agent-filter-status { font-size: 0.65rem; text-transform: uppercase; }
+
 /* ── Progress bar ── */
 .ntl-progress-wrap {
     display: flex;
