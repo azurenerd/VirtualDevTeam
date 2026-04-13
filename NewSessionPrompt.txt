@@ -1,0 +1,3 @@
+Read C:\Git\AgentSquad\Session.md for project context and session setup instructions.
+Then read C:\Git\AgentSquad\docs\MonitorPrompt.md for monitoring expectations.
+Then read C:\Git\AgentSquad\LessonsLearned.md for operational knowledge.

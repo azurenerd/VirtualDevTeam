@@ -594,8 +594,9 @@ else
         if (title.StartsWith("architect:") || title.Contains("architecture"))
             return "Architecture";
 
-        // Finalization: final review/validation after all dev is done (TestEngineer final check, etc.)
-        if (title.Contains("final review") || title.Contains("final check") || title.Contains("final validation")
+        // Finalization: T-FINAL tasks, final review/validation, TestEngineer final checks
+        if (title.Contains("[t-final]") || title.Contains("final integration")
+            || title.Contains("final review") || title.Contains("final check") || title.Contains("final validation")
             || (title.StartsWith("testengineer:") && (title.Contains("final") || title.Contains("integration"))))
             return "Finalization";
 
@@ -626,10 +627,11 @@ else
 
     private List<NeonPhase> GetFilteredPhases()
     {
-        if (_statusFilter == "all") return _phases;
+        var snapshot = _phases.ToList(); // snapshot to avoid concurrent modification during render
+        if (_statusFilter == "all") return snapshot;
 
         var result = new List<NeonPhase>();
-        foreach (var phase in _phases)
+        foreach (var phase in snapshot)
         {
             var filtered = phase.Items.Where(g =>
             {

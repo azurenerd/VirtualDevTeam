@@ -13,7 +13,7 @@ namespace AgentSquad.Dashboard.Services;
 /// <summary>
 /// Service for reading/writing appsettings.json and performing GitHub repo cleanup operations.
 /// </summary>
-public sealed class ConfigurationService
+public sealed class ConfigurationService : IConfigurationService
 {
     private readonly IOptions<AgentSquadConfig> _config;
     private readonly IGitHubService _github;

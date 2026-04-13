@@ -40,6 +40,15 @@ builder.Services.AddSingleton<HttpDashboardDataService>(sp =>
 builder.Services.AddSingleton<IDashboardDataService>(sp => sp.GetRequiredService<HttpDashboardDataService>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<HttpDashboardDataService>());
 
+// HTTP-based configuration service (talks to Runner REST API)
+builder.Services.AddSingleton<IConfigurationService>(sp =>
+{
+    var factory = sp.GetRequiredService<IHttpClientFactory>();
+    var client = factory.CreateClient("RunnerApi");
+    var logger = sp.GetRequiredService<ILogger<HttpConfigurationService>>();
+    return new HttpConfigurationService(client, logger);
+});
+
 // Director CLI — runs local copilot processes, no Runner dependency
 builder.Services.AddSingleton<DirectorCliService>();
 

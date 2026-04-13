@@ -64,8 +64,8 @@ Write-Host ""
 
 # Check dashboard
 try {
-    $response = Invoke-WebRequest -Uri "http://localhost:5000" -UseBasicParsing -TimeoutSec 3 -ErrorAction Stop
-    Write-Host "Dashboard: http://localhost:5000 (HTTP $($response.StatusCode))" -ForegroundColor Green
+    $response = Invoke-WebRequest -Uri "http://localhost:5050" -UseBasicParsing -TimeoutSec 3 -ErrorAction Stop
+    Write-Host "Dashboard: http://localhost:5050 (HTTP $($response.StatusCode))" -ForegroundColor Green
 } catch {
     Write-Host "Dashboard: NOT RESPONDING" -ForegroundColor Yellow
 }

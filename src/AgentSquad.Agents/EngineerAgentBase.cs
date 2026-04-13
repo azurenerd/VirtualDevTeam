@@ -493,6 +493,8 @@ public abstract class EngineerAgentBase : AgentBase
                 "2. The acceptance criteria extracted from the Issue\n" +
                 "3. Detailed **Implementation Steps** — an ordered, numbered list of discrete steps " +
                 "to complete this task. Step 1 should be scaffolding (project structure, config, boilerplate). " +
+                "All file paths MUST be relative to the repo root. Place .sln at repo root, project under ProjectName/. " +
+                "NEVER create redundant same-named nested folders (e.g., RepoName/RepoName/ is WRONG). " +
                 "Each step should be a self-contained unit of committable work. 3-6 steps total.\n" +
                 "4. Any questions you have — if the requirements are UNCLEAR, list them. " +
                 "If you understand everything well enough to proceed, say 'NO_QUESTIONS'." +
@@ -828,6 +830,10 @@ public abstract class EngineerAgentBase : AgentBase
                 "IMPORTANT rules:\n" +
                 "- Step 1 MUST be project scaffolding: folder structure, config files, boilerplate, " +
                 "package manifests, and empty placeholder files that establish the project skeleton.\n" +
+                "- All file paths are relative to the REPOSITORY ROOT. The repo root IS the solution root.\n" +
+                "- Place .sln at repo root, project files under a single ProjectName/ subfolder.\n" +
+                "- NEVER create multiple levels of same-named folders (e.g., MyApp/MyApp/MyApp/ is WRONG).\n" +
+                "- Only ONE .gitignore at the repo root.\n" +
                 "- Each subsequent step should build on what the previous steps created.\n" +
                 "- Each step should be a self-contained unit of work that produces committable code.\n" +
                 "- Steps should be small enough to complete in a single AI response.\n" +

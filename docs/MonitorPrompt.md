@@ -15,6 +15,32 @@ Before starting a workflow run, confirm:
 - [ ] SQLite DB deleted (if fresh reset)
 - [ ] Agent workspaces deleted (if fresh reset)
 - [ ] Re-check all of the above after cleanup script runs — **do not proceed until verified**
+- [ ] GitHub API rate limit checked — must have >100 remaining
+
+### Reset commands
+```powershell
+# Read PAT from appsettings.json
+$settings = Get-Content src\AgentSquad.Runner\appsettings.json | ConvertFrom-Json
+$pat = $settings.AgentSquad.Project.GitHubToken
+
+# Full reset (stops runner, cleans GitHub, deletes local state)
+.\scripts\fresh-reset.ps1 -GitHubToken $pat
+
+# Check rate limit
+$headers = @{ Authorization = "token $pat"; Accept = "application/vnd.github+json" }
+(Invoke-RestMethod "https://api.github.com/rate_limit" -Headers $headers).rate
+```
+
+### Starting after reset
+```powershell
+# Start runner (builds, launches, logs to logs/ directory)
+.\scripts\start-runner.ps1
+# Dashboard available at http://localhost:5050
+
+# Optional: Start standalone dashboard (can restart without killing agents)
+.\scripts\start-dashboard.ps1
+# Standalone dashboard at http://localhost:5051
+```
 
 ---
 
@@ -187,3 +213,5 @@ $headers = @{ Authorization = "token $token"; Accept = "application/vnd.github.v
 | 2026-04-11 | Added TE build-failure notification gap (fixed: TE now sends ChangesRequestedMessage on build failure) |
 | 2026-04-11 | Added TE workspace init failure mode: git clone timeout → silent API-only fallback → no screenshots/no test execution |
 | 2026-04-11 | Added PE self-merge bug: PE was skipping own PRs in MergeTestedPRsAsync (fixed) |
+| 2026-04-13 | Updated pre-run verification with reset commands, rate limit check, dashboard startup instructions |
+| 2026-04-13 | Added dashboard architecture section: two-process model (Runner:5050 + Dashboard.Host:5051) |

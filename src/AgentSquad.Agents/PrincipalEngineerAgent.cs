@@ -456,6 +456,13 @@ public class PrincipalEngineerAgent : EngineerAgentBase
             "- Has NO dependencies (all other tasks should depend on T1)\n" +
             "This ensures the first PR establishes the project skeleton before any parallel work begins, " +
             "giving every engineer a clear target for where their code goes.\n\n" +
+            "## CRITICAL — Repository Structure Rules\n" +
+            "The repository root IS the solution root. All file paths are relative to the repo root.\n" +
+            "- Place the `.sln` file at the REPO ROOT (e.g., `MyApp.sln`)\n" +
+            "- Place source projects in a SINGLE project subfolder (e.g., `MyApp/MyApp.csproj`, `MyApp/Program.cs`)\n" +
+            "- NEVER create multiple levels of folders with the same name — `MyApp/MyApp/MyApp/` is WRONG\n" +
+            "- The repo name already provides the top-level context, so `ProjectName/file.cs` is the deepest the project root should go\n" +
+            "- Only ONE `.gitignore` at the repo root — do NOT create nested `.gitignore` files in subfolders\n\n" +
             "## CRITICAL — Parallel-Friendly Task Decomposition\n" +
             "Multiple engineers will work on tasks IN PARALLEL. Design tasks to MINIMIZE overlap and merge conflicts:\n" +
             "- **Separate by component/module boundary**: each task should own a distinct set of files. " +
@@ -522,11 +529,11 @@ public class PrincipalEngineerAgent : EngineerAgentBase
             "Example:\n" +
             "TASK|T1|42|Project Foundation & Scaffolding|Create solution structure, shared models, interfaces, " +
             "DI registration, and configuration|High|NONE|" +
-            "CREATE:src/Models/AppConfig.cs(MyApp.Models);CREATE:src/Interfaces/IAuthService.cs(MyApp.Interfaces);CREATE:src/Program.cs(MyApp)\n" +
+            "CREATE:.gitignore;CREATE:MyApp.sln;CREATE:MyApp/MyApp.csproj;CREATE:MyApp/Program.cs(MyApp);CREATE:MyApp/Models/AppConfig.cs(MyApp.Models)\n" +
             "TASK|T2|43|Implement auth module|Build JWT authentication with refresh tokens|Medium|T1|" +
-            "CREATE:src/Services/AuthService.cs(MyApp.Services);USE:IAuthService(MyApp.Interfaces)\n" +
+            "CREATE:MyApp/Services/AuthService.cs(MyApp.Services);USE:IAuthService(MyApp.Interfaces)\n" +
             "TASK|T3|44|Implement user profile|Build user profile CRUD|Medium|T1|" +
-            "CREATE:src/Services/UserProfileService.cs(MyApp.Services);CREATE:src/Controllers/ProfileController.cs(MyApp.Controllers)\n\n" +
+            "CREATE:MyApp/Services/UserProfileService.cs(MyApp.Services);CREATE:MyApp/Controllers/ProfileController.cs(MyApp.Controllers)\n\n" +
             "Note how T2 and T3 both depend only on T1 (parallel-safe) and own completely separate files.\n\n" +
             "Only output TASK lines, nothing else.");
 
@@ -3226,7 +3233,9 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 "1. **Summary**: What this PR implements\n" +
                 "2. **Acceptance Criteria**: Specific, testable criteria\n" +
                 "3. **Implementation Steps**: An ordered, numbered list of discrete implementation steps. " +
-                "Step 1 MUST be scaffolding (folder structure, config, boilerplate). Each subsequent step " +
+                "Step 1 MUST be scaffolding (folder structure, config, boilerplate). " +
+                "All paths relative to repo root. Place .sln at root, project under ProjectName/. " +
+                "NEVER create redundant same-named nested folders. Each subsequent step " +
                 "builds on the previous. Each step should be a self-contained committable unit of work. " +
                 "3-6 steps total. Be specific about what each step produces.\n" +
                 "4. **Testing**: What tests should cover");

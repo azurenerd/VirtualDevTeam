@@ -3,7 +3,7 @@
 
 <div class="sidebar-brand">
     <div class="brand-title">AgentSquad</div>
-    <div class="brand-subtitle">@(Mode.IsStandalone ? "Dashboard (Standalone)" : "Monitoring Dashboard")</div>
+    <div class="brand-subtitle">@(Mode.IsStandalone ? "Monitoring Dashboard" : "Runner Admin")</div>
 </div>
 
 <input type="checkbox" title="Navigation menu" class="navbar-toggler" />
@@ -17,58 +17,55 @@
         </div>
 
         <div class="nav-item">
-            <NavLink class="nav-link" href="timeline">
-                <span class="nav-icon">🗺️</span> Project Timeline
+            <NavLink class="nav-link" href="configuration">
+                <span class="nav-icon">⚙️</span> Configuration
             </NavLink>
         </div>
 
-        <div class="nav-item">
-            <NavLink class="nav-link" href="metrics">
-                <span class="nav-icon">📊</span> Metrics
-            </NavLink>
-        </div>
-
-        <div class="nav-item">
-            <NavLink class="nav-link" href="health">
-                <span class="nav-icon">🩺</span> Health Monitor
-            </NavLink>
-        </div>
-
-        <div class="nav-item">
-            <NavLink class="nav-link" href="repository">
-                <span class="nav-icon">📦</span> Repository
-            </NavLink>
-        </div>
-
-        @if (!Mode.IsStandalone)
+        @if (Mode.IsStandalone)
         {
+            <div class="nav-item">
+                <NavLink class="nav-link" href="timeline">
+                    <span class="nav-icon">🗺️</span> Project Timeline
+                </NavLink>
+            </div>
+
+            <div class="nav-item">
+                <NavLink class="nav-link" href="metrics">
+                    <span class="nav-icon">📊</span> Metrics
+                </NavLink>
+            </div>
+
+            <div class="nav-item">
+                <NavLink class="nav-link" href="health">
+                    <span class="nav-icon">🩺</span> Health Monitor
+                </NavLink>
+            </div>
+
+            <div class="nav-item">
+                <NavLink class="nav-link" href="repository">
+                    <span class="nav-icon">📦</span> Repository
+                </NavLink>
+            </div>
+
             <div class="nav-item">
                 <NavLink class="nav-link" href="engineering-plan">
                     <span class="nav-icon">📐</span> Engineering Plan
                 </NavLink>
             </div>
-        }
 
-        <div class="nav-item">
-            <NavLink class="nav-link" href="team">
-                <span class="nav-icon">👥</span> Team View
-            </NavLink>
-        </div>
-
-        @if (!Mode.IsStandalone)
-        {
             <div class="nav-item">
-                <NavLink class="nav-link" href="configuration">
-                    <span class="nav-icon">⚙️</span> Configuration
+                <NavLink class="nav-link" href="team">
+                    <span class="nav-icon">👥</span> Team View
+                </NavLink>
+            </div>
+
+            <div class="nav-item nav-separator">
+                <NavLink class="nav-link" href="director-cli">
+                    <span class="nav-icon">💻</span> Director CLI
                 </NavLink>
             </div>
         }
-
-        <div class="nav-item nav-separator">
-            <NavLink class="nav-link" href="director-cli">
-                <span class="nav-icon">💻</span> Director CLI
-            </NavLink>
-        </div>
     </nav>
 </div>
 

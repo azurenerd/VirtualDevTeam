@@ -72,7 +72,7 @@ Write-Host "  Stdout: $stdoutLog"
 Write-Host "  Stderr: $stderrLog"
 Write-Host "  PID file: $PidFile"
 Write-Host ""
-Write-Host "Dashboard: http://localhost:5000" -ForegroundColor Cyan
+Write-Host "Dashboard: http://localhost:5050" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Use '.\scripts\stop-runner.ps1' to stop."
 Write-Host "Use '.\scripts\runner-status.ps1' to check status."

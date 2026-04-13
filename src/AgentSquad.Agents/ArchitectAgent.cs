@@ -250,7 +250,9 @@ public class ArchitectAgent : AgentBase
                 $"Project: {_config.Project.Description}\nTech Stack: {_config.Project.TechStack}\n\n" +
                 "Write a concise architecture document with these sections (1-2 sentences each): " +
                 "## System Components (list main components), ## Data Model (key entities), " +
-                "## Project Structure (folder layout), ## Technology Choices. " +
+                "## Project Structure (folder layout — the repo root IS the solution root; " +
+                "place .sln at root, project files under ProjectName/ subfolder; " +
+                "NEVER create multiple levels of same-named folders), ## Technology Choices. " +
                 "Keep the entire document under 300 words. Be specific about file paths and component names.");
             var qResp = await qChat.GetChatMessageContentAsync(qHistory, cancellationToken: ct);
             var qContent = $"# System Architecture: {directive.Title}\n\n{qResp.Content?.Trim() ?? ""}";

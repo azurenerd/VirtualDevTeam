@@ -94,6 +94,7 @@ builder.Services.AddSingleton<DashboardDataService>();
 builder.Services.AddSingleton<IDashboardDataService>(sp => sp.GetRequiredService<DashboardDataService>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<DashboardDataService>());
 builder.Services.AddSingleton<ConfigurationService>();
+builder.Services.AddSingleton<IConfigurationService>(sp => sp.GetRequiredService<ConfigurationService>());
 builder.Services.AddScoped<EngineeringPlanDataService>();
 builder.Services.AddSingleton<DirectorCliService>();
 builder.Services.AddSingleton(new DashboardMode(IsStandalone: false));
@@ -194,6 +195,36 @@ api.MapGet("/github/rate-limited", (DashboardDataService svc) =>
 api.MapPost("/reset", (DashboardDataService svc) =>
     { svc.ResetCaches(); return Results.Ok(); });
 
+// ── Configuration REST API (consumed by standalone Dashboard.Host) ──
+var configApi = app.MapGroup("/api/configuration").WithTags("Configuration");
+
+configApi.MapGet("/current", (ConfigurationService svc) =>
+    Results.Ok(svc.GetCurrentConfig()));
+
+configApi.MapPost("/save", async (AgentSquadConfig config, ConfigurationService svc) =>
+{
+    await svc.SaveConfigAsync(config);
+    return Results.Ok();
+});
+
+configApi.MapPost("/validate-pat", async (HttpContext ctx, ConfigurationService svc, CancellationToken ct) =>
+{
+    var body = await ctx.Request.ReadFromJsonAsync<ValidatePatRequest>(ct);
+    if (body?.Token is null || body.RepoFullName is null) return Results.BadRequest();
+    var result = await svc.ValidatePatAsync(body.Token, body.RepoFullName, ct);
+    return Results.Ok(result);
+});
+
+configApi.MapGet("/cleanup/scan", async (ConfigurationService svc, CancellationToken ct) =>
+    Results.Ok(await svc.ScanRepoForCleanupAsync(ct)));
+
+configApi.MapPost("/cleanup/execute", async (HttpContext ctx, ConfigurationService svc, CancellationToken ct) =>
+{
+    var body = await ctx.Request.ReadFromJsonAsync<CleanupExecuteRequest>(ct);
+    var result = await svc.ExecuteCleanupAsync(body?.Caveats, ct);
+    return Results.Ok(result);
+});
+
 // SignalR hub for real-time dashboard updates
 app.MapHub<AgentHub>("/agenthub");
 
@@ -206,3 +237,5 @@ app.Run();
 // Request DTOs for POST endpoints
 record SetModelRequest(string ModelName);
 record ChatRequest(string Message);
+record ValidatePatRequest(string? Token, string? RepoFullName);
+record CleanupExecuteRequest(string? Caveats);

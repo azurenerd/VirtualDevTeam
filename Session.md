@@ -23,28 +23,40 @@ Also read the `.github/copilot-instructions.md` (auto-loaded) for architecture, 
 
 Before starting a new agent workflow run, fully reset the target GitHub repo:
 
-### Option A: Use the reset script (recommended)
+### Option A: Use the fresh-reset script (recommended)
 ```powershell
-# Full reset — closes issues/PRs, deletes branches, resets repo files
-.\scripts\fresh-reset.ps1 -GitHubToken "<PAT>"
+# Read PAT from appsettings.json
+$settings = Get-Content src\AgentSquad.Runner\appsettings.json | ConvertFrom-Json
+$pat = $settings.AgentSquad.Project.GitHubToken
+
+# Full reset — stops runner, closes issues/PRs, deletes branches, resets repo files
+.\scripts\fresh-reset.ps1 -GitHubToken $pat
 
 # Preserve the HTML design reference (default preserves .gitignore + OriginalDesignConcept.html)
-.\scripts\fresh-reset.ps1 -GitHubToken "<PAT>" -PreserveFiles "OriginalDesignConcept.html,.gitignore"
+.\scripts\fresh-reset.ps1 -GitHubToken $pat -PreserveFiles "OriginalDesignConcept.html,.gitignore"
 ```
 
-### Option B: Manual reset steps
-1. Close ALL open issues: `gh issue list -s open --json number -q '.[].number' | ForEach-Object { gh issue close $_ }`
-2. Close ALL open PRs: `gh pr list -s open --json number -q '.[].number' | ForEach-Object { gh pr close $_ }`
-3. Delete ALL non-main branches via GitHub API
-4. Reset repo files to only preserved files (`OriginalDesignConcept.html`, `.gitignore`)
-5. Delete local SQLite DB: `Remove-Item src\AgentSquad.Runner\agentsquad_default.db* -Force`
-6. Delete agent workspaces: `Remove-Item C:\AgentWorkspaces\* -Recurse -Force`
+### Option B: Use reset-runner script (reads PAT from appsettings.json automatically)
+```powershell
+# Full reset — reads PAT from appsettings.json, stops runner, cleans GitHub + local state
+.\scripts\reset-runner.ps1
+```
+
+### Option C: Dashboard UI reset
+Navigate to the **Configuration** page (http://localhost:5050/configuration) in the embedded dashboard.
+Use the "Scan Repository" button to preview, then "Clean & Restart" to execute.
+This is only available in embedded mode (Runner-hosted dashboard on port 5050).
 
 ### Verify reset before proceeding
 ```powershell
+# Check GitHub API rate limit (must have remaining > 100)
+$headers = @{ Authorization = "token $pat"; Accept = "application/vnd.github+json" }
+Invoke-RestMethod "https://api.github.com/rate_limit" -Headers $headers | Select-Object -ExpandProperty rate
+
 # Must all return 0 / empty
-gh issue list -s open -R azurenerd/ReportingDashboard
-gh pr list -s open -R azurenerd/ReportingDashboard
+$repo = $settings.AgentSquad.Project.GitHubRepo
+(Invoke-RestMethod "https://api.github.com/repos/$repo/issues?state=open" -Headers $headers) | Where-Object { -not $_.pull_request } | Measure-Object
+(Invoke-RestMethod "https://api.github.com/repos/$repo/pulls?state=open" -Headers $headers) | Measure-Object
 ```
 
 **Important:** The PAT is in `src/AgentSquad.Runner/appsettings.json` under `AgentSquad.Project.GitHubToken`. Note: this user is an Enterprise Managed User (EMU) — `gh issue create` may fail with 403. Use the runner's Octokit integration or direct REST API with the PAT instead.
@@ -53,24 +65,65 @@ gh pr list -s open -R azurenerd/ReportingDashboard
 
 ## 3. Building & Running
 
-```powershell
-# Build
-dotnet build AgentSquad.sln
+### Architecture: Two Processes
 
-# Run the runner (dashboard at http://localhost:5050)
-cd src\AgentSquad.Runner
-$env:ASPNETCORE_ENVIRONMENT = "Development"
-$env:ASPNETCORE_URLS = "http://localhost:5050"
-.\bin\Debug\net8.0\AgentSquad.Runner.exe
+The system runs as two independent processes:
+
+| Process | Port | Purpose |
+|---------|------|---------|
+| **Runner** | 5050 | Agent orchestration + REST API + embedded dashboard |
+| **Dashboard.Host** (optional) | 5051 | Standalone dashboard — can restart without killing agents |
+
+The **Runner** hosts an embedded Blazor dashboard at port 5050 that has full functionality (including Configuration page and cleanup).
+
+The **Dashboard.Host** is an optional standalone process that connects to the Runner's REST API. It can be restarted independently without disrupting running agents. Some features (Configuration, Engineering Plan) are hidden in standalone mode.
+
+### Starting the Runner
+
+```powershell
+# Option 1: Use the start script (recommended — builds, logs, manages PID)
+.\scripts\start-runner.ps1
+
+# Option 2: Manual start (detached, no Tee-Object!)
+dotnet build src\AgentSquad.Runner
+Start-Process -FilePath "dotnet" -ArgumentList "run --project src\AgentSquad.Runner --no-build" -WindowStyle Hidden -PassThru
+
+# Option 3: Direct exe (after building)
+dotnet build AgentSquad.sln
+Start-Process -FilePath "src\AgentSquad.Runner\bin\Debug\net8.0\AgentSquad.Runner.exe" -WindowStyle Hidden -PassThru
+```
+
+Dashboard is available at **http://localhost:5050** once the Runner starts.
+
+### Starting the Standalone Dashboard (optional)
+
+```powershell
+# Option 1: Use the start script
+.\scripts\start-dashboard.ps1
+
+# Option 2: Manual start
+dotnet build src\AgentSquad.Dashboard.Host
+Start-Process -FilePath "dotnet" -ArgumentList "run --project src\AgentSquad.Dashboard.Host --no-build" -WindowStyle Hidden -PassThru
+```
+
+Standalone dashboard at **http://localhost:5051** connects to Runner API at port 5050.
+
+### Stopping
+
+```powershell
+# Stop runner (also stops embedded dashboard)
+.\scripts\stop-runner.ps1
+
+# Or by PID
+Stop-Process -Id <PID>
 ```
 
 ### Critical runner rules
 - **NEVER** use `dotnet run | Tee-Object` — it kills the runner during Copilot CLI subprocess calls
 - **NEVER** kill processes by name (`Stop-Process -Name`, `taskkill /IM`) — it kills your own CLI session
-- **Always** run the exe directly in async mode: `.\bin\Debug\net8.0\AgentSquad.Runner.exe`
 - **Always** stop the runner before building (file locks on DLLs)
-- Find runner PID: `Get-Process AgentSquad.Runner`
-- Stop runner: `Stop-Process -Id <PID>`
+- Find runner PID: `Get-Process -Id (Get-Content runner.pid)` or `Get-NetTCPConnection -LocalPort 5050`
+- The Runner spawns a child dotnet process — the child owns port 5050. Check both PIDs.
 
 ---
 
@@ -82,7 +135,17 @@ Read `docs/MonitorPrompt.md` for the full checklist. Key points:
 1. **Phase progression**: Research → PM Spec → Architecture → Engineering Planning → Development → Testing → Review → Complete
 2. **Agent status cycles**: Idle → Working → Idle is normal. Idle → Idle → Idle with open work = stuck.
 3. **PR pipeline per engineering PR**: created → `ready-for-review` → Architect review → `architect-approved` → TE tests → `tests-added` → PM review → `pm-approved` → PE merge
-4. **Rate limiting**: GitHub API limit is 5000/hr. Runner has `RateLimitManager` (SemaphoreSlim 10 slots). Watch for `Rate limit exceeded` in logs.
+4. **Rate limiting**: GitHub API limit is 5000/hr. Runner has 30s TTL shared cache (~90% reduction). Watch for `Rate limit exceeded` in logs.
+
+### Dashboard pages
+| Page | URL | Key Features |
+|------|-----|-------------|
+| Overview | `/` | Agent cards, status, activity logs, agent visibility filter |
+| Project Timeline | `/timeline` | Phase-grouped issues/PRs, PM/Engineering toggle, auto-refresh |
+| Metrics | `/metrics` | Build/test metrics, agent performance |
+| Health Monitor | `/health` | Deadlock detection, health checks |
+| Repository | `/repository` | Combined PR + Issue tabs |
+| Configuration | `/configuration` | Settings editor, GitHub cleanup (embedded mode only) |
 
 ### SQL monitoring tables
 ```sql
@@ -110,19 +173,23 @@ CREATE TABLE IF NOT EXISTS run_monitor (
 
 ## 5. Dashboard Features
 
-The Blazor Server dashboard at http://localhost:5050 includes:
+### Embedded Dashboard (http://localhost:5050)
+Full-featured dashboard hosted by the Runner process. Includes all pages and Configuration/cleanup functionality.
 
-- **Home**: Agent cards with real-time status, activity logs
-- **Project Timeline**: Phase-grouped view of all issues/PRs with:
-  - Auto-refresh every 30 seconds
-  - Smart run detection (filters to latest run only)
-  - Clickable issue/PR numbers (open GitHub in new tab)
-  - Detail panel with child issues and linked PRs
-- **Workflow**: Phase gate status and signals
-- **Notifications**: Gate approval requests
+### Standalone Dashboard (http://localhost:5051)
+Optional independent process. Connects to Runner REST API at `/api/dashboard/*`.
+- **Can restart** without disrupting running agents
+- **Hidden pages**: Configuration, Engineering Plan (require Runner-only services)
+- **All other pages** work identically via HTTP proxy
+
+### Key features
+- **Project Timeline**: Phase-grouped view with PM/Engineering toggle, node type indicators (PR vs Issue), clickable GitHub links, 30s auto-refresh (background, no overlay)
+- **Agent Overview**: Real-time agent cards with visibility filter (hide/show agents)
+- **Repository**: Combined Pull Requests + Issues view with tab navigation
+- **Force refresh**: SVG refresh button on Timeline and Overview pages
 
 ### Timeline data flow
-- Issues/PRs fetched from GitHub via `DashboardDataService` (cached, 30s PR / 60s issue expiry)
+- Issues/PRs fetched via `DashboardDataService` (30s TTL cache, shared with GitHubService)
 - `BuildTimeline()` pipeline: run detection → filter → dedup → synthetic doc PRs → parent-child → phase grouping
 - Doc phases (Research, PM Spec, Architecture) appear as synthetic nodes from PRs
 - Engineering tasks filtered to latest burst (30-min window from newest)
@@ -154,25 +221,11 @@ Key settings:
 ## 7. Known Issues & Workarounds
 
 1. **GitHub EMU restrictions**: `gh issue create` fails with 403. Use Octokit via the runner or REST API with PAT.
-2. **Rate limiting**: Heavy runs can exhaust the 5000/hr GitHub API limit. The `RateLimitManager` auto-pauses and retries. Dashboard shows rate-limit status.
+2. **Rate limiting**: Heavy runs can exhaust the 5000/hr GitHub API limit. The 30s TTL cache reduces API calls by ~90%. Dashboard shows rate-limit status.
 3. **Stale checkpoint recovery**: Runner uses `WorkflowStateMachine` checkpoint. If resuming an old run, the phase may be wrong. Delete the DB for a fresh start.
-4. **Agent workspaces**: TE and engineers clone repos to `C:\AgentWorkspaces\`. These persist across runs — delete for fresh start.
+4. **Agent workspaces**: TE and engineers clone repos to `C:\Agents\`. These persist across runs — delete for fresh start.
 5. **PM issue ordering**: The PM extraction prompt instructs dependency-ordered issue creation (scaffolding first). If issues come out in wrong order, check the extraction prompt in `ProgramManagerAgent.CreateUserStoryIssuesAsync()`.
-
----
-
-## 8. Quick Start Prompt for New Session
-
-Copy-paste this to start a new Copilot CLI session with full context:
-
-```
-Read C:\Git\AgentSquad\Session.md for project context and session setup instructions.
-Then read C:\Git\AgentSquad\docs\MonitorPrompt.md for monitoring expectations.
-Then read C:\Git\AgentSquad\LessonsLearned.md for operational knowledge.
-
-I want to [DESCRIBE YOUR GOAL HERE — e.g., "do a fresh GitHub reset and start a new agent workflow run and monitor it", "fix a bug in the timeline page", "review the latest run's output"].
-```
-
----
+6. **DLL locks during build**: Runner/Dashboard must be stopped before rebuilding. Use `.\scripts\stop-runner.ps1` first.
+7. **Standalone dashboard limitations**: Configuration page and Engineering Plan page are hidden. Use embedded dashboard (port 5050) or `fresh-reset.ps1` script for cleanup.
 
 *Last updated: 2026-04-13*
