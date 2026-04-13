@@ -147,6 +147,7 @@ public class ResearcherAgent : AgentBase
                         updatedDoc += "\n";
 
                         // === Gate: ResearchFindings — human reviews before merge ===
+                        UpdateStatus(AgentStatus.Working, $"⏳ Awaiting human approval on PR #{pr.Number}");
                         await _gateCheck.WaitForGateAsync(
                             GateIds.ResearchFindings,
                             $"Research findings for '{directive.Topic}' ready for review",

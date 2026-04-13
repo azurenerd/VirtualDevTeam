@@ -688,6 +688,7 @@ public class PrincipalEngineerAgent : EngineerAgentBase
         await ValidateEnhancementCoverageAsync(enhancementIssues, ct);
 
         // === Gate: EngineeringPlan — human reviews plan before finalization ===
+        UpdateStatus(AgentStatus.Working, "⏳ Awaiting human approval — engineering plan");
         await _gateCheck.WaitForGateAsync(
             GateIds.EngineeringPlan,
             "Engineering plan ready for human review before finalization",
@@ -968,6 +969,7 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 registeredEngineers.Add(new EngineerInfo { AgentId = agent.Identity.Id, Name = agent.Identity.DisplayName, Role = AgentRole.JuniorEngineer });
 
             // === Gate: TaskAssignment — human reviews task assignments ===
+            UpdateStatus(AgentStatus.Working, "⏳ Awaiting human approval — task assignments");
             await _gateCheck.WaitForGateAsync(
                 GateIds.TaskAssignment,
                 $"Ready to assign {_taskManager.PendingCount} engineering tasks to available engineers",
@@ -1526,6 +1528,7 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 // === Gate: PRReviewApproval — human reviews before PE approval ===
                 if (approved)
                 {
+                    UpdateStatus(AgentStatus.Working, $"⏳ Awaiting human approval on PR #{prNumber}");
                     await _gateCheck.WaitForGateAsync(
                         GateIds.PRReviewApproval,
                         $"PE ready to approve PR #{prNumber}",
@@ -1662,6 +1665,7 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 }
 
                 // === Gate: FinalPRApproval — human reviews before final merge ===
+                UpdateStatus(AgentStatus.Working, $"⏳ Awaiting human approval on PR #{pr.Number}");
                 await _gateCheck.WaitForGateAsync(
                     GateIds.FinalPRApproval,
                     $"PR #{pr.Number} has passed all reviews and tests, ready for final merge",

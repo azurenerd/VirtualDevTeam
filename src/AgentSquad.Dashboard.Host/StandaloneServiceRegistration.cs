@@ -3,11 +3,9 @@ using AgentSquad.Core.Configuration;
 using AgentSquad.Core.GitHub;
 using AgentSquad.Core.GitHub.Models;
 using AgentSquad.Core.Metrics;
-using AgentSquad.Core.Notifications;
 using AgentSquad.Core.Persistence;
 using AgentSquad.Dashboard.Services;
 using AgentSquad.Orchestrator;
-using Microsoft.Extensions.Options;
 
 namespace AgentSquad.Dashboard.Host;
 
@@ -20,14 +18,6 @@ public static class StandaloneServiceRegistration
 {
     public static IServiceCollection AddStandaloneStubs(this IServiceCollection services)
     {
-        // GateNotificationService — required by NotificationBell in the layout
-        services.AddSingleton<GateNotificationService>(sp =>
-            new GateNotificationService(
-                Enumerable.Empty<INotificationChannel>(),
-                sp,
-                Options.Create(new AgentSquadConfig()),
-                sp.GetRequiredService<ILoggerFactory>().CreateLogger<GateNotificationService>()));
-
         // IGitHubService — required by AgentDetail page
         services.AddSingleton<IGitHubService, NullGitHubService>();
 

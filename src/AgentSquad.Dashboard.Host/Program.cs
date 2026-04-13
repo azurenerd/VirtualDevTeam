@@ -49,6 +49,17 @@ builder.Services.AddSingleton<IConfigurationService>(sp =>
     return new HttpConfigurationService(client, logger);
 });
 
+// HTTP-based notification service (polls Runner for gate notifications)
+builder.Services.AddSingleton<HttpGateNotificationService>(sp =>
+{
+    var factory = sp.GetRequiredService<IHttpClientFactory>();
+    var client = factory.CreateClient("RunnerApi");
+    var logger = sp.GetRequiredService<ILogger<HttpGateNotificationService>>();
+    var svc = new HttpGateNotificationService(client, logger);
+    svc.Start();
+    return svc;
+});
+
 // Director CLI — runs local copilot processes, no Runner dependency
 builder.Services.AddSingleton<DirectorCliService>();
 

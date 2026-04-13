@@ -508,6 +508,7 @@ public class ArchitectAgent : AgentBase
         Logger.LogDebug("Architecture document compiled for {TaskId}", directive.TaskId);
 
         // === Gate: ArchitectureDesign — human reviews architecture before merge ===
+        UpdateStatus(AgentStatus.Working, $"⏳ Awaiting human approval on PR #{pr.Number}");
         await _gateCheck.WaitForGateAsync(
             GateIds.ArchitectureDesign,
             "Architecture.md ready for human review before merge",

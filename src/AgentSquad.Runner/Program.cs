@@ -267,6 +267,40 @@ gateApi.MapPost("/{gateId}/approve", (string gateId, IGateCheckService gateCheck
     return Results.Ok(new { gateId, approved = true, message = $"Gate '{gateId}' approved" });
 });
 
+// Notification API — for standalone dashboard to poll gate notifications
+var notificationApi = app.MapGroup("/api/notifications").WithTags("Notifications");
+
+notificationApi.MapGet("/", (GateNotificationService notificationSvc, string? filter) =>
+{
+    var f = filter?.ToLowerInvariant() switch
+    {
+        "open" => NotificationFilter.Open,
+        "resolved" => NotificationFilter.Resolved,
+        _ => NotificationFilter.All,
+    };
+    return Results.Ok(notificationSvc.GetByStatus(f));
+});
+
+notificationApi.MapGet("/counts", (GateNotificationService notificationSvc) =>
+    Results.Ok(new
+    {
+        unread = notificationSvc.UnreadCount,
+        open = notificationSvc.OpenCount,
+        resolved = notificationSvc.ResolvedCount
+    }));
+
+notificationApi.MapPost("/{notificationId}/read", (string notificationId, GateNotificationService notificationSvc) =>
+{
+    notificationSvc.MarkAsRead(notificationId);
+    return Results.Ok();
+});
+
+notificationApi.MapPost("/read-all", (GateNotificationService notificationSvc) =>
+{
+    notificationSvc.MarkAllAsRead();
+    return Results.Ok();
+});
+
 // SignalR hub for real-time dashboard updates
 app.MapHub<AgentHub>("/agenthub");
 

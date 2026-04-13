@@ -1232,6 +1232,7 @@ public class ProgramManagerAgent : AgentBase
             Logger.LogInformation("Research complete signal received — generating PMSpec.md");
 
             // === Gate: ResearchCompleteness — human reviews research before PM proceeds ===
+            UpdateStatus(AgentStatus.Working, "⏳ Awaiting human approval — research completeness");
             await _gateCheck.WaitForGateAsync(
                 GateIds.ResearchCompleteness,
                 "Research phase complete, PM ready to create specification",
@@ -1347,6 +1348,7 @@ public class ProgramManagerAgent : AgentBase
                 var qContent = $"# PM Specification: {projectName}\n\n{qResp.Content?.Trim() ?? ""}";
 
                 // === Gate: PMSpecification — human reviews PMSpec before merge ===
+                UpdateStatus(AgentStatus.Working, $"⏳ Awaiting human approval on PR #{qPr.Number}");
                 await _gateCheck.WaitForGateAsync(
                     GateIds.PMSpecification,
                     "PMSpec.md ready for human review before merge",
@@ -1559,6 +1561,7 @@ public class ProgramManagerAgent : AgentBase
             UpdateStatus(AgentStatus.Working, "Committing PMSpec.md and merging PR");
 
             // === Gate: PMSpecification — human reviews PMSpec before merge ===
+            UpdateStatus(AgentStatus.Working, $"⏳ Awaiting human approval on PR #{pr.Number}");
             await _gateCheck.WaitForGateAsync(
                 GateIds.PMSpecification,
                 "PMSpec.md ready for human review before merge",

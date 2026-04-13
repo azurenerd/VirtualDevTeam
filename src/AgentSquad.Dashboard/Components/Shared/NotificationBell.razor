@@ -1,5 +1,6 @@
 @using AgentSquad.Core.Notifications
-@inject GateNotificationService NotificationService
+@using AgentSquad.Dashboard.Services
+@inject IServiceProvider ServiceProvider
 @implements IDisposable
 
 <div class="notification-container">
@@ -137,9 +138,20 @@
     private NotificationFilter _currentFilter = NotificationFilter.Open;
     private IReadOnlyList<GateNotification> _notifications = Array.Empty<GateNotification>();
 
+    // Support both in-process (Runner) and HTTP proxy (standalone) notification sources
+    private GateNotificationService? _inProcessService;
+    private HttpGateNotificationService? _httpService;
+
     protected override void OnInitialized()
     {
-        NotificationService.OnChange += HandleNotificationChange;
+        _httpService = ServiceProvider.GetService<HttpGateNotificationService>();
+        _inProcessService = ServiceProvider.GetService<GateNotificationService>();
+
+        if (_httpService is not null)
+            _httpService.OnChange += HandleNotificationChange;
+        else if (_inProcessService is not null)
+            _inProcessService.OnChange += HandleNotificationChange;
+
         RefreshData();
     }
 
@@ -154,10 +166,20 @@
 
     private void RefreshData()
     {
-        _unreadCount = NotificationService.UnreadCount;
-        _openCount = NotificationService.OpenCount;
-        _resolvedCount = NotificationService.ResolvedCount;
-        _notifications = NotificationService.GetByStatus(_currentFilter);
+        if (_httpService is not null)
+        {
+            _unreadCount = _httpService.UnreadCount;
+            _openCount = _httpService.OpenCount;
+            _resolvedCount = _httpService.ResolvedCount;
+            _notifications = _httpService.GetByStatus(_currentFilter);
+        }
+        else if (_inProcessService is not null)
+        {
+            _unreadCount = _inProcessService.UnreadCount;
+            _openCount = _inProcessService.OpenCount;
+            _resolvedCount = _inProcessService.ResolvedCount;
+            _notifications = _inProcessService.GetByStatus(_currentFilter);
+        }
     }
 
     private void SetFilter(NotificationFilter filter)
@@ -177,12 +199,18 @@
 
     private void MarkAllRead()
     {
-        NotificationService.MarkAllAsRead();
+        if (_httpService is not null)
+            _httpService.MarkAllAsRead();
+        else
+            _inProcessService?.MarkAllAsRead();
     }
 
     private void OnLinkClicked(GateNotification notification)
     {
-        NotificationService.MarkAsRead(notification.Id);
+        if (_httpService is not null)
+            _httpService.MarkAsRead(notification.Id);
+        else
+            _inProcessService?.MarkAsRead(notification.Id);
     }
 
     private static string FormatTime(DateTime utcTime)
@@ -196,6 +224,9 @@
 
     public void Dispose()
     {
-        NotificationService.OnChange -= HandleNotificationChange;
+        if (_httpService is not null)
+            _httpService.OnChange -= HandleNotificationChange;
+        else if (_inProcessService is not null)
+            _inProcessService.OnChange -= HandleNotificationChange;
     }
 }
