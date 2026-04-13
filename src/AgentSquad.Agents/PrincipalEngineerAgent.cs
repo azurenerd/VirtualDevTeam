@@ -22,6 +22,9 @@ namespace AgentSquad.Agents;
 /// </summary>
 public class PrincipalEngineerAgent : EngineerAgentBase
 {
+    private const string IntegrationTaskId = "T-FINAL";
+    private const string IntegrationTaskName = "Final Integration & Validation";
+
     private readonly AgentRegistry _registry;
     private readonly IGateCheckService _gateCheck;
     private readonly EngineeringTaskIssueManager _taskManager;
@@ -37,6 +40,7 @@ public class PrincipalEngineerAgent : EngineerAgentBase
     private bool _allTasksComplete;
     private bool _integrationPrCreated;
     private bool _engineeringSignaled;
+    private int? _integrationIssueNumber;
     private readonly Dictionary<string, int> _agentAssignments = new();
     private readonly HashSet<int> _reviewedPrNumbers = new();
     private readonly HashSet<int> _forceApprovalPrs = new();
@@ -373,6 +377,11 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 Logger.LogInformation("Restored {Count} tasks from existing engineering-task issues ({Done} done, {Pending} pending)",
                     _taskManager.TotalCount, _taskManager.DoneCount, _taskManager.PendingCount);
 
+                // Recover integration issue number if present
+                var recoveredIntegration = _taskManager.Tasks.FirstOrDefault(t => t.Id == IntegrationTaskId);
+                if (recoveredIntegration?.IssueNumber is not null)
+                    _integrationIssueNumber = recoveredIntegration.IssueNumber;
+
                 _planningComplete = true;
                 UpdateStatus(AgentStatus.Working,
                     $"Loaded {_taskManager.TotalCount} tasks ({_taskManager.DoneCount} done, {_taskManager.PendingCount} pending)");
@@ -581,8 +590,32 @@ public class PrincipalEngineerAgent : EngineerAgentBase
         // and all other tasks depend on it
         EnsureFoundationFirstPattern(parsedTasks);
 
+        // Add a final integration & validation task that depends on ALL other tasks.
+        // The PE leader will self-assign this after all other tasks are done.
+        var allTaskIds = parsedTasks.Select(t => t.Id).ToList();
+        parsedTasks.Add(new EngineeringTask
+        {
+            Id = IntegrationTaskId,
+            Name = IntegrationTaskName,
+            Description = "Final integration and validation step performed by the Principal Engineer.\n\n" +
+                "After all engineering tasks have been completed and merged:\n" +
+                "1. Review the full codebase against the Architecture and PM Spec for integration gaps\n" +
+                "2. Check for broken cross-module references, missing DI wiring, missing route registration\n" +
+                "3. Verify the solution builds cleanly\n" +
+                "4. Create a PR with any integration fixes needed\n" +
+                "5. If no fixes are needed, close this issue directly\n\n" +
+                "This task is automatically assigned to the PE leader when all other tasks are complete.",
+            Complexity = "High",
+            Dependencies = allTaskIds
+        });
+
         // Create GitHub issues for each task (the single source of truth)
         var createdTasks = await _taskManager.CreateTaskIssuesAsync(parsedTasks, ct);
+
+        // Track the integration issue number for later self-assignment
+        var integrationTask = createdTasks.FirstOrDefault(t => t.Id == IntegrationTaskId);
+        if (integrationTask?.IssueNumber is not null)
+            _integrationIssueNumber = integrationTask.IssueNumber;
 
         // Now resolve dependency task IDs (T1, T2) to actual issue numbers
         // Build a map from task ID → issue number
@@ -923,6 +956,9 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                     continue;
 
                 var task = _taskManager.FindNextAssignableTask(complexityPreferences);
+                // Never assign the integration task to regular engineers — PE leader handles it
+                if (task?.Id == IntegrationTaskId)
+                    task = null;
                 if (task is null || !task.IssueNumber.HasValue)
                     continue;
 
@@ -1002,6 +1038,11 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 // ── LEADER PE: refresh cache from GitHub to see latest assignments, then pick ──
                 await _taskManager.LoadTasksAsync(ct);
                 task = _taskManager.FindNextAssignableTask("High", "Medium", "Low");
+
+                // Never pick up the integration task through normal assignment — it's handled
+                // by CheckAllTasksCompleteAsync → CreateIntegrationPRAsync
+                if (task?.Id == IntegrationTaskId)
+                    task = null;
 
                 if (task is null)
                 {
@@ -2452,13 +2493,26 @@ public class PrincipalEngineerAgent : EngineerAgentBase
         // Refresh from GitHub to get latest state
         await _taskManager.LoadTasksAsync(ct);
 
-        if (!_taskManager.AreAllTasksDone())
+        // Check if all tasks EXCEPT the final integration task are done
+        var nonIntegrationTasks = _taskManager.Tasks
+            .Where(t => t.Id != IntegrationTaskId)
+            .ToList();
+
+        if (nonIntegrationTasks.Count == 0 || !nonIntegrationTasks.All(EngineeringTaskIssueManager.IsTaskDone))
             return;
 
         _allTasksComplete = true;
-        Logger.LogInformation("🎉 All {Count} engineering tasks are complete!", _taskManager.TotalCount);
-        LogActivity("system", $"🎉 All {_taskManager.TotalCount} engineering tasks complete — entering integration phase");
-        UpdateStatus(AgentStatus.Working, "All tasks complete — creating integration PR");
+        Logger.LogInformation("🎉 All {Count} engineering tasks are complete! Starting final integration.",
+            nonIntegrationTasks.Count);
+        LogActivity("system", $"🎉 All {nonIntegrationTasks.Count} engineering tasks complete — entering integration phase");
+        UpdateStatus(AgentStatus.Working, "All tasks complete — starting final integration & validation");
+
+        // Self-assign the integration issue
+        if (_integrationIssueNumber is not null)
+        {
+            await _taskManager.AssignTaskAsync(_integrationIssueNumber.Value, Identity.DisplayName, ct);
+            Logger.LogInformation("Self-assigned integration issue #{IssueNumber}", _integrationIssueNumber);
+        }
 
         await MessageBus.PublishAsync(new StatusUpdateMessage
         {
@@ -2466,7 +2520,7 @@ public class PrincipalEngineerAgent : EngineerAgentBase
             ToAgentId = "*",
             MessageType = "AllTasksComplete",
             NewStatus = AgentStatus.Working,
-            Details = $"All {_taskManager.TotalCount} engineering tasks are done"
+            Details = $"All {nonIntegrationTasks.Count} engineering tasks are done — starting final integration"
         }, ct);
     }
 
@@ -2516,6 +2570,9 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 Logger.LogInformation("No integration fixes needed — all tasks cleanly integrated");
                 LogActivity("task", "✅ No integration fixes needed — signaling completion");
                 _integrationPrCreated = true;
+
+                // Close the integration issue — validation passed with no fixes needed
+                await CloseIntegrationIssueAsync("✅ No integration fixes needed — all tasks cleanly integrated.", ct);
 
                 // Signal completion directly
                 await SignalEngineeringCompleteAsync(ct);
@@ -2582,6 +2639,10 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 pr.Number, codeFiles.Count);
             LogActivity("task", $"📦 Created integration PR #{pr.Number} with {codeFiles.Count} fixes");
 
+            // Close the integration issue — PR has been created with the fixes
+            await CloseIntegrationIssueAsync(
+                $"Integration PR #{pr.Number} created with {codeFiles.Count} fixes.", ct);
+
             await RememberAsync(MemoryType.Action,
                 $"Created integration PR #{pr.Number} with {codeFiles.Count} integration fixes", ct: ct);
         }
@@ -2592,6 +2653,31 @@ public class PrincipalEngineerAgent : EngineerAgentBase
             // Signal completion anyway so the pipeline doesn't get stuck
             _integrationPrCreated = true;
             await SignalEngineeringCompleteAsync(ct);
+        }
+    }
+
+    private async Task CloseIntegrationIssueAsync(string comment, CancellationToken ct)
+    {
+        if (_integrationIssueNumber is null)
+        {
+            // Try to find it from the task manager cache
+            var task = _taskManager.Tasks.FirstOrDefault(t => t.Id == IntegrationTaskId);
+            if (task?.IssueNumber is not null)
+                _integrationIssueNumber = task.IssueNumber;
+        }
+
+        if (_integrationIssueNumber is not null)
+        {
+            try
+            {
+                await GitHub.AddIssueCommentAsync(_integrationIssueNumber.Value, comment, ct);
+                await GitHub.CloseIssueAsync(_integrationIssueNumber.Value, ct);
+                Logger.LogInformation("Closed integration issue #{IssueNumber}", _integrationIssueNumber);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex, "Failed to close integration issue #{IssueNumber}", _integrationIssueNumber);
+            }
         }
     }
 
