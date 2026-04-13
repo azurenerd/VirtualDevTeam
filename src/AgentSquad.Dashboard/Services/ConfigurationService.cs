@@ -15,14 +15,18 @@ namespace AgentSquad.Dashboard.Services;
 /// </summary>
 public sealed class ConfigurationService : IConfigurationService
 {
-    private readonly IOptions<AgentSquadConfig> _config;
+    private readonly IOptionsMonitor<AgentSquadConfig> _config;
     private readonly IGitHubService _github;
     private readonly AgentRegistry _registry;
     private readonly AgentSpawnManager _spawnManager;
     private readonly WorkflowStateMachine _workflow;
     private readonly IDashboardDataService _dashboard;
     private readonly ILogger<ConfigurationService> _logger;
+    private readonly IConfiguration _rootConfiguration;
     private readonly string _appSettingsPath;
+
+    /// <summary>Tracks the latest saved config so GetCurrentConfig returns fresh data even before IOptions reloads.</summary>
+    private AgentSquadConfig? _lastSavedConfig;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -31,13 +35,14 @@ public sealed class ConfigurationService : IConfigurationService
     };
 
     public ConfigurationService(
-        IOptions<AgentSquadConfig> config,
+        IOptionsMonitor<AgentSquadConfig> config,
         IGitHubService github,
         AgentRegistry registry,
         AgentSpawnManager spawnManager,
         WorkflowStateMachine workflow,
         IDashboardDataService dashboard,
         ILogger<ConfigurationService> logger,
+        IConfiguration rootConfiguration,
         IWebHostEnvironment env)
     {
         _config = config;
@@ -47,11 +52,12 @@ public sealed class ConfigurationService : IConfigurationService
         _workflow = workflow;
         _dashboard = dashboard;
         _logger = logger;
+        _rootConfiguration = rootConfiguration;
         _appSettingsPath = Path.Combine(env.ContentRootPath, "appsettings.json");
     }
 
-    /// <summary>Returns the current in-memory config snapshot.</summary>
-    public AgentSquadConfig GetCurrentConfig() => _config.Value;
+    /// <summary>Returns the latest config — either from last save or from IOptionsMonitor.</summary>
+    public AgentSquadConfig GetCurrentConfig() => _lastSavedConfig ?? _config.CurrentValue;
 
     /// <summary>
     /// Validates a GitHub PAT token against a specified repo.
@@ -112,7 +118,7 @@ public sealed class ConfigurationService : IConfigurationService
     }
 
     /// <summary>Returns the GitHub repo name from config.</summary>
-    public string GetRepoName() => _config.Value.Project.GitHubRepo;
+    public string GetRepoName() => _config.CurrentValue.Project.GitHubRepo;
 
     /// <summary>Reads the raw JSON from appsettings.json.</summary>
     public async Task<JsonObject?> ReadAppSettingsAsync()
@@ -142,6 +148,13 @@ public sealed class ConfigurationService : IConfigurationService
         var output = root.ToJsonString(JsonOptions);
         await File.WriteAllTextAsync(_appSettingsPath, output);
 
+        // Cache the saved config so GetCurrentConfig returns it immediately
+        _lastSavedConfig = updatedConfig;
+
+        // Trigger IConfiguration reload so IOptionsMonitor picks up the new values
+        if (_rootConfiguration is IConfigurationRoot configRoot)
+            configRoot.Reload();
+
         _logger.LogInformation("Configuration saved to {Path}", _appSettingsPath);
     }
 
@@ -150,7 +163,7 @@ public sealed class ConfigurationService : IConfigurationService
     /// </summary>
     public async Task<CleanupSummary> ScanRepoForCleanupAsync(CancellationToken ct = default)
     {
-        var config = _config.Value.Project;
+        var config = _config.CurrentValue.Project;
         var summary = new CleanupSummary { RepoFullName = config.GitHubRepo };
 
         try
@@ -187,7 +200,7 @@ public sealed class ConfigurationService : IConfigurationService
         string? caveats, CancellationToken ct = default)
     {
         var result = new CleanupResult();
-        var config = _config.Value.Project;
+        var config = _config.CurrentValue.Project;
 
         try
         {
@@ -401,7 +414,7 @@ public sealed class ConfigurationService : IConfigurationService
             }
 
             // Clean agent workspace directories
-            var workspaceRoot = _config.Value.Workspace.RootPath;
+            var workspaceRoot = _config.CurrentValue.Workspace.RootPath;
             if (!string.IsNullOrEmpty(workspaceRoot) && Directory.Exists(workspaceRoot))
             {
                 try
@@ -579,3 +592,4 @@ public sealed class PatValidationResult
     public string? AuthenticatedUser { get; set; }
     public List<string> Permissions { get; set; } = new();
 }
+
