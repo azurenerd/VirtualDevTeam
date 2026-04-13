@@ -228,7 +228,9 @@ else
         _isRateLimited = DataService.IsGitHubRateLimited;
         try
         {
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            // DashboardDataService now has its own 8s timeout with background retry,
+            // so we give it a generous window here
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
             var issuesTask = DataService.GetIssuesAsync();
             var prsTask = DataService.GetPullRequestsAsync();
             try { await Task.WhenAll(issuesTask, prsTask).WaitAsync(cts.Token); }
@@ -239,14 +241,16 @@ else
             _isRateLimited = DataService.IsGitHubRateLimited;
             BuildTimeline();
 
-            if (_phases.Count == 0 && _isRateLimited)
-                _ = RetryAfterDelay(TimeSpan.FromSeconds(30));
+            // Auto-retry: if empty data (rate-limited, timeout, or just not ready yet)
+            if (_phases.Count == 0)
+                _ = RetryAfterDelay(TimeSpan.FromSeconds(_isRateLimited ? 30 : 15));
         }
         catch
         {
             _issues = [];
             _pullRequests = [];
             BuildTimeline();
+            _ = RetryAfterDelay(TimeSpan.FromSeconds(15));
         }
         finally { _loading = false; }
     }

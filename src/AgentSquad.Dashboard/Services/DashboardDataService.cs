@@ -880,12 +880,14 @@ public sealed class DashboardDataService : BackgroundService
     /// <summary>True when GitHub API rate limit is active — dashboard should show cached data.</summary>
     public bool IsGitHubRateLimited => _rateLimitManager.IsRateLimited;
 
+    /// <summary>Short timeout for dashboard API calls to avoid blocking on rate limiter semaphore contention.</summary>
+    private static readonly TimeSpan DashboardApiTimeout = TimeSpan.FromSeconds(8);
+
     public async Task<IReadOnlyList<AgentPullRequest>> GetPullRequestsAsync()
     {
         if (DateTime.UtcNow - _lastPrFetchUtc < PrCacheExpiry && _cachedPullRequests.Count > 0)
             return _cachedPullRequests;
 
-        // Don't block dashboard waiting for rate limit reset — return cached data immediately
         if (_rateLimitManager.IsRateLimited)
         {
             _logger.LogDebug("Skipping PR fetch — GitHub API is rate-limited");
@@ -894,9 +896,17 @@ public sealed class DashboardDataService : BackgroundService
 
         try
         {
-            var allPrs = await _github.GetAllPullRequestsAsync();
+            // Use a short timeout to avoid blocking the dashboard when agents saturate the rate limiter semaphore.
+            // If the call times out, return whatever cache we have and schedule a background refresh.
+            using var cts = new CancellationTokenSource(DashboardApiTimeout);
+            var allPrs = await _github.GetAllPullRequestsAsync(cts.Token);
             _cachedPullRequests = allPrs.Where(pr => pr.CreatedAt >= _stateStore.RunStartedUtc).ToList();
             _lastPrFetchUtc = DateTime.UtcNow;
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogDebug("PR fetch timed out (semaphore contention) — returning cached data, scheduling background refresh");
+            ScheduleBackgroundRefresh();
         }
         catch (Exception ex)
         {
@@ -913,7 +923,6 @@ public sealed class DashboardDataService : BackgroundService
         if (DateTime.UtcNow - _lastIssueFetchUtc < PrCacheExpiry && _cachedIssues.Count > 0)
             return _cachedIssues;
 
-        // Don't block dashboard waiting for rate limit reset — return cached data immediately
         if (_rateLimitManager.IsRateLimited)
         {
             _logger.LogDebug("Skipping issue fetch — GitHub API is rate-limited");
@@ -922,9 +931,15 @@ public sealed class DashboardDataService : BackgroundService
 
         try
         {
-            var allIssues = await _github.GetAllIssuesAsync();
+            using var cts = new CancellationTokenSource(DashboardApiTimeout);
+            var allIssues = await _github.GetAllIssuesAsync(cts.Token);
             _cachedIssues = allIssues.Where(i => i.CreatedAt >= _stateStore.RunStartedUtc).ToList();
             _lastIssueFetchUtc = DateTime.UtcNow;
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogDebug("Issue fetch timed out (semaphore contention) — returning cached data, scheduling background refresh");
+            ScheduleBackgroundRefresh();
         }
         catch (Exception ex)
         {
@@ -932,6 +947,51 @@ public sealed class DashboardDataService : BackgroundService
         }
 
         return _cachedIssues;
+    }
+
+    private int _backgroundRefreshScheduled;
+
+    /// <summary>
+    /// Schedule a background data refresh after a short delay — allows rate limiter semaphore contention to clear.
+    /// </summary>
+    private void ScheduleBackgroundRefresh()
+    {
+        if (Interlocked.CompareExchange(ref _backgroundRefreshScheduled, 1, 0) != 0)
+            return; // Already scheduled
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(15));
+
+                // Retry issues
+                try
+                {
+                    var allIssues = await _github.GetAllIssuesAsync();
+                    _cachedIssues = allIssues.Where(i => i.CreatedAt >= _stateStore.RunStartedUtc).ToList();
+                    _lastIssueFetchUtc = DateTime.UtcNow;
+                    _logger.LogInformation("Background refresh: loaded {Count} issues", _cachedIssues.Count);
+                }
+                catch (Exception ex) { _logger.LogDebug(ex, "Background issue refresh failed"); }
+
+                // Retry PRs
+                try
+                {
+                    var allPrs = await _github.GetAllPullRequestsAsync();
+                    _cachedPullRequests = allPrs.Where(pr => pr.CreatedAt >= _stateStore.RunStartedUtc).ToList();
+                    _lastPrFetchUtc = DateTime.UtcNow;
+                    _logger.LogInformation("Background refresh: loaded {Count} PRs", _cachedPullRequests.Count);
+                }
+                catch (Exception ex) { _logger.LogDebug(ex, "Background PR refresh failed"); }
+
+                NotifyStateChanged();
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _backgroundRefreshScheduled, 0);
+            }
+        });
     }
 
     // Observable event for Blazor components to subscribe to for re-rendering
