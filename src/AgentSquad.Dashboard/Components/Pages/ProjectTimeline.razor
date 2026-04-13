@@ -16,7 +16,7 @@
         <span class="badge badge-purple">@_pullRequests.Count PRs</span>
         @if (_completedCount > 0)
         {
-            <span class="badge badge-info">@_completedCount / @(_issues.Count + _pullRequests.Count) Complete</span>
+            <span class="badge badge-info">@_completedCount / @_totalCount Complete</span>
         }
     </div>
 </div>
@@ -28,7 +28,7 @@
         <div class="empty-text">Loading timeline...</div>
     </div>
 }
-else if (_timelineNodes.Count == 0)
+else if (_phases.Count == 0 && _unlinkedPRs.Count == 0)
 {
     <div class="empty-state">
         <div class="empty-icon">🗺️</div>
@@ -38,145 +38,206 @@ else if (_timelineNodes.Count == 0)
 }
 else
 {
-    <!-- Legend -->
-    <div class="tl-legend">
-        <div class="tl-legend-item">
-            <span class="tl-legend-dot tl-dot-issue-open"></span> Issue (Open)
+    <!-- Overall progress bar -->
+    <div class="tl-overall-progress">
+        <div class="tl-progress-stats">
+            <span class="tl-progress-pct">@(_totalCount > 0 ? (_completedCount * 100 / _totalCount) : 0)% complete</span>
+            <span class="tl-progress-counts">@_completedCount of @_totalCount items done</span>
         </div>
-        <div class="tl-legend-item">
-            <span class="tl-legend-dot tl-dot-issue-closed"></span> Issue (Closed)
-        </div>
-        <div class="tl-legend-item">
-            <span class="tl-legend-dot tl-dot-pr-open"></span> PR (Open)
-        </div>
-        <div class="tl-legend-item">
-            <span class="tl-legend-dot tl-dot-pr-merged"></span> PR (Merged)
-        </div>
-        <div class="tl-legend-item">
-            <span class="tl-legend-line"></span> Linked (Closes Issue)
+        <div class="tl-progress-track">
+            <div class="tl-progress-fill" style="width: @(_totalCount > 0 ? (_completedCount * 100 / _totalCount) : 0)%"></div>
         </div>
     </div>
 
-    <!-- Timeline Container -->
-    <div class="tl-container">
-        <!-- Main horizontal spine -->
-        <div class="tl-spine"></div>
-
-        @foreach (var group in _timelineNodes)
+    <!-- Filter bar -->
+    <div class="tl-filters">
+        <div class="tl-filter-group">
+            <button class="tl-filter-btn @(_statusFilter == "all" ? "active" : "")" @onclick='() => SetFilter("all")'>All</button>
+            <button class="tl-filter-btn @(_statusFilter == "open" ? "active" : "")" @onclick='() => SetFilter("open")'>Open</button>
+            <button class="tl-filter-btn @(_statusFilter == "closed" ? "active" : "")" @onclick='() => SetFilter("closed")'>Closed</button>
+        </div>
+        <div class="tl-filter-group">
+            <span class="tl-filter-label">Group:</span>
+            <button class="tl-filter-btn @(_groupBy == "phase" ? "active" : "")" @onclick='() => SetGroupBy("phase")'>Phase</button>
+            <button class="tl-filter-btn @(_groupBy == "agent" ? "active" : "")" @onclick='() => SetGroupBy("agent")'>Agent</button>
+            <button class="tl-filter-btn @(_groupBy == "flat" ? "active" : "")" @onclick='() => SetGroupBy("flat")'>Flat</button>
+        </div>
+        @if (!string.IsNullOrEmpty(_searchText))
         {
-            var isAbove = group.Position % 2 == 0;
-            var issueNode = group.Issue;
-            var leftPct = GetTimelinePosition(group);
+            <button class="tl-filter-btn tl-clear-btn" @onclick="ClearSearch">✕ Clear</button>
+        }
+        <input class="tl-search" type="text" placeholder="Filter by title..." @bind="_searchText" @bind:event="oninput" />
+    </div>
 
-            <div class="tl-group" style="left: @(leftPct)%;">
-                <!-- Vertical connector from spine -->
-                <div class="tl-connector @(isAbove ? "tl-connector-above" : "tl-connector-below")"></div>
+    <!-- Phase accordion sections -->
+    @foreach (var phase in GetFilteredPhases())
+    {
+        var phaseComplete = phase.Items.Count(g => g.Issue.State == "closed");
+        var phaseTotal = phase.Items.Count;
+        var phasePct = phaseTotal > 0 ? phaseComplete * 100 / phaseTotal : 0;
+        var isExpanded = _expandedPhases.Contains(phase.Name);
 
-                <!-- Issue milestone node on spine -->
-                <div class="tl-milestone @GetIssueClass(issueNode)"
-                     title="Issue #@issueNode.Number: @issueNode.Title"
-                     @onclick="() => OpenGitHub(issueNode.Url)">
-                    <span class="tl-milestone-number">#@issueNode.Number</span>
+        <div class="tl-phase @(isExpanded ? "expanded" : "")">
+            <div class="tl-phase-header" @onclick="() => TogglePhase(phase.Name)">
+                <span class="tl-phase-chevron">@(isExpanded ? "▾" : "▸")</span>
+                <span class="tl-phase-icon">@phase.Icon</span>
+                <span class="tl-phase-name">@phase.Name</span>
+                <span class="tl-phase-count">@phaseTotal items</span>
+                <div class="tl-phase-progress-track">
+                    <div class="tl-phase-progress-fill @(phasePct == 100 ? "complete" : "")" style="width: @(phasePct)%"></div>
                 </div>
+                <span class="tl-phase-pct @(phasePct == 100 ? "complete" : "")">@phaseComplete/@phaseTotal</span>
+            </div>
 
-                <!-- Card branch (above or below spine) -->
-                <div class="tl-card-branch @(isAbove ? "tl-branch-above" : "tl-branch-below")">
-                    <!-- Issue card -->
-                    <div class="tl-card tl-card-issue @GetIssueCardClass(issueNode)"
-                         @onclick="() => OpenGitHub(issueNode.Url)">
-                        <div class="tl-card-header">
-                            <span class="tl-card-type">📋 Issue #@issueNode.Number</span>
-                            <span class="tl-card-state @GetStateClass(issueNode.State)">
-                                @(issueNode.State == "closed" ? "✔ Closed" : "● Open")
-                            </span>
+            @if (isExpanded)
+            {
+                <div class="tl-phase-body">
+                    <div class="tl-table">
+                        <div class="tl-table-head">
+                            <span class="tl-col-num">#</span>
+                            <span class="tl-col-status"></span>
+                            <span class="tl-col-title">Title</span>
+                            <span class="tl-col-agent">Agent</span>
+                            <span class="tl-col-prs">PRs</span>
+                            <span class="tl-col-time">Created</span>
                         </div>
-                        <div class="tl-card-title">@TruncateTitle(issueNode.Title)</div>
-                        @if (!string.IsNullOrEmpty(issueNode.AssignedAgent))
+                        @foreach (var group in phase.Items)
                         {
-                            <div class="tl-card-agent">👤 @issueNode.AssignedAgent</div>
-                        }
-                        <div class="tl-card-time">@FormatTime(issueNode.CreatedAt)</div>
-                    </div>
+                            var issue = group.Issue;
+                            var isIssueExpanded = _expandedIssues.Contains(issue.Number);
+                            var hasLinkedPRs = group.LinkedPRs.Count > 0;
 
-                    <!-- PR branches off this issue -->
-                    @if (group.LinkedPRs.Count > 0)
-                    {
-                        <div class="tl-pr-branch">
-                            @foreach (var pr in group.LinkedPRs)
-                            {
-                                <div class="tl-branch-connector"></div>
-                                <div class="tl-card tl-card-pr @GetPrCardClass(pr)"
-                                     @onclick="() => OpenGitHub(pr.Url)">
-                                    <div class="tl-card-header">
-                                        <span class="tl-card-type">
-                                            @(pr.IsMerged ? "🟣" : "🟢") PR #@pr.Number
-                                        </span>
-                                        <span class="tl-card-state @GetPrStateClass(pr)">
-                                            @GetPrStateLabel(pr)
-                                        </span>
-                                    </div>
-                                    <div class="tl-card-title">@TruncateTitle(pr.Title)</div>
-                                    @if (!string.IsNullOrEmpty(pr.AssignedAgent))
+                            <!-- Issue row -->
+                            <div class="tl-row tl-row-issue @(issue.State == "closed" ? "closed" : "open") @(hasLinkedPRs ? "expandable" : "")"
+                                 @onclick="() => ToggleIssue(issue.Number)">
+                                <span class="tl-col-num">@issue.Number</span>
+                                <span class="tl-col-status">
+                                    <span class="tl-dot @(issue.State == "closed" ? "dot-closed" : "dot-open")" title="@(issue.State == "closed" ? "Closed" : "Open")"></span>
+                                </span>
+                                <span class="tl-col-title">
+                                    @if (hasLinkedPRs)
                                     {
-                                        <div class="tl-card-agent">👤 @pr.AssignedAgent</div>
+                                        <span class="tl-expand-icon">@(isIssueExpanded ? "▾" : "▸")</span>
                                     }
+                                    <span class="tl-item-title" title="@issue.Title">@issue.Title</span>
+                                </span>
+                                <span class="tl-col-agent" title="@issue.AssignedAgent">@ShortenAgent(issue.AssignedAgent)</span>
+                                <span class="tl-col-prs">
+                                    @if (hasLinkedPRs)
+                                    {
+                                        <span class="tl-pr-badge">@group.LinkedPRs.Count</span>
+                                    }
+                                </span>
+                                <span class="tl-col-time">@FormatTime(issue.CreatedAt)</span>
+                            </div>
+
+                            <!-- Nested PR rows -->
+                            @if (isIssueExpanded && hasLinkedPRs)
+                            {
+                                @foreach (var pr in group.LinkedPRs)
+                                {
+                                    <div class="tl-row tl-row-pr @GetPrRowClass(pr)"
+                                         @onclick="() => OpenGitHub(pr.Url)" @onclick:stopPropagation="true">
+                                        <span class="tl-col-num tl-pr-num">@pr.Number</span>
+                                        <span class="tl-col-status">
+                                            <span class="tl-dot @GetPrDotClass(pr)" title="@GetPrStateLabel(pr)"></span>
+                                        </span>
+                                        <span class="tl-col-title">
+                                            <span class="tl-pr-indent">└</span>
+                                            <span class="tl-item-title" title="@pr.Title">@pr.Title</span>
+                                        </span>
+                                        <span class="tl-col-agent" title="@pr.AssignedAgent">@ShortenAgent(pr.AssignedAgent)</span>
+                                        <span class="tl-col-prs">
+                                            @if (pr.ChangedFiles.Count > 0)
+                                            {
+                                                <span class="tl-files-badge" title="@pr.ChangedFiles.Count changed files">@pr.ChangedFiles.Count</span>
+                                            }
+                                        </span>
+                                        <span class="tl-col-time">@FormatTime(pr.CreatedAt)</span>
+                                    </div>
+                                }
+                            }
+                        }
+                    </div>
+                </div>
+            }
+        </div>
+    }
+
+    <!-- Standalone PRs (no linked issue) -->
+    @if (GetFilteredUnlinkedPRs().Any())
+    {
+        var standaloneExpanded = _expandedPhases.Contains("__standalone__");
+        var standaloneList = GetFilteredUnlinkedPRs().ToList();
+        var standaloneComplete = standaloneList.Count(p => p.IsMerged || p.State == "closed");
+
+        <div class="tl-phase @(standaloneExpanded ? "expanded" : "")">
+            <div class="tl-phase-header" @onclick='() => TogglePhase("__standalone__")'>
+                <span class="tl-phase-chevron">@(standaloneExpanded ? "▾" : "▸")</span>
+                <span class="tl-phase-icon">🔗</span>
+                <span class="tl-phase-name">Standalone PRs</span>
+                <span class="tl-phase-count">@standaloneList.Count PRs</span>
+                <div class="tl-phase-progress-track">
+                    <div class="tl-phase-progress-fill @(standaloneComplete == standaloneList.Count ? "complete" : "")"
+                         style="width: @(standaloneList.Count > 0 ? standaloneComplete * 100 / standaloneList.Count : 0)%"></div>
+                </div>
+                <span class="tl-phase-pct">@standaloneComplete/@standaloneList.Count</span>
+            </div>
+            @if (standaloneExpanded)
+            {
+                <div class="tl-phase-body">
+                    <div class="tl-table">
+                        <div class="tl-table-head">
+                            <span class="tl-col-num">#</span>
+                            <span class="tl-col-status"></span>
+                            <span class="tl-col-title">Title</span>
+                            <span class="tl-col-agent">Agent</span>
+                            <span class="tl-col-prs">Files</span>
+                            <span class="tl-col-time">Created</span>
+                        </div>
+                        @foreach (var pr in standaloneList)
+                        {
+                            <div class="tl-row tl-row-pr @GetPrRowClass(pr)"
+                                 @onclick="() => OpenGitHub(pr.Url)">
+                                <span class="tl-col-num">@pr.Number</span>
+                                <span class="tl-col-status">
+                                    <span class="tl-dot @GetPrDotClass(pr)" title="@GetPrStateLabel(pr)"></span>
+                                </span>
+                                <span class="tl-col-title">
+                                    <span class="tl-item-title" title="@pr.Title">@pr.Title</span>
+                                </span>
+                                <span class="tl-col-agent" title="@pr.AssignedAgent">@ShortenAgent(pr.AssignedAgent)</span>
+                                <span class="tl-col-prs">
                                     @if (pr.ChangedFiles.Count > 0)
                                     {
-                                        <div class="tl-card-files">📁 @pr.ChangedFiles.Count files</div>
+                                        <span class="tl-files-badge">@pr.ChangedFiles.Count</span>
                                     }
-                                    <div class="tl-card-time">@FormatTime(pr.CreatedAt)</div>
-                                </div>
-                            }
-                        </div>
-                    }
-                </div>
-            </div>
-        }
-
-        <!-- Unlinked PRs (no associated issue) -->
-        @if (_unlinkedPRs.Count > 0)
-        {
-            <div class="tl-unlinked-section">
-                <h3 class="tl-unlinked-header">Standalone PRs</h3>
-                <div class="tl-unlinked-grid">
-                    @foreach (var pr in _unlinkedPRs)
-                    {
-                        <div class="tl-card tl-card-pr @GetPrCardClass(pr)"
-                             @onclick="() => OpenGitHub(pr.Url)">
-                            <div class="tl-card-header">
-                                <span class="tl-card-type">
-                                    @(pr.IsMerged ? "🟣" : "🟢") PR #@pr.Number
                                 </span>
-                                <span class="tl-card-state @GetPrStateClass(pr)">
-                                    @GetPrStateLabel(pr)
-                                </span>
+                                <span class="tl-col-time">@FormatTime(pr.CreatedAt)</span>
                             </div>
-                            <div class="tl-card-title">@TruncateTitle(pr.Title)</div>
-                            @if (!string.IsNullOrEmpty(pr.AssignedAgent))
-                            {
-                                <div class="tl-card-agent">👤 @pr.AssignedAgent</div>
-                            }
-                            <div class="tl-card-time">@FormatTime(pr.CreatedAt)</div>
-                        </div>
-                    }
+                        }
+                    </div>
                 </div>
-            </div>
-        }
-
-        <!-- Progress terminus -->
-        <div class="tl-terminus">
-            <span class="tl-terminus-label">@GetProgressLabel()</span>
+            }
         </div>
-    </div>
+    }
 }
 
 @code {
     private List<AgentIssue> _issues = [];
     private List<AgentPullRequest> _pullRequests = [];
-    private List<TimelineGroup> _timelineNodes = [];
+    private List<TimelinePhase> _phases = [];
     private List<AgentPullRequest> _unlinkedPRs = [];
     private bool _loading = true;
     private int _completedCount;
+    private int _totalCount;
+
+    // Filter / grouping state
+    private string _statusFilter = "all";
+    private string _groupBy = "phase";
+    private string _searchText = "";
+    private HashSet<string> _expandedPhases = new();
+    private HashSet<int> _expandedIssues = new();
 
     protected override async Task OnInitializedAsync()
     {
@@ -217,69 +278,200 @@ else
             }
         }
 
-        // Build timeline groups: each issue is a node, with its linked PRs branching off
-        var groups = new List<TimelineGroup>();
-        var position = 0;
+        // Build issue groups
+        var groups = new List<IssueGroup>();
         foreach (var issue in _issues.OrderBy(i => i.CreatedAt))
         {
             var linkedPRs = prsByLinkedIssue.GetValueOrDefault(issue.Number, []);
-            groups.Add(new TimelineGroup
+            groups.Add(new IssueGroup
             {
                 Issue = issue,
-                LinkedPRs = linkedPRs.OrderBy(p => p.CreatedAt).ToList(),
-                Position = position++
+                LinkedPRs = linkedPRs.OrderBy(p => p.CreatedAt).ToList()
             });
         }
 
-        _timelineNodes = groups;
+        // Group into phases
+        _phases = _groupBy switch
+        {
+            "agent" => BuildAgentPhases(groups),
+            "flat" => [new TimelinePhase { Name = "All Items", Icon = "📋", Items = groups }],
+            _ => BuildWorkflowPhases(groups)
+        };
+
         _unlinkedPRs = _pullRequests
             .Where(pr => !linkedPrNumbers.Contains(pr.Number))
             .OrderBy(pr => pr.CreatedAt)
             .ToList();
 
-        // Count completed items
         _completedCount = _issues.Count(i => i.State == "closed")
             + _pullRequests.Count(p => p.IsMerged || p.State == "closed");
+        _totalCount = _issues.Count + _pullRequests.Count;
+
+        // Auto-expand phases that have open items
+        foreach (var phase in _phases)
+        {
+            if (phase.Items.Any(g => g.Issue.State != "closed"))
+                _expandedPhases.Add(phase.Name);
+        }
+        if (_unlinkedPRs.Any(p => !p.IsMerged && p.State != "closed"))
+            _expandedPhases.Add("__standalone__");
     }
 
-    private double GetTimelinePosition(TimelineGroup group)
+    private List<TimelinePhase> BuildWorkflowPhases(List<IssueGroup> groups)
     {
-        if (_timelineNodes.Count <= 1) return 50;
-        // Spread from 5% to 90% of width
-        return 5.0 + (group.Position * 85.0 / Math.Max(1, _timelineNodes.Count - 1));
+        var phaseMap = new Dictionary<string, (string icon, List<IssueGroup> items)>
+        {
+            ["Research"] = ("🔍", []),
+            ["Specification"] = ("📝", []),
+            ["Architecture"] = ("🏗️", []),
+            ["Engineering"] = ("⚙️", []),
+            ["Testing"] = ("🧪", []),
+            ["Review"] = ("👀", []),
+            ["Other"] = ("📌", [])
+        };
+
+        foreach (var group in groups)
+        {
+            var phase = DetectPhase(group.Issue);
+            phaseMap[phase].items.Add(group);
+        }
+
+        return phaseMap
+            .Where(kv => kv.Value.items.Count > 0)
+            .Select(kv => new TimelinePhase { Name = kv.Key, Icon = kv.Value.icon, Items = kv.Value.items })
+            .ToList();
     }
 
-    private string GetIssueClass(AgentIssue issue) =>
-        issue.State == "closed" ? "tl-milestone-closed" : "tl-milestone-open";
+    private List<TimelinePhase> BuildAgentPhases(List<IssueGroup> groups)
+    {
+        return groups
+            .GroupBy(g => g.Issue.AssignedAgent ?? "Unassigned")
+            .OrderBy(g => g.Key)
+            .Select(g => new TimelinePhase
+            {
+                Name = g.Key,
+                Icon = "👤",
+                Items = g.OrderBy(x => x.Issue.CreatedAt).ToList()
+            })
+            .ToList();
+    }
 
-    private string GetIssueCardClass(AgentIssue issue) =>
-        issue.State == "closed" ? "tl-card-closed" : "tl-card-open";
+    private string DetectPhase(AgentIssue issue)
+    {
+        var title = issue.Title.ToLowerInvariant();
+        var agent = (issue.AssignedAgent ?? "").ToLowerInvariant();
+        var labels = issue.Labels.Select(l => l.ToLowerInvariant()).ToList();
 
-    private string GetPrCardClass(AgentPullRequest pr) =>
-        pr.IsMerged ? "tl-card-merged" : pr.State == "closed" ? "tl-card-closed" : "tl-card-open";
+        if (title.Contains("research") || agent.Contains("researcher"))
+            return "Research";
+        if (title.Contains("pm spec") || title.Contains("specification") || agent.Contains("programmanager"))
+            return "Specification";
+        if (title.Contains("architect") || agent.Contains("architect"))
+            return "Architecture";
+        if (title.Contains("test") || agent.Contains("testengineer"))
+            return "Testing";
+        if (title.Contains("review") || labels.Contains("ready-for-review"))
+            return "Review";
+        if (agent.Contains("engineer") || labels.Contains("engineering-task"))
+            return "Engineering";
 
-    private string GetStateClass(string state) =>
-        state == "closed" ? "tl-state-closed" : "tl-state-open";
+        return "Other";
+    }
 
-    private string GetPrStateClass(AgentPullRequest pr) =>
-        pr.IsMerged ? "tl-state-merged" : pr.State == "closed" ? "tl-state-closed" : "tl-state-open";
+    private List<TimelinePhase> GetFilteredPhases()
+    {
+        var result = new List<TimelinePhase>();
+        foreach (var phase in _phases)
+        {
+            var filtered = phase.Items.Where(g => PassesFilter(g)).ToList();
+            if (filtered.Count > 0)
+                result.Add(new TimelinePhase { Name = phase.Name, Icon = phase.Icon, Items = filtered });
+        }
+        return result;
+    }
+
+    private IEnumerable<AgentPullRequest> GetFilteredUnlinkedPRs()
+    {
+        return _unlinkedPRs.Where(pr =>
+        {
+            if (_statusFilter == "open" && (pr.IsMerged || pr.State == "closed")) return false;
+            if (_statusFilter == "closed" && !pr.IsMerged && pr.State != "closed") return false;
+            if (!string.IsNullOrEmpty(_searchText) && !pr.Title.Contains(_searchText, StringComparison.OrdinalIgnoreCase)) return false;
+            return true;
+        });
+    }
+
+    private bool PassesFilter(IssueGroup group)
+    {
+        var issue = group.Issue;
+        if (_statusFilter == "open" && issue.State == "closed") return false;
+        if (_statusFilter == "closed" && issue.State != "closed") return false;
+        if (!string.IsNullOrEmpty(_searchText))
+        {
+            var matchesIssue = issue.Title.Contains(_searchText, StringComparison.OrdinalIgnoreCase);
+            var matchesPR = group.LinkedPRs.Any(p => p.Title.Contains(_searchText, StringComparison.OrdinalIgnoreCase));
+            if (!matchesIssue && !matchesPR) return false;
+        }
+        return true;
+    }
+
+    private void SetFilter(string filter)
+    {
+        _statusFilter = filter;
+        StateHasChanged();
+    }
+
+    private void SetGroupBy(string groupBy)
+    {
+        _groupBy = groupBy;
+        _expandedPhases.Clear();
+        BuildTimeline();
+        StateHasChanged();
+    }
+
+    private void ClearSearch()
+    {
+        _searchText = "";
+        StateHasChanged();
+    }
+
+    private void TogglePhase(string name)
+    {
+        if (!_expandedPhases.Remove(name))
+            _expandedPhases.Add(name);
+    }
+
+    private void ToggleIssue(int number)
+    {
+        if (!_expandedIssues.Remove(number))
+            _expandedIssues.Add(number);
+    }
+
+    private string GetPrRowClass(AgentPullRequest pr) =>
+        pr.IsMerged ? "merged" : pr.State == "closed" ? "closed" : "open";
+
+    private string GetPrDotClass(AgentPullRequest pr) =>
+        pr.IsMerged ? "dot-merged" : pr.State == "closed" ? "dot-closed-pr" : "dot-open-pr";
 
     private string GetPrStateLabel(AgentPullRequest pr) =>
-        pr.IsMerged ? "✔ Merged" : pr.State == "closed" ? "✖ Closed" : "● Open";
+        pr.IsMerged ? "Merged" : pr.State == "closed" ? "Closed" : "Open";
 
-    private string TruncateTitle(string title) =>
-        title.Length > 45 ? title[..42] + "…" : title;
+    private string ShortenAgent(string? agent)
+    {
+        if (string.IsNullOrEmpty(agent)) return "—";
+        // "PrincipalEngineer 1" → "PE 1", "Senior Engineer 2" → "SE 2", etc.
+        return agent
+            .Replace("PrincipalEngineer", "PE")
+            .Replace("ProgramManager", "PM")
+            .Replace("TestEngineer", "TE")
+            .Replace("Researcher", "Res")
+            .Replace("Architect", "Arch")
+            .Replace("Senior Engineer", "SE")
+            .Replace("Junior Engineer", "JE");
+    }
 
     private string FormatTime(DateTime dt) =>
         dt.ToLocalTime().ToString("MMM d, HH:mm");
-
-    private string GetProgressLabel()
-    {
-        var total = _issues.Count + _pullRequests.Count;
-        if (total == 0) return "No work items";
-        if (_completedCount == total) return "✅ Complete";
-        return $"{_completedCount}/{total} done";
-    }
 
     private void OpenGitHub(string url)
     {
@@ -298,10 +490,16 @@ else
         DataService.OnChange -= OnDataChanged;
     }
 
-    private record TimelineGroup
+    private record IssueGroup
     {
         public required AgentIssue Issue { get; init; }
         public required List<AgentPullRequest> LinkedPRs { get; init; }
-        public required int Position { get; init; }
+    }
+
+    private record TimelinePhase
+    {
+        public required string Name { get; init; }
+        public required string Icon { get; init; }
+        public required List<IssueGroup> Items { get; init; }
     }
 }
