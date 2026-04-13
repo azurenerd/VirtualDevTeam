@@ -131,43 +131,75 @@ public class ResearcherAgent : AgentBase
                             relatedIssue,
                             ct);
 
-                        // Now do the AI research work
-                        UpdateStatus(AgentStatus.Working, $"Researching: {directive.Topic}");
-                        Logger.LogInformation("Starting research on: {Topic}", directive.Topic);
-                        LogActivity("task", $"🔬 Starting research on: {directive.Topic}");
+                        // Resume-aware: check if gate is already pending/approved from a prior run
+                        var gateStatus = await _gateCheck.GetGateStatusAsync(
+                            GateIds.ResearchFindings, pr.Number, ct);
 
-                        var research = await ConductResearchAsync(directive, ct);
+                        string? updatedDoc = null;
 
-                        // Build the full Research.md content (design section was cached during research)
-                        var existingContent = await _projectFiles.GetResearchDocAsync(ct);
-                        var newSection = FormatResearchSection(directive.Topic, research);
-                        var updatedDoc = existingContent.TrimEnd() + "\n\n" + newSection;
-                        if (!string.IsNullOrWhiteSpace(_lastDesignSection))
-                            updatedDoc += "\n\n" + _lastDesignSection;
-                        updatedDoc += "\n";
+                        if (gateStatus == GateStatus.Approved)
+                        {
+                            // Gate was already approved (PR may already be merged)
+                            Logger.LogInformation("Research gate already approved on PR #{Number}, skipping research", pr.Number);
+                            LogActivity("task", $"⏩ Research gate already approved on PR #{pr.Number}, resuming");
+                        }
+                        else if (gateStatus == GateStatus.AwaitingApproval)
+                        {
+                            // Gate is waiting for human — skip AI work, go straight to waiting
+                            Logger.LogInformation("Research gate already pending on PR #{Number}, skipping to gate wait", pr.Number);
+                            LogActivity("task", $"⏩ Research gate already pending on PR #{pr.Number}, resuming wait");
+                        }
+                        else
+                        {
+                            // Normal path: do the AI research work
+                            UpdateStatus(AgentStatus.Working, $"Researching: {directive.Topic}");
+                            Logger.LogInformation("Starting research on: {Topic}", directive.Topic);
+                            LogActivity("task", $"🔬 Starting research on: {directive.Topic}");
+
+                            var research = await ConductResearchAsync(directive, ct);
+
+                            // Build the full Research.md content (design section was cached during research)
+                            var existingContent = await _projectFiles.GetResearchDocAsync(ct);
+                            var newSection = FormatResearchSection(directive.Topic, research);
+                            updatedDoc = existingContent.TrimEnd() + "\n\n" + newSection;
+                            if (!string.IsNullOrWhiteSpace(_lastDesignSection))
+                                updatedDoc += "\n\n" + _lastDesignSection;
+                            updatedDoc += "\n";
+                        }
 
                         // === Gate: ResearchFindings — human reviews before merge ===
-                        UpdateStatus(AgentStatus.Working, $"⏳ Awaiting human approval on PR #{pr.Number}");
-                        await _gateCheck.WaitForGateAsync(
-                            GateIds.ResearchFindings,
-                            $"Research findings for '{directive.Topic}' ready for review",
-                            pr.Number, ct: ct);
+                        if (gateStatus != GateStatus.Approved)
+                        {
+                            UpdateStatus(AgentStatus.Working, $"⏳ Awaiting human approval on PR #{pr.Number}");
+                            await _gateCheck.WaitForGateAsync(
+                                GateIds.ResearchFindings,
+                                $"Research findings for '{directive.Topic}' ready for review",
+                                pr.Number, ct: ct);
+                        }
 
-                        // Commit final content and auto-merge
-                        UpdateStatus(AgentStatus.Working, "Committing Research.md and merging PR");
-                        await _prWorkflow.CommitAndMergeDocumentPRAsync(
-                            pr,
-                            Identity.DisplayName,
-                            "Research.md",
-                            updatedDoc,
-                            $"Add research findings: {directive.Topic}",
-                            ct);
+                        // Commit final content and auto-merge (skip if PR already merged)
+                        if (!pr.IsMerged)
+                        {
+                            if (updatedDoc is null)
+                            {
+                                // Resumed from pending gate — read existing content from PR branch
+                                updatedDoc = await _projectFiles.GetResearchDocAsync(ct) ?? "# Research\n";
+                            }
+                            UpdateStatus(AgentStatus.Working, "Committing Research.md and merging PR");
+                            await _prWorkflow.CommitAndMergeDocumentPRAsync(
+                                pr,
+                                Identity.DisplayName,
+                                "Research.md",
+                                updatedDoc,
+                                $"Add research findings: {directive.Topic}",
+                                ct);
+                        }
 
                         Logger.LogInformation("Research.md PR created and merged for '{Topic}'", directive.Topic);
                         LogActivity("task", $"✅ Research.md merged: {directive.Topic}");
                         await RememberAsync(MemoryType.Action,
                             $"Completed research and merged Research.md for '{directive.Topic}'",
-                            TruncateForMemory(research.Summary), ct);
+                            $"Research on '{directive.Topic}' completed and merged", ct);
                         currentDirective = null; // Don't re-enqueue on success
 
                         // Explicitly close the related issue (don't rely on "Closes #X" in PR body)

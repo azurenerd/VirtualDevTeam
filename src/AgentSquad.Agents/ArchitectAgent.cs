@@ -298,6 +298,25 @@ public class ArchitectAgent : AgentBase
             relatedIssue,
             ct);
 
+        // Resume-aware: check if gate is already pending/approved from a prior run
+        var gateStatus = await _gateCheck.GetGateStatusAsync(
+            GateIds.ArchitectureDesign, pr.Number, ct);
+
+        string? architectureDoc = null;
+
+        if (gateStatus == GateStatus.Approved)
+        {
+            Logger.LogInformation("Architecture gate already approved on PR #{Number}, skipping design", pr.Number);
+            LogActivity("task", $"⏩ Architecture gate already approved on PR #{pr.Number}, resuming");
+        }
+        else if (gateStatus == GateStatus.AwaitingApproval)
+        {
+            Logger.LogInformation("Architecture gate already pending on PR #{Number}, skipping to gate wait", pr.Number);
+            LogActivity("task", $"⏩ Architecture gate already pending on PR #{pr.Number}, resuming wait");
+        }
+        else
+        {
+
         UpdateStatus(AgentStatus.Working, "Starting architecture design");
         Logger.LogInformation("Starting architecture design for task {TaskId}: {Title}",
             directive.TaskId, directive.Title);
@@ -341,7 +360,6 @@ public class ArchitectAgent : AgentBase
         history.AddSystemMessage(systemPrompt);
 
         var useSinglePass = _config.CopilotCli.SinglePassMode;
-        string architectureDoc;
 
         if (useSinglePass)
         {
@@ -507,22 +525,35 @@ public class ArchitectAgent : AgentBase
 
         Logger.LogDebug("Architecture document compiled for {TaskId}", directive.TaskId);
 
-        // === Gate: ArchitectureDesign — human reviews architecture before merge ===
-        UpdateStatus(AgentStatus.Working, $"⏳ Awaiting human approval on PR #{pr.Number}");
-        await _gateCheck.WaitForGateAsync(
-            GateIds.ArchitectureDesign,
-            "Architecture.md ready for human review before merge",
-            pr.Number, ct: ct);
+        } // end else (fresh AI work, not resuming from gate)
 
-        // Commit final content and auto-merge
-        UpdateStatus(AgentStatus.Working, "Committing Architecture.md and merging PR");
-        await _prWorkflow.CommitAndMergeDocumentPRAsync(
-            pr,
-            Identity.DisplayName,
-            "Architecture.md",
-            architectureDoc,
-            $"Add system architecture for {directive.Title}",
-            ct);
+        // === Gate: ArchitectureDesign — human reviews architecture before merge ===
+        if (gateStatus != GateStatus.Approved)
+        {
+            UpdateStatus(AgentStatus.Working, $"⏳ Awaiting human approval on PR #{pr.Number}");
+            await _gateCheck.WaitForGateAsync(
+                GateIds.ArchitectureDesign,
+                "Architecture.md ready for human review before merge",
+                pr.Number, ct: ct);
+        }
+
+        // Commit final content and auto-merge (skip if PR already merged)
+        if (!pr.IsMerged)
+        {
+            if (architectureDoc is null)
+            {
+                // Resumed from pending gate — use placeholder (content was already committed)
+                architectureDoc = await _projectFiles.GetArchitectureDocAsync(ct) ?? "# Architecture\n";
+            }
+            UpdateStatus(AgentStatus.Working, "Committing Architecture.md and merging PR");
+            await _prWorkflow.CommitAndMergeDocumentPRAsync(
+                pr,
+                Identity.DisplayName,
+                "Architecture.md",
+                architectureDoc,
+                $"Add system architecture for {directive.Title}",
+                ct);
+        }
 
         Logger.LogInformation("Architecture.md PR created and merged for task {TaskId}", directive.TaskId);
         LogActivity("task", $"✅ Architecture.md merged: {directive.Title}");

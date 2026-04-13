@@ -193,6 +193,51 @@ public class GateCheckService : IGateCheckService
 
     public bool IsGateApprovedLocally(string gateId) => _localApprovals.ContainsKey(gateId);
 
+    public async Task<GateStatus> GetGateStatusAsync(
+        string gateId, int resourceNumber, CancellationToken ct = default)
+    {
+        if (!_config.RequiresHuman(gateId))
+            return GateStatus.Approved; // gate not active → treat as approved
+
+        if (_localApprovals.ContainsKey(gateId))
+            return GateStatus.Approved;
+
+        try
+        {
+            var pr = await _github.GetPullRequestAsync(resourceNumber, ct);
+            if (pr is null)
+                return GateStatus.NotActivated;
+
+            // PR already merged → gate was approved in a prior run
+            if (pr.IsMerged)
+                return GateStatus.Approved;
+
+            var labels = pr.Labels?.ToList() ?? new List<string>();
+
+            if (labels.Contains(HumanApprovedLabel))
+                return GateStatus.Approved;
+
+            if (labels.Contains(AwaitingHumanLabel))
+                return GateStatus.AwaitingApproval;
+
+            // Check comments for approval
+            var comments = await _github.GetPullRequestCommentsAsync(resourceNumber, ct);
+            foreach (var comment in comments.Reverse())
+            {
+                if (comment.Body?.Contains(GateCommentPrefix) == true) continue;
+                var body = comment.Body?.Trim().ToLowerInvariant() ?? "";
+                if (body.Contains("approved") || body.Contains("lgtm") || body.Contains("ship it"))
+                    return GateStatus.Approved;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Error checking gate status for {GateId} on #{Number}", gateId, resourceNumber);
+        }
+
+        return GateStatus.NotActivated;
+    }
+
     /// <summary>Get all pending (non-approved) gates that require human approval.</summary>
     public IReadOnlyList<PendingGateInfo> GetPendingGates()
     {

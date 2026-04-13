@@ -1335,28 +1335,48 @@ public class ProgramManagerAgent : AgentBase
                     $"Quick-mode PM specification for {projectName}.",
                     closesIssueNumber: null, ct);
 
-                var qKernel = _modelRegistry.GetKernel(Identity.ModelTier, Identity.Id);
-                var qChat = qKernel.GetRequiredService<IChatCompletionService>();
-                var qHistory = new ChatHistory();
-                qHistory.AddSystemMessage("You are a Program Manager. Write a brief product specification.");
-                qHistory.AddUserMessage(
-                    $"Project: {_config.Project.Description}\nTech Stack: {_config.Project.TechStack}\n\n" +
-                    "Write a concise PMSpec with these sections (1-2 sentences each): " +
-                    "Executive Summary, Business Goals, User Stories (3-5 bullet points with acceptance criteria), " +
-                    "Scope, Non-Functional Requirements. Keep the entire document under 300 words.");
-                var qResp = await qChat.GetChatMessageContentAsync(qHistory, cancellationToken: ct);
-                var qContent = $"# PM Specification: {projectName}\n\n{qResp.Content?.Trim() ?? ""}";
+                // Resume-aware: check if gate is already pending/approved
+                var qGateStatus = await _gateCheck.GetGateStatusAsync(
+                    GateIds.PMSpecification, qPr.Number, ct);
+
+                string? qContent = null;
+                if (qGateStatus == GateStatus.NotActivated)
+                {
+                    var qKernel = _modelRegistry.GetKernel(Identity.ModelTier, Identity.Id);
+                    var qChat = qKernel.GetRequiredService<IChatCompletionService>();
+                    var qHistory = new ChatHistory();
+                    qHistory.AddSystemMessage("You are a Program Manager. Write a brief product specification.");
+                    qHistory.AddUserMessage(
+                        $"Project: {_config.Project.Description}\nTech Stack: {_config.Project.TechStack}\n\n" +
+                        "Write a concise PMSpec with these sections (1-2 sentences each): " +
+                        "Executive Summary, Business Goals, User Stories (3-5 bullet points with acceptance criteria), " +
+                        "Scope, Non-Functional Requirements. Keep the entire document under 300 words.");
+                    var qResp = await qChat.GetChatMessageContentAsync(qHistory, cancellationToken: ct);
+                    qContent = $"# PM Specification: {projectName}\n\n{qResp.Content?.Trim() ?? ""}";
+                }
+                else
+                {
+                    Logger.LogInformation("PMSpec gate already {Status} on PR #{Number}, skipping generation",
+                        qGateStatus, qPr.Number);
+                }
 
                 // === Gate: PMSpecification — human reviews PMSpec before merge ===
-                UpdateStatus(AgentStatus.Working, $"⏳ Awaiting human approval on PR #{qPr.Number}");
-                await _gateCheck.WaitForGateAsync(
-                    GateIds.PMSpecification,
-                    "PMSpec.md ready for human review before merge",
-                    qPr.Number, ct: ct);
+                if (qGateStatus != GateStatus.Approved)
+                {
+                    UpdateStatus(AgentStatus.Working, $"⏳ Awaiting human approval on PR #{qPr.Number}");
+                    await _gateCheck.WaitForGateAsync(
+                        GateIds.PMSpecification,
+                        "PMSpec.md ready for human review before merge",
+                        qPr.Number, ct: ct);
+                }
 
-                await _prWorkflow.CommitAndMergeDocumentPRAsync(
-                    qPr, Identity.DisplayName, "PMSpec.md", qContent,
-                    $"Add PM Specification for {projectName}", ct);
+                if (!qPr.IsMerged)
+                {
+                    qContent ??= await _projectFiles.GetPMSpecAsync(ct) ?? "# PM Specification\n";
+                    await _prWorkflow.CommitAndMergeDocumentPRAsync(
+                        qPr, Identity.DisplayName, "PMSpec.md", qContent,
+                        $"Add PM Specification for {projectName}", ct);
+                }
                 Logger.LogInformation("Quick PMSpec.md created and merged");
                 LogActivity("task", $"📝 Quick PMSpec.md created for {projectName}");
 
@@ -1382,6 +1402,25 @@ public class ProgramManagerAgent : AgentBase
                 $"acceptance criteria, scope, and non-functional requirements for {projectName}.",
                 closesIssueNumber: null,
                 ct);
+
+            // Resume-aware: check if gate is already pending/approved from a prior run
+            var pmGateStatus = await _gateCheck.GetGateStatusAsync(
+                GateIds.PMSpecification, pr.Number, ct);
+
+            string? pmSpecDoc = null;
+
+            if (pmGateStatus == GateStatus.Approved)
+            {
+                Logger.LogInformation("PMSpec gate already approved on PR #{Number}, skipping generation", pr.Number);
+                LogActivity("task", $"⏩ PMSpec gate already approved on PR #{pr.Number}, resuming");
+            }
+            else if (pmGateStatus == GateStatus.AwaitingApproval)
+            {
+                Logger.LogInformation("PMSpec gate already pending on PR #{Number}, skipping to gate wait", pr.Number);
+                LogActivity("task", $"⏩ PMSpec gate already pending on PR #{pr.Number}, resuming wait");
+            }
+            else
+            {
 
             UpdateStatus(AgentStatus.Working, "Creating PMSpec (1/2): Analyzing requirements");
 
@@ -1420,7 +1459,6 @@ public class ProgramManagerAgent : AgentBase
 
             // Turn 1: Analyze and identify business goals, user stories, success criteria
             var useSinglePass = _config.CopilotCli.SinglePassMode;
-            string pmSpecDoc;
 
             if (useSinglePass)
             {
@@ -1557,23 +1595,32 @@ public class ProgramManagerAgent : AgentBase
 
             Logger.LogDebug("PM Spec document compiled for {ProjectName}", projectName);
 
-            // Commit final content and auto-merge
-            UpdateStatus(AgentStatus.Working, "Committing PMSpec.md and merging PR");
+            } // end else (fresh AI work, not resuming from gate)
 
             // === Gate: PMSpecification — human reviews PMSpec before merge ===
-            UpdateStatus(AgentStatus.Working, $"⏳ Awaiting human approval on PR #{pr.Number}");
-            await _gateCheck.WaitForGateAsync(
-                GateIds.PMSpecification,
-                "PMSpec.md ready for human review before merge",
-                pr.Number, ct: ct);
+            if (pmGateStatus != GateStatus.Approved)
+            {
+                UpdateStatus(AgentStatus.Working, $"⏳ Awaiting human approval on PR #{pr.Number}");
+                await _gateCheck.WaitForGateAsync(
+                    GateIds.PMSpecification,
+                    "PMSpec.md ready for human review before merge",
+                    pr.Number, ct: ct);
+            }
 
-            await _prWorkflow.CommitAndMergeDocumentPRAsync(
-                pr,
-                Identity.DisplayName,
-                "PMSpec.md",
-                pmSpecDoc,
-                $"Add PM Specification for {projectName}",
-                ct);
+            if (!pr.IsMerged)
+            {
+                if (pmSpecDoc is null)
+                {
+                    pmSpecDoc = await _projectFiles.GetPMSpecAsync(ct) ?? "# PM Specification\n";
+                }
+                await _prWorkflow.CommitAndMergeDocumentPRAsync(
+                    pr,
+                    Identity.DisplayName,
+                    "PMSpec.md",
+                    pmSpecDoc,
+                    $"Add PM Specification for {projectName}",
+                    ct);
+            }
             Logger.LogInformation("PMSpec.md PR created and merged for project {ProjectName}", projectName);
             LogActivity("task", $"📝 PMSpec.md created and merged for {projectName}");
             await RememberAsync(MemoryType.Action,

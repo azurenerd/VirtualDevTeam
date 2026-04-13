@@ -43,6 +43,26 @@ public interface IGateCheckService
     /// Quick check if a specific gate requires human approval (no side effects).
     /// </summary>
     bool RequiresHuman(string gateId);
+
+    /// <summary>
+    /// Check the current state of a gate on a PR — whether it's already pending,
+    /// already approved, or hasn't been activated yet. Used by agents on restart
+    /// to skip re-doing work when a gate is already waiting for human approval.
+    /// </summary>
+    Task<GateStatus> GetGateStatusAsync(string gateId, int resourceNumber, CancellationToken ct = default);
+}
+
+/// <summary>Status of a gate on a specific resource.</summary>
+public enum GateStatus
+{
+    /// <summary>Gate hasn't been activated on this resource yet.</summary>
+    NotActivated,
+
+    /// <summary>Gate is active and waiting for human approval (has awaiting-human-review label).</summary>
+    AwaitingApproval,
+
+    /// <summary>Gate was already approved (has human-approved label, approval comment, or PR is merged).</summary>
+    Approved,
 }
 
 /// <summary>Result of a gate check.</summary>
