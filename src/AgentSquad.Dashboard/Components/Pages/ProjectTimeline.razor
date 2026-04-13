@@ -18,11 +18,22 @@
 }
 else if (_phases.Count == 0)
 {
-    <div class="empty-state">
-        <div class="empty-icon">🗺️</div>
-        <div class="empty-text">No work items yet</div>
-        <div class="empty-sub">Issues will appear here as agents create them</div>
-    </div>
+    @if (_isRateLimited)
+    {
+        <div class="empty-state">
+            <div class="empty-icon">⏳</div>
+            <div class="empty-text">GitHub API rate-limited</div>
+            <div class="empty-sub">Waiting for rate limit to reset. Timeline will load automatically when data becomes available.</div>
+        </div>
+    }
+    else
+    {
+        <div class="empty-state">
+            <div class="empty-icon">🗺️</div>
+            <div class="empty-text">No work items yet</div>
+            <div class="empty-sub">Issues will appear here as agents create them</div>
+        </div>
+    }
 }
 else
 {
@@ -191,6 +202,7 @@ else
     private List<AgentPullRequest> _pullRequests = [];
     private List<NeonPhase> _phases = [];
     private bool _loading = true;
+    private bool _isRateLimited;
     private int _closedCount;
     private int _openCount;
 
@@ -210,6 +222,7 @@ else
     private async Task LoadDataAsync()
     {
         _loading = true;
+        _isRateLimited = DataService.IsGitHubRateLimited;
         try
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
@@ -220,7 +233,12 @@ else
 
             _issues = issuesTask.IsCompletedSuccessfully ? issuesTask.Result.ToList() : [];
             _pullRequests = prsTask.IsCompletedSuccessfully ? prsTask.Result.ToList() : [];
+            _isRateLimited = DataService.IsGitHubRateLimited;
             BuildTimeline();
+
+            // If no data and rate-limited, auto-retry in 30 seconds
+            if (_phases.Count == 0 && _isRateLimited)
+                _ = RetryAfterDelay(TimeSpan.FromSeconds(30));
         }
         catch
         {
@@ -229,6 +247,16 @@ else
             BuildTimeline();
         }
         finally { _loading = false; }
+    }
+
+    private async Task RetryAfterDelay(TimeSpan delay)
+    {
+        await Task.Delay(delay);
+        if (_phases.Count == 0) // Still empty — retry
+        {
+            await LoadDataAsync();
+            await InvokeAsync(StateHasChanged);
+        }
     }
 
     private void BuildTimeline()

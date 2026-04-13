@@ -102,6 +102,7 @@ public sealed class DashboardDataService : BackgroundService
     private readonly AgentChatService _chatService;
     private readonly IHubContext<AgentHub> _hubContext;
     private readonly IGitHubService _github;
+    private readonly RateLimitManager _rateLimitManager;
     private readonly ILogger<DashboardDataService> _logger;
 
     private readonly Dictionary<string, AgentSnapshot> _agentCache = new();
@@ -132,6 +133,7 @@ public sealed class DashboardDataService : BackgroundService
         AgentChatService chatService,
         IHubContext<AgentHub> hubContext,
         IGitHubService github,
+        RateLimitManager rateLimitManager,
         ILogger<DashboardDataService> logger)
     {
         _registry = registry;
@@ -143,6 +145,7 @@ public sealed class DashboardDataService : BackgroundService
         _chatService = chatService;
         _hubContext = hubContext;
         _github = github;
+        _rateLimitManager = rateLimitManager;
         _logger = logger;
     }
 
@@ -874,10 +877,20 @@ public sealed class DashboardDataService : BackgroundService
 
     // --- Pull Request data for dashboard ---
 
+    /// <summary>True when GitHub API rate limit is active — dashboard should show cached data.</summary>
+    public bool IsGitHubRateLimited => _rateLimitManager.IsRateLimited;
+
     public async Task<IReadOnlyList<AgentPullRequest>> GetPullRequestsAsync()
     {
         if (DateTime.UtcNow - _lastPrFetchUtc < PrCacheExpiry && _cachedPullRequests.Count > 0)
             return _cachedPullRequests;
+
+        // Don't block dashboard waiting for rate limit reset — return cached data immediately
+        if (_rateLimitManager.IsRateLimited)
+        {
+            _logger.LogDebug("Skipping PR fetch — GitHub API is rate-limited");
+            return _cachedPullRequests;
+        }
 
         try
         {
@@ -899,6 +912,13 @@ public sealed class DashboardDataService : BackgroundService
     {
         if (DateTime.UtcNow - _lastIssueFetchUtc < PrCacheExpiry && _cachedIssues.Count > 0)
             return _cachedIssues;
+
+        // Don't block dashboard waiting for rate limit reset — return cached data immediately
+        if (_rateLimitManager.IsRateLimited)
+        {
+            _logger.LogDebug("Skipping issue fetch — GitHub API is rate-limited");
+            return _cachedIssues;
+        }
 
         try
         {

@@ -39,6 +39,9 @@ public class RateLimitManager
     /// <summary>When the current rate limit window resets.</summary>
     public DateTime ResetAtUtc => _resetAt;
 
+    /// <summary>True when all API calls are paused due to rate limiting.</summary>
+    public bool IsRateLimited => _pauseUntil > DateTime.UtcNow;
+
     /// <summary>
     /// Execute a GitHub API call with rate-limit-aware throttling and retry.
     /// On rate limit: waits until the exact reset timestamp + buffer, then retries.
