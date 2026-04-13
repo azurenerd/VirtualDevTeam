@@ -3,7 +3,7 @@
 @using AgentSquad.Core.GitHub.Models
 @using AgentSquad.Core.GitHub
 @using AgentSquad.Dashboard.Services
-@implements IDisposable
+@implements IAsyncDisposable
 @inject DashboardDataService DataService
 @inject NavigationManager Navigation
 
@@ -216,10 +216,35 @@ else
 
     private Dictionary<int, IssueGroup> _groupLookup = new();
 
+    private CancellationTokenSource _refreshCts = new();
+
     protected override async Task OnInitializedAsync()
     {
         DataService.OnChange += OnDataChanged;
         await LoadDataAsync();
+        _ = PollForUpdatesAsync(_refreshCts.Token);
+    }
+
+    /// <summary>
+    /// Gentle background poll — refreshes timeline every 30s so new issues/PRs
+    /// appear without the user needing to reload. Uses cached data from
+    /// DashboardDataService so it only hits GitHub when the cache expires.
+    /// </summary>
+    private async Task PollForUpdatesAsync(CancellationToken ct)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(30));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(ct))
+            {
+                var prevCount = _phases.Sum(p => p.Items.Count);
+                await LoadDataAsync();
+                var newCount = _phases.Sum(p => p.Items.Count);
+                if (newCount != prevCount)
+                    await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (OperationCanceledException) { }
     }
 
     private async Task LoadDataAsync()
@@ -524,7 +549,12 @@ else
         await InvokeAsync(StateHasChanged);
     }
 
-    public void Dispose() { DataService.OnChange -= OnDataChanged; }
+    public async ValueTask DisposeAsync()
+    {
+        DataService.OnChange -= OnDataChanged;
+        await _refreshCts.CancelAsync();
+        _refreshCts.Dispose();
+    }
 
     private record IssueGroup
     {
