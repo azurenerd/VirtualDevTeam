@@ -192,7 +192,7 @@ public sealed class CopilotCliChatCompletionService : IChatCompletionService
         // If there's only one user message, just append it directly
         if (conversationMessages.Count == 1 && conversationMessages[0].Role == AuthorRole.User)
         {
-            sb.Append(conversationMessages[0].Content);
+            AppendMessageContent(sb, conversationMessages[0]);
             sb.AppendLine();
             sb.AppendLine();
             sb.AppendLine("[REMINDER]: Output the content directly. Do NOT describe what you would create. Start your response with the actual content.");
@@ -205,7 +205,8 @@ public sealed class CopilotCliChatCompletionService : IChatCompletionService
         {
             var roleLabel = message.Role == AuthorRole.User ? "USER" :
                            message.Role == AuthorRole.Assistant ? "ASSISTANT" : "SYSTEM";
-            sb.AppendLine($"[{roleLabel}]: {message.Content}");
+            sb.Append($"[{roleLabel}]: ");
+            AppendMessageContent(sb, message);
             sb.AppendLine();
         }
 
@@ -213,6 +214,58 @@ public sealed class CopilotCliChatCompletionService : IChatCompletionService
         sb.AppendLine("[REMINDER]: Output the content directly. Do NOT describe what you would create. Do NOT include meta-commentary about yourself. Start your response with the actual requested content.");
 
         return sb.ToString().Trim();
+    }
+
+    /// <summary>
+    /// Appends message content to the StringBuilder, handling both plain text and mixed content
+    /// (text + images). ImageContent items are embedded as base64 data URIs so vision-capable
+    /// models can analyze them.
+    /// </summary>
+    private static void AppendMessageContent(StringBuilder sb, ChatMessageContent message)
+    {
+        // Check if message has mixed content items (text + images)
+        if (message.Items is { Count: > 0 })
+        {
+            bool hasImageContent = false;
+            foreach (var item in message.Items)
+            {
+                if (item is ImageContent imageContent)
+                {
+                    hasImageContent = true;
+                    // Embed image as base64 data URI for vision analysis
+                    if (imageContent.Data.HasValue && imageContent.Data.Value.Length > 0)
+                    {
+                        var base64 = Convert.ToBase64String(imageContent.Data.Value.ToArray());
+                        var mimeType = imageContent.MimeType ?? "image/png";
+                        sb.AppendLine();
+                        sb.AppendLine($"[EMBEDDED IMAGE ({mimeType}, {imageContent.Data.Value.Length} bytes)]");
+                        sb.AppendLine($"data:{mimeType};base64,{base64}");
+                        sb.AppendLine();
+                    }
+                    else if (imageContent.Uri is not null)
+                    {
+                        sb.AppendLine();
+                        sb.AppendLine($"[IMAGE URL]: {imageContent.Uri}");
+                        sb.AppendLine();
+                    }
+                }
+                else if (item is TextContent textContent && !string.IsNullOrEmpty(textContent.Text))
+                {
+                    sb.AppendLine(textContent.Text);
+                }
+            }
+
+            // Fallback: if no image items found, use plain Content
+            if (!hasImageContent && !string.IsNullOrEmpty(message.Content))
+            {
+                sb.AppendLine(message.Content);
+            }
+        }
+        else
+        {
+            // Simple text-only message
+            sb.AppendLine(message.Content);
+        }
     }
 
     /// <summary>

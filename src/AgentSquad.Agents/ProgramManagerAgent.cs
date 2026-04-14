@@ -2082,15 +2082,20 @@ public class ProgramManagerAgent : AgentBase
             var codeContext = await _prWorkflow.GetPRCodeContextAsync(pr.Number, pr.HeadBranch, ct: ct);
 
             // Gather ALL screenshot evidence from PR comments (PE screenshots, TE screenshots, standalone)
+            var screenshotImages = new List<PullRequestWorkflow.ScreenshotImage>();
             var screenshotContext = "";
             try
             {
-                screenshotContext = await _prWorkflow.GetPRScreenshotContextAsync(pr.Number, ct);
+                screenshotImages = await _prWorkflow.GetPRScreenshotImagesAsync(pr.Number, ct: ct);
+                if (screenshotImages.Count == 0)
+                    screenshotContext = await _prWorkflow.GetPRScreenshotContextAsync(pr.Number, ct);
             }
             catch (Exception ex)
             {
                 Logger.LogDebug(ex, "Could not fetch screenshot context for PR #{Number}", pr.Number);
             }
+
+            var hasScreenshots = screenshotImages.Count > 0 || !string.IsNullOrEmpty(screenshotContext);
 
             var history = new ChatHistory();
             var systemPrompt =
@@ -2101,14 +2106,16 @@ public class ProgramManagerAgent : AgentBase
                 "1. Are the acceptance criteria from the user story met?\n" +
                 "2. Does the feature align with the PM Spec vision for this area of the product?\n";
 
-            if (!string.IsNullOrEmpty(screenshotContext))
+            if (hasScreenshots)
             {
                 systemPrompt +=
                     "3. VISUAL VALIDATION: Screenshots have been posted on this PR (by engineers and/or Test Engineer). " +
-                    "Review them to verify the app renders correctly:\n" +
+                    "You can SEE these screenshots embedded in this message. " +
+                    "Review them carefully to verify the app renders correctly:\n" +
                     "   - Does the screenshot show a working app (no error pages, no unhandled exceptions, no blank screens)?\n" +
                     "   - Does the visual output match what the PR description and acceptance criteria say it should do?\n" +
-                    "   - If the screenshot shows an error page or broken UI, this is a REQUEST_CHANGES issue.\n";
+                    "   - If the screenshot shows an error page, a white/blank screen with errors, or broken UI, this is a REQUEST_CHANGES issue.\n" +
+                    "   - Look for error messages, stack traces, JSON errors, or 'data.json' failures — these indicate a broken build.\n";
             }
 
             systemPrompt +=
@@ -2139,16 +2146,40 @@ public class ProgramManagerAgent : AgentBase
 
             history.AddSystemMessage(systemPrompt);
 
-            var userMessage = $"## PM Specification\n{pmSpec}\n\n" +
+            var userMessageText = $"## PM Specification\n{pmSpec}\n\n" +
                 $"## Engineering Plan\n{engineeringPlan}\n\n" +
                 issueContext +
                 $"## Pull Request #{pr.Number}: {pr.Title}\n{pr.Body}\n\n" +
                 codeContext;
 
-            if (!string.IsNullOrEmpty(screenshotContext))
-                userMessage += $"\n\n{screenshotContext}";
+            // Add screenshots as vision content if available, otherwise fall back to URL-only context
+            if (screenshotImages.Count > 0)
+            {
+                var items = new ChatMessageContentItemCollection();
+                var screenshotIntro = "\n\n## 📸 Application Screenshots\n" +
+                    "The following screenshots show the actual running application. " +
+                    "LOOK AT EACH IMAGE CAREFULLY for errors, blank screens, or broken UI.\n\n";
+                for (var i = 0; i < screenshotImages.Count; i++)
+                    screenshotIntro += $"Screenshot {i + 1}: {screenshotImages[i].Description}\n";
 
-            history.AddUserMessage(userMessage);
+                items.Add(new TextContent(userMessageText + screenshotIntro));
+
+                foreach (var img in screenshotImages)
+                {
+                    items.Add(new ImageContent(img.ImageBytes, img.MimeType)
+                    {
+                        ModelId = $"screenshot: {img.Description}"
+                    });
+                }
+
+                history.AddUserMessage(items);
+            }
+            else
+            {
+                if (!string.IsNullOrEmpty(screenshotContext))
+                    userMessageText += $"\n\n{screenshotContext}";
+                history.AddUserMessage(userMessageText);
+            }
 
             var response = await chat.GetChatMessageContentAsync(history, cancellationToken: ct);
 

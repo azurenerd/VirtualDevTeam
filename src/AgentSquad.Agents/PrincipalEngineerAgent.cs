@@ -1558,18 +1558,79 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 if (approved)
                 {
                     UpdateStatus(AgentStatus.Working, $"⏳ Awaiting human approval on PR #{prNumber}");
-                    await _gateCheck.WaitForGateAsync(
+                    var prGateResult = await _gateCheck.WaitForGateAsync(
                         GateIds.PRReviewApproval,
                         $"PE ready to approve PR #{prNumber}",
                         prNumber, ct: ct);
+
+                    // Human rejected — treat as rework request
+                    if (prGateResult.Decision == GateDecision.Rejected)
+                    {
+                        Logger.LogInformation("Human rejected PRReviewApproval for PR #{Number}: {Feedback}", prNumber, prGateResult.Feedback);
+                        approved = false;
+                        reviewBody = $"**Human reviewer requested changes:**\n\n{prGateResult.Feedback}";
+                    }
                 }
 
                 if (approved)
                 {
                     var requireTests = Config.Workspace.IsInlineTestWorkflow;
+                    // Defer merge when FinalPRApproval gate requires human — we'll gate before merging
+                    var deferMerge = _gateCheck.RequiresHuman(GateIds.FinalPRApproval);
                     var result = await PrWorkflow.ApproveAndMaybeMergeAsync(
-                        pr.Number, "PrincipalEngineer", reviewBody, requireTests, ct);
-                    if (result == MergeAttemptResult.Merged)
+                        pr.Number, "PrincipalEngineer", reviewBody, requireTests, deferMerge, ct);
+
+                    // All reviewers approved and merge was deferred for human gate
+                    if (result == MergeAttemptResult.ReadyToMerge)
+                    {
+                        // === Gate: FinalPRApproval — human reviews before merge ===
+                        UpdateStatus(AgentStatus.Working, $"⏳ Awaiting final human approval to merge PR #{prNumber}");
+                        var finalGateResult = await _gateCheck.WaitForGateAsync(
+                            GateIds.FinalPRApproval,
+                            $"PR #{pr.Number} approved by all reviewers, ready for final merge",
+                            pr.Number, ct: ct);
+
+                        if (finalGateResult.Decision == GateDecision.Rejected)
+                        {
+                            // Human rejected — request changes with their feedback (unlimited rework)
+                            Logger.LogInformation("Human rejected FinalPRApproval for PR #{Number}: {Feedback}", prNumber, finalGateResult.Feedback);
+                            LogActivity("task", $"🔄 Human rejected merge of PR #{pr.Number} — requesting changes");
+                            var feedback = $"**Human reviewer rejected merge:**\n\n{finalGateResult.Feedback}";
+                            await PrWorkflow.RequestChangesAsync(pr.Number, "HumanReviewer", feedback, ct);
+                            await MessageBus.PublishAsync(new ChangesRequestedMessage
+                            {
+                                FromAgentId = Identity.Id,
+                                ToAgentId = "*",
+                                MessageType = "ChangesRequested",
+                                PrNumber = pr.Number,
+                                PrTitle = pr.Title,
+                                ReviewerAgent = "HumanReviewer",
+                                Feedback = feedback
+                            }, ct);
+                            // Don't add to _reviewedPrNumbers so PE re-reviews after rework
+                            continue;
+                        }
+
+                        // Human approved — proceed with merge
+                        var mergeResult = await PrWorkflow.MergeApprovedTestedPRAsync(
+                            pr.Number, "PrincipalEngineer", ct);
+                        if (mergeResult == MergeAttemptResult.Merged)
+                        {
+                            Logger.LogInformation("PE merged PR #{Number} after human approval", pr.Number);
+                            LogActivity("task", $"✅ Approved and merged PR #{pr.Number}: {pr.Title} (human approved)");
+                            if (!pr.Title.StartsWith("TestEngineer:", StringComparison.OrdinalIgnoreCase))
+                                await MarkEngineerTaskDoneAsync(pr, ct);
+                            await RememberAsync(MemoryType.Action,
+                                $"Reviewed and approved+merged PR #{pr.Number}: {pr.Title}", ct: ct);
+                        }
+                        else if (mergeResult == MergeAttemptResult.ConflictBlocked)
+                        {
+                            Logger.LogWarning("PE approved PR #{Number} but merge blocked by conflicts after human gate", pr.Number);
+                            LogActivity("task", $"⚠️ PR #{pr.Number} blocked by merge conflicts — closing and recreating");
+                            await TryCloseAndRecreatePRAsync(pr, ct);
+                        }
+                    }
+                    else if (result == MergeAttemptResult.Merged)
                     {
                         Logger.LogInformation("PE approved and merged PR #{Number}", pr.Number);
                         LogActivity("task", $"✅ Approved and merged PR #{pr.Number}: {pr.Title}");
@@ -1695,10 +1756,33 @@ public class PrincipalEngineerAgent : EngineerAgentBase
 
                 // === Gate: FinalPRApproval — human reviews before final merge ===
                 UpdateStatus(AgentStatus.Working, $"⏳ Awaiting human approval on PR #{pr.Number}");
-                await _gateCheck.WaitForGateAsync(
+                var finalGateResult = await _gateCheck.WaitForGateAsync(
                     GateIds.FinalPRApproval,
                     $"PR #{pr.Number} has passed all reviews and tests, ready for final merge",
                     pr.Number, ct: ct);
+
+                if (finalGateResult.Decision == GateDecision.Rejected)
+                {
+                    // Human rejected — request changes with their feedback (unlimited rework)
+                    Logger.LogInformation("Human rejected FinalPRApproval for tested PR #{Number}: {Feedback}",
+                        pr.Number, finalGateResult.Feedback);
+                    LogActivity("task", $"🔄 Human rejected merge of PR #{pr.Number} — requesting changes");
+                    var feedback = $"**Human reviewer rejected merge:**\n\n{finalGateResult.Feedback}";
+                    await PrWorkflow.RequestChangesAsync(pr.Number, "HumanReviewer", feedback, ct);
+                    await MessageBus.PublishAsync(new ChangesRequestedMessage
+                    {
+                        FromAgentId = Identity.Id,
+                        ToAgentId = "*",
+                        MessageType = "ChangesRequested",
+                        PrNumber = pr.Number,
+                        PrTitle = pr.Title,
+                        ReviewerAgent = "HumanReviewer",
+                        Feedback = feedback
+                    }, ct);
+                    // Remove from tracked sets so PE re-reviews after rework
+                    _mergedTestedPrNumbers.Remove(pr.Number);
+                    continue;
+                }
 
                 var result = await PrWorkflow.MergeApprovedTestedPRAsync(
                     pr.Number, "PrincipalEngineer", ct);
@@ -3014,11 +3098,57 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 reviewContextBuilder.AppendLine();
             }
 
+            // Get screenshot images for vision-based review
+            var screenshotImages = new List<PullRequestWorkflow.ScreenshotImage>();
+            try
+            {
+                screenshotImages = await PrWorkflow.GetPRScreenshotImagesAsync(pr.Number, ct: ct);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "Could not fetch screenshots for PE review of PR #{Number}", pr.Number);
+            }
+
+            // Update system prompt if screenshots available
+            if (screenshotImages.Count > 0)
+            {
+                history.AddSystemMessage(
+                    "VISUAL VALIDATION: Screenshots of the running application are included. " +
+                    "LOOK at each screenshot carefully:\n" +
+                    "- If the screenshot shows an error page, blank screen, JSON error, or unhandled exception, " +
+                    "this is a REQUEST_CHANGES issue — the code does not work.\n" +
+                    "- The visual output should match the PR's stated functionality.\n");
+            }
+
             reviewContextBuilder.Append(issueContext);
             reviewContextBuilder.AppendLine($"## Pull Request #{pr.Number}: {pr.Title}\n{pr.Body}\n");
             reviewContextBuilder.Append(codeContext);
 
-            history.AddUserMessage(reviewContextBuilder.ToString());
+            // Add screenshots as vision content if available
+            if (screenshotImages.Count > 0)
+            {
+                var items = new ChatMessageContentItemCollection();
+                var screenshotIntro = "\n\n## 📸 Application Screenshots\n" +
+                    "LOOK AT EACH IMAGE for errors, blank screens, or broken UI.\n\n";
+                for (var i = 0; i < screenshotImages.Count; i++)
+                    screenshotIntro += $"Screenshot {i + 1}: {screenshotImages[i].Description}\n";
+
+                items.Add(new TextContent(reviewContextBuilder.ToString() + screenshotIntro));
+
+                foreach (var img in screenshotImages)
+                {
+                    items.Add(new ImageContent(img.ImageBytes, img.MimeType)
+                    {
+                        ModelId = $"screenshot: {img.Description}"
+                    });
+                }
+
+                history.AddUserMessage(items);
+            }
+            else
+            {
+                history.AddUserMessage(reviewContextBuilder.ToString());
+            }
 
             var response = await chat.GetChatMessageContentAsync(history, cancellationToken: ct);
 

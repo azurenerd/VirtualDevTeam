@@ -6197,6 +6197,40 @@ a.ntl-detail-pr-num:hover { text-decoration: underline; color: #79c0ff; }
     margin-bottom: 1.5rem;
 }
 
+.filter-btn {
+    padding: 0.4rem 1rem;
+    border-radius: 8px;
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+.filter-btn:hover {
+    border-color: #58a6ff;
+    color: var(--text-primary);
+    background: rgba(88, 166, 255, 0.08);
+}
+.filter-btn.active {
+    background: rgba(88, 166, 255, 0.15);
+    border-color: #58a6ff;
+    color: #58a6ff;
+    font-weight: 600;
+}
+.filter-btn .filter-count {
+    font-size: 0.72rem;
+    padding: 1px 6px;
+    border-radius: 10px;
+    background: rgba(255, 160, 0, 0.2);
+    color: #ffa000;
+    font-weight: 600;
+}
+
 .approvals-list {
     display: flex;
     flex-direction: column;

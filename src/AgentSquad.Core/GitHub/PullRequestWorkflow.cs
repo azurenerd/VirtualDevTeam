@@ -14,7 +14,9 @@ public enum MergeAttemptResult
     AwaitingApprovals,
     ConflictBlocked,
     /// <summary>Code approved but waiting for Test Engineer to add tests (inline test workflow).</summary>
-    AwaitingTests
+    AwaitingTests,
+    /// <summary>All reviewers approved and PR is ready to merge, but merge was deferred (e.g. for a human gate).</summary>
+    ReadyToMerge
 }
 
 /// <summary>
@@ -790,6 +792,7 @@ public partial class PullRequestWorkflow
     public async Task<MergeAttemptResult> ApproveAndMaybeMergeAsync(
         int prNumber, string approverAgent, string reason,
         bool requireTestsBeforeMerge = false,
+        bool deferMerge = false,
         CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(approverAgent);
@@ -835,6 +838,13 @@ public partial class PullRequestWorkflow
                 await _github.AddPullRequestCommentAsync(prNumber,
                     "✅ **Code approved by all reviewers.** Waiting for the Test Engineer to add tests before merging.", ct);
                 return MergeAttemptResult.AwaitingTests;
+            }
+
+            // If caller wants to defer merge (e.g. for a human gate), signal ready without merging
+            if (deferMerge)
+            {
+                _logger.LogInformation("All reviewers approved PR #{Number}, deferring merge for human gate", prNumber);
+                return MergeAttemptResult.ReadyToMerge;
             }
 
             // Tests already added (or not required) — merge!
@@ -1042,10 +1052,90 @@ public partial class PullRequestWorkflow
     }
 
     /// <summary>
-    /// Reads the actual code files from a PR's changed file list and returns them as a
-    /// formatted context string suitable for inclusion in an AI review prompt.
-    /// Skips non-code files (markdown, images, config) and truncates large files.
+    /// Downloads actual screenshot images from PR comments for vision-based AI review.
+    /// Returns image bytes with metadata so callers can add them as ImageContent to chat history.
     /// </summary>
+    public async Task<List<ScreenshotImage>> GetPRScreenshotImagesAsync(
+        int prNumber, int maxImages = 5, CancellationToken ct = default)
+    {
+        var comments = await _github.GetPullRequestCommentsAsync(prNumber, ct);
+        var imageInfos = new List<(string url, string context)>();
+
+        foreach (var comment in comments)
+        {
+            var matches = Regex.Matches(
+                comment.Body, @"!\[([^\]]*)\]\((https?://[^\)]+\.(?:png|jpg|jpeg|gif|webp))\)");
+            foreach (Match match in matches)
+            {
+                var alt = match.Groups[1].Value;
+                var url = match.Groups[2].Value;
+
+                var lines = comment.Body.Split('\n');
+                var contextLines = lines
+                    .Where(l => l.Contains("Step", StringComparison.OrdinalIgnoreCase)
+                             || l.Contains("Preview", StringComparison.OrdinalIgnoreCase)
+                             || l.Contains("Captured", StringComparison.OrdinalIgnoreCase)
+                             || l.Contains("screenshot", StringComparison.OrdinalIgnoreCase))
+                    .Take(3);
+                var ctx = string.Join(" ", contextLines).Trim();
+                if (string.IsNullOrEmpty(ctx)) ctx = alt;
+                if (string.IsNullOrEmpty(ctx)) ctx = $"Screenshot from PR #{prNumber}";
+
+                imageInfos.Add((url, ctx));
+            }
+        }
+
+        if (imageInfos.Count == 0)
+            return [];
+
+        // Download images (limit to maxImages to avoid excessive bandwidth)
+        var results = new List<ScreenshotImage>();
+        using var httpClient = new HttpClient();
+        httpClient.Timeout = TimeSpan.FromSeconds(15);
+
+        foreach (var (url, context) in imageInfos.Take(maxImages))
+        {
+            try
+            {
+                var response = await httpClient.GetAsync(url, ct);
+                if (!response.IsSuccessStatusCode)
+                {
+                    _logger.LogDebug("Failed to download screenshot {Url}: {Status}", url, response.StatusCode);
+                    continue;
+                }
+
+                var bytes = await response.Content.ReadAsByteArrayAsync(ct);
+                if (bytes.Length < 100) // Skip tiny/broken images
+                    continue;
+
+                // Determine MIME type from URL extension
+                var mimeType = url.Contains(".png", StringComparison.OrdinalIgnoreCase) ? "image/png"
+                    : url.Contains(".jpg", StringComparison.OrdinalIgnoreCase) || url.Contains(".jpeg", StringComparison.OrdinalIgnoreCase) ? "image/jpeg"
+                    : url.Contains(".gif", StringComparison.OrdinalIgnoreCase) ? "image/gif"
+                    : url.Contains(".webp", StringComparison.OrdinalIgnoreCase) ? "image/webp"
+                    : "image/png";
+
+                // Cap image size at 2MB to avoid token explosion
+                if (bytes.Length > 2 * 1024 * 1024)
+                {
+                    _logger.LogDebug("Skipping oversized screenshot ({Size} bytes): {Url}", bytes.Length, url);
+                    continue;
+                }
+
+                results.Add(new ScreenshotImage(bytes, mimeType, context, url));
+                _logger.LogDebug("Downloaded screenshot ({Size} bytes): {Context}", bytes.Length, context);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Failed to download screenshot from {Url}", url);
+            }
+        }
+
+        return results;
+    }
+
+    /// <summary>Screenshot image data for vision-based AI review.</summary>
+    public record ScreenshotImage(byte[] ImageBytes, string MimeType, string Description, string SourceUrl);
     public async Task<string> GetPRCodeContextAsync(
         int prNumber, string headBranch, int maxFileSizeChars = 15000, CancellationToken ct = default)
     {

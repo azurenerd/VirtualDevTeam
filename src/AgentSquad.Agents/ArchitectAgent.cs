@@ -857,10 +857,31 @@ public class ArchitectAgent : AgentBase
             // Read actual code files from the PR branch
             var codeContext = await _prWorkflow.GetPRCodeContextAsync(pr.Number, pr.HeadBranch, ct: ct);
 
-            // Get screenshot context if any screenshots have been posted
-            var screenshotContext = await _prWorkflow.GetPRScreenshotContextAsync(pr.Number, ct);
+            // Get screenshot images for vision-based review
+            var screenshotImages = new List<PullRequestWorkflow.ScreenshotImage>();
+            var screenshotContext = "";
+            try
+            {
+                screenshotImages = await _prWorkflow.GetPRScreenshotImagesAsync(pr.Number, ct: ct);
+                if (screenshotImages.Count == 0)
+                    screenshotContext = await _prWorkflow.GetPRScreenshotContextAsync(pr.Number, ct);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "Could not fetch screenshots for PR #{Number}", pr.Number);
+            }
+
+            var hasScreenshots = screenshotImages.Count > 0 || !string.IsNullOrEmpty(screenshotContext);
 
             var history = new ChatHistory();
+            var screenshotInstructions = hasScreenshots
+                ? "ALSO CHECK: Screenshots are provided — you can SEE them embedded in this message. " +
+                  "Verify the app renders correctly without errors.\n" +
+                  "  - Error pages, unhandled exceptions, blank screens, JSON errors visible in screenshots = REWORK.\n" +
+                  "  - The visual output should match what the PR description says it implements.\n" +
+                  "  - A white screen with error text or a 'data.json' error = REWORK.\n"
+                : "";
+
             history.AddSystemMessage(
                 "You are a software architect reviewing a PR for architecture alignment.\n\n" +
                 "SCOPE: This PR is ONE task. Review only the parts it touches against the architecture doc.\n\n" +
@@ -870,9 +891,7 @@ public class ArchitectAgent : AgentBase
                 "that should be created (e.g., Models, Interfaces, Layouts, CSS, config files) and those files " +
                 "are MISSING from the PR, this is a REWORK issue. A PR that delivers only 2 of 15 expected files " +
                 "is incomplete regardless of whether those 2 files are architecturally correct.\n" +
-                "ALSO CHECK: If screenshots are provided, verify the app renders correctly without errors.\n" +
-                "  - Error pages, unhandled exceptions, or blank screens visible in screenshots = REWORK.\n" +
-                "  - The visual output should match what the PR description says it implements.\n" +
+                screenshotInstructions +
                 "IGNORE: code quality, null checks, naming, tests.\n\n" +
                 "IMPORTANT: Code may appear truncated in your review context due to length limits — " +
                 "this is a tooling limitation, NOT a code defect. Do NOT flag truncated code.\n\n" +
@@ -890,13 +909,39 @@ public class ArchitectAgent : AgentBase
                 "2. Missing Models/ReportData.cs, Models/Milestone.cs listed in acceptance criteria\\n" +
                 "3. Screenshot shows unhandled exception on app load'");
 
-            history.AddUserMessage(
+            var userMessageText =
                 $"## Architecture Document\n{architectureDoc}\n\n" +
                 $"## PM Specification\n{pmSpec}\n\n" +
                 issueContext +
                 $"## Pull Request #{pr.Number}: {pr.Title}\n{pr.Body}\n\n" +
-                codeContext +
-                (string.IsNullOrEmpty(screenshotContext) ? "" : $"\n\n{screenshotContext}"));
+                codeContext;
+
+            // Add screenshots as vision content if available
+            if (screenshotImages.Count > 0)
+            {
+                var items = new ChatMessageContentItemCollection();
+                var screenshotIntro = "\n\n## 📸 Application Screenshots\n" +
+                    "LOOK AT EACH IMAGE for errors, blank screens, or broken UI.\n\n";
+                for (var i = 0; i < screenshotImages.Count; i++)
+                    screenshotIntro += $"Screenshot {i + 1}: {screenshotImages[i].Description}\n";
+
+                items.Add(new TextContent(userMessageText + screenshotIntro));
+
+                foreach (var img in screenshotImages)
+                {
+                    items.Add(new ImageContent(img.ImageBytes, img.MimeType)
+                    {
+                        ModelId = $"screenshot: {img.Description}"
+                    });
+                }
+
+                history.AddUserMessage(items);
+            }
+            else
+            {
+                history.AddUserMessage(userMessageText +
+                    (string.IsNullOrEmpty(screenshotContext) ? "" : $"\n\n{screenshotContext}"));
+            }
 
             var response = await chat.GetChatMessageContentAsync(
                 history, cancellationToken: ct);
