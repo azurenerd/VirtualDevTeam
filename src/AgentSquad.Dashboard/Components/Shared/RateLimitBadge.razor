@@ -1,0 +1,74 @@
+@using AgentSquad.Core.GitHub.Models
+@using AgentSquad.Dashboard.Services
+@inject IServiceProvider ServiceProvider
+@implements IDisposable
+
+<div class="rate-limit-badge @StatusClass" title="@TooltipText">
+    <span class="rate-limit-icon">⚡</span>
+    <span class="rate-limit-text">@_info.Remaining / @_info.Limit</span>
+    @if (_info.IsRateLimited)
+    {
+        <span class="rate-limit-paused">PAUSED</span>
+    }
+</div>
+
+@code {
+    private GitHubRateLimitInfo _info = new() { Remaining = 5000, Limit = 5000 };
+    private Timer? _refreshTimer;
+    private IDashboardDataService? _dataService;
+
+    protected override void OnInitialized()
+    {
+        _dataService = ServiceProvider.GetService<DashboardDataService>() as IDashboardDataService
+            ?? ServiceProvider.GetService<HttpDashboardDataService>() as IDashboardDataService;
+
+        if (_dataService is not null)
+        {
+            _dataService.OnChange += HandleChange;
+            _info = _dataService.GetRateLimitInfo();
+        }
+
+        _refreshTimer = new Timer(_ => InvokeAsync(() =>
+        {
+            if (_dataService is not null)
+                _info = _dataService.GetRateLimitInfo();
+            StateHasChanged();
+        }), null, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
+    }
+
+    private void HandleChange()
+    {
+        InvokeAsync(() =>
+        {
+            if (_dataService is not null)
+                _info = _dataService.GetRateLimitInfo();
+            StateHasChanged();
+        });
+    }
+
+    private string StatusClass =>
+        _info.IsRateLimited ? "rate-critical" :
+        _info.Remaining < 200 ? "rate-warning" :
+        _info.Remaining < 1000 ? "rate-caution" :
+        "rate-healthy";
+
+    private string TooltipText =>
+        $"GitHub API: {_info.Remaining}/{_info.Limit} remaining" +
+        (_info.TotalApiCalls > 0 ? $" · {_info.TotalApiCalls} total calls" : "") +
+        (_info.ResetAt > DateTime.MinValue ? $" · Resets {FormatReset(_info.ResetAt)}" : "");
+
+    private static string FormatReset(DateTime resetUtc)
+    {
+        var remaining = resetUtc - DateTime.UtcNow;
+        if (remaining.TotalSeconds <= 0) return "now";
+        if (remaining.TotalMinutes < 1) return $"in {(int)remaining.TotalSeconds}s";
+        return $"in {(int)remaining.TotalMinutes}m";
+    }
+
+    public void Dispose()
+    {
+        _refreshTimer?.Dispose();
+        if (_dataService is not null)
+            _dataService.OnChange -= HandleChange;
+    }
+}

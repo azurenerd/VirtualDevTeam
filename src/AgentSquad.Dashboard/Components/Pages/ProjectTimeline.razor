@@ -107,12 +107,13 @@ else
                                 var issue = group.Issue;
                                 var isClosed = issue.State == "closed";
                                 var isSelected = _selectedIssue == issue.Number;
+                                var isAwaitingReview = issue.Labels.Any(l => l.Equals("awaiting-human-review", StringComparison.OrdinalIgnoreCase));
                                 nodeIdx++;
 
                                 <div class="ntl-node-cluster" style="--node-delay: @(nodeIdx * 0.06)s">
                                     <div class="ntl-spine-dot @(isClosed ? "done" : "active")"></div>
                                     <div class="ntl-connector"></div>
-                                    <div class="ntl-node @(isClosed ? "ntl-node-closed" : "ntl-node-open") @(isSelected ? "ntl-node-selected" : "")"
+                                    <div class="ntl-node @(isClosed ? "ntl-node-closed" : "ntl-node-open") @(isSelected ? "ntl-node-selected" : "") @(isAwaitingReview ? "ntl-node-awaiting" : "")"
                                          @onclick="() => SelectNode(issue.Number)" title="@issue.Title">
                                         <div class="ntl-node-indicator @(isClosed ? "ind-closed" : "ind-open")"></div>
                                         <div class="ntl-node-body">

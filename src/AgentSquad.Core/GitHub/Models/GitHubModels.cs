@@ -52,4 +52,6 @@ public record GitHubRateLimitInfo
     public int Remaining { get; init; }
     public int Limit { get; init; }
     public DateTime ResetAt { get; init; }
+    public long TotalApiCalls { get; init; }
+    public bool IsRateLimited { get; init; }
 }

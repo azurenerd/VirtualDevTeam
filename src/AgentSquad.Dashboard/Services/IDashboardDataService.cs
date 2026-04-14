@@ -45,6 +45,7 @@ public interface IDashboardDataService
 
     // GitHub data
     bool IsGitHubRateLimited { get; }
+    GitHubRateLimitInfo GetRateLimitInfo();
     Task<IReadOnlyList<AgentPullRequest>> GetPullRequestsAsync();
     Task<IReadOnlyList<AgentIssue>> GetIssuesAsync();
 

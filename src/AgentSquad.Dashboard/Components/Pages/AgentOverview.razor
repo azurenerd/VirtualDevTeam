@@ -90,8 +90,9 @@ else
             var statusClass = $"status-{agent.Status.ToString().ToLowerInvariant()}";
             var roleClass = $"role-{agent.Role.ToString().ToLowerInvariant()}";
             var selectedClass = _selectedAgentId == agent.Id ? "selected" : "";
+            var approvalClass = IsAwaitingApproval(agent) ? "awaiting-approval" : "";
 
-            <div class="agent-card @statusClass @selectedClass" @onclick="() => NavigateToAgent(agent.Id)">
+            <div class="agent-card @statusClass @selectedClass @approvalClass" @onclick="() => NavigateToAgent(agent.Id)">
                 <div class="agent-card-header">
                     <div class="agent-avatar @roleClass">
                         @GetRoleInitials(agent.Role)
@@ -370,6 +371,9 @@ else
 
     private int CountByStatus(AgentStatus status) =>
         _agents.Count(a => a.Status == status);
+
+    private static bool IsAwaitingApproval(AgentSnapshot agent) =>
+        agent.StatusReason?.Contains("Awaiting human approval", StringComparison.OrdinalIgnoreCase) == true;
 
     private string HealthClass => _hasDeadlock ? "danger" :
         _agents.Any(a => a.Status == AgentStatus.Blocked) ? "warning" : "healthy";

@@ -2,14 +2,21 @@
 @inject DashboardMode Mode
 
 <div class="sidebar-brand">
-    <div class="brand-title">AgentSquad</div>
-    <div class="brand-subtitle">@(Mode.IsStandalone ? "Monitoring Dashboard" : "Runner Admin")</div>
+    <div class="brand-logo">
+        <span class="brand-logo-icon">⚡</span>
+    </div>
+    <div class="brand-text">
+        <div class="brand-title">AgentSquad</div>
+        <div class="brand-subtitle">@(Mode.IsStandalone ? "Monitoring Dashboard" : "Runner Admin")</div>
+    </div>
 </div>
 
 <input type="checkbox" title="Navigation menu" class="navbar-toggler" />
 
 <div class="nav-scrollable" onclick="document.querySelector('.navbar-toggler').click()">
     <nav class="flex-column">
+        <div class="nav-section-label">Main</div>
+
         <div class="nav-item">
             <NavLink class="nav-link" href="" Match="NavLinkMatch.All">
                 <span class="nav-icon">🏠</span> Overview
@@ -24,11 +31,27 @@
 
         @if (Mode.IsStandalone)
         {
+            <div class="nav-section-label">Project</div>
+
             <div class="nav-item">
                 <NavLink class="nav-link" href="timeline">
                     <span class="nav-icon">🗺️</span> Project Timeline
                 </NavLink>
             </div>
+
+            <div class="nav-item">
+                <NavLink class="nav-link" href="engineering-plan">
+                    <span class="nav-icon">📐</span> Engineering Plan
+                </NavLink>
+            </div>
+
+            <div class="nav-item">
+                <NavLink class="nav-link" href="repository">
+                    <span class="nav-icon">📦</span> Repository
+                </NavLink>
+            </div>
+
+            <div class="nav-section-label">Operations</div>
 
             <div class="nav-item">
                 <NavLink class="nav-link" href="metrics">
@@ -43,24 +66,14 @@
             </div>
 
             <div class="nav-item">
-                <NavLink class="nav-link" href="repository">
-                    <span class="nav-icon">📦</span> Repository
-                </NavLink>
-            </div>
-
-            <div class="nav-item">
-                <NavLink class="nav-link" href="engineering-plan">
-                    <span class="nav-icon">📐</span> Engineering Plan
-                </NavLink>
-            </div>
-
-            <div class="nav-item">
                 <NavLink class="nav-link" href="team">
                     <span class="nav-icon">👥</span> Team View
                 </NavLink>
             </div>
 
-            <div class="nav-item nav-separator">
+            <div class="nav-section-label">Advanced</div>
+
+            <div class="nav-item">
                 <NavLink class="nav-link" href="reasoning">
                     <span class="nav-icon">🧠</span> Reasoning
                 </NavLink>

@@ -25,6 +25,7 @@ public sealed class HttpDashboardDataService : IDashboardDataService, IHostedSer
     private IReadOnlyList<AgentIssue> _issues = [];
     private IReadOnlyList<string> _models = [];
     private bool _isRateLimited;
+    private GitHubRateLimitInfo _rateLimitInfo = new() { Remaining = 5000, Limit = 5000 };
 
     public event Action? OnChange;
 
@@ -58,6 +59,9 @@ public sealed class HttpDashboardDataService : IDashboardDataService, IHostedSer
 
             var rl = await _http.GetFromJsonAsync<RateLimitResponse>("/api/dashboard/github/rate-limited");
             if (rl is not null) _isRateLimited = rl.IsRateLimited;
+
+            var rli = await _http.GetFromJsonAsync<GitHubRateLimitInfo>("/api/dashboard/github/rate-limit-info");
+            if (rli is not null) _rateLimitInfo = rli;
 
             OnChange?.Invoke();
         }
@@ -281,6 +285,8 @@ public sealed class HttpDashboardDataService : IDashboardDataService, IHostedSer
     // ── GitHub data ──
 
     public bool IsGitHubRateLimited => _isRateLimited;
+
+    public GitHubRateLimitInfo GetRateLimitInfo() => _rateLimitInfo;
 
     public async Task<IReadOnlyList<AgentPullRequest>> GetPullRequestsAsync()
     {

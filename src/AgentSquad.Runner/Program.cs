@@ -196,6 +196,9 @@ api.MapGet("/github/pull-requests", async (DashboardDataService svc) =>
 api.MapGet("/github/rate-limited", (DashboardDataService svc) =>
     Results.Ok(new { IsRateLimited = svc.IsGitHubRateLimited }));
 
+api.MapGet("/github/rate-limit-info", (DashboardDataService svc) =>
+    Results.Ok(svc.GetRateLimitInfo()));
+
 api.MapPost("/reset", (DashboardDataService svc) =>
     { svc.ResetCaches(); return Results.Ok(); });
 
