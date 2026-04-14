@@ -21,34 +21,36 @@ public class GateCheckService : IGateCheckService
 
     private readonly ConcurrentDictionary<string, DateTime> _localApprovals = new();
 
-    private readonly HumanInteractionConfig _config;
+    private readonly IOptionsMonitor<AgentSquadConfig> _configMonitor;
     private readonly IGitHubService _github;
     private readonly GateNotificationService? _notificationService;
     private readonly ModelRegistry? _modelRegistry;
     private readonly ILogger<GateCheckService> _logger;
 
+    private HumanInteractionConfig Config => _configMonitor.CurrentValue.HumanInteraction;
+
     public GateCheckService(
-        IOptions<AgentSquadConfig> config,
+        IOptionsMonitor<AgentSquadConfig> config,
         IGitHubService github,
         ILogger<GateCheckService> logger,
         GateNotificationService? notificationService = null,
         ModelRegistry? modelRegistry = null)
     {
-        _config = config.Value.HumanInteraction;
+        _configMonitor = config;
         _github = github;
         _logger = logger;
         _notificationService = notificationService;
         _modelRegistry = modelRegistry;
     }
 
-    public bool IsEnabled => _config.Enabled;
+    public bool IsEnabled => Config.Enabled;
 
-    public bool RequiresHuman(string gateId) => _config.RequiresHuman(gateId);
+    public bool RequiresHuman(string gateId) => Config.RequiresHuman(gateId);
 
     public async Task<GateResult> CheckGateAsync(
         string gateId, string context, int? resourceNumber = null, CancellationToken ct = default)
     {
-        if (!_config.RequiresHuman(gateId))
+        if (!Config.RequiresHuman(gateId))
         {
             _logger.LogDebug("Gate {GateId} does not require human approval, proceeding", gateId);
             return GateResult.Proceed;
@@ -135,7 +137,7 @@ public class GateCheckService : IGateCheckService
     public async Task<GateCommentAssessment> AssessGateApprovalAsync(
         string gateId, int resourceNumber, CancellationToken ct = default)
     {
-        if (!_config.RequiresHuman(gateId))
+        if (!Config.RequiresHuman(gateId))
             return new GateCommentAssessment(GateDecision.Approved);
 
         if (_localApprovals.ContainsKey(gateId))
@@ -229,7 +231,7 @@ public class GateCheckService : IGateCheckService
     public async Task<GateStatus> GetGateStatusAsync(
         string gateId, int resourceNumber, CancellationToken ct = default)
     {
-        if (!_config.RequiresHuman(gateId))
+        if (!Config.RequiresHuman(gateId))
             return GateStatus.Approved;
 
         if (_localApprovals.ContainsKey(gateId))
@@ -282,7 +284,7 @@ public class GateCheckService : IGateCheckService
         var pending = new List<PendingGateInfo>();
         foreach (var (_, id, name, description) in GateIds.AllGates)
         {
-            if (_config.RequiresHuman(id) && !_localApprovals.ContainsKey(id))
+            if (Config.RequiresHuman(id) && !_localApprovals.ContainsKey(id))
             {
                 pending.Add(new PendingGateInfo(id, name, description));
             }

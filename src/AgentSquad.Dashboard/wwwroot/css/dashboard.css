@@ -3419,6 +3419,112 @@ div[title] .config-agent-name {
     transform: translateX(16px);
 }
 
+/* Preset Bar */
+.config-preset-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+    flex-wrap: wrap;
+}
+.config-preset-label {
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+}
+.config-preset-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.4rem 0.85rem;
+    font-size: 0.82rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+.config-preset-btn:hover {
+    color: var(--text-primary);
+    background: var(--bg-tertiary);
+    border-color: var(--accent-blue);
+}
+.config-preset-active {
+    color: var(--accent-blue);
+    background: rgba(88, 166, 255, 0.1);
+    border-color: var(--accent-blue);
+    box-shadow: 0 0 0 1px rgba(88, 166, 255, 0.2);
+}
+
+/* Gate Phase Groups */
+.config-gate-phase {
+    margin-bottom: 1.25rem;
+}
+.config-gate-phase-title {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0 0 0.6rem 0;
+    padding-bottom: 0.35rem;
+    border-bottom: 1px solid var(--border-subtle);
+}
+.config-gate-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 0.5rem;
+}
+.config-gate-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.5rem 0.75rem;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    transition: border-color 0.2s ease;
+}
+.config-gate-item:hover {
+    border-color: var(--accent-blue);
+}
+.config-gate-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+.config-gate-name {
+    font-size: 0.82rem;
+    font-weight: 500;
+    color: var(--text-primary);
+}
+.config-gate-badge {
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 0.15rem 0.5rem;
+    border-radius: 10px;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+.config-gate-human {
+    color: #e6a700;
+    background: rgba(230, 167, 0, 0.12);
+    border: 1px solid rgba(230, 167, 0, 0.25);
+}
+.config-gate-auto {
+    color: var(--accent-green);
+    background: rgba(63, 185, 80, 0.1);
+    border: 1px solid rgba(63, 185, 80, 0.2);
+}
+.config-gate-disabled-notice {
+    padding: 0.75rem 1rem;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    background: rgba(63, 185, 80, 0.06);
+    border: 1px solid rgba(63, 185, 80, 0.15);
+    border-radius: 8px;
+}
+
 /* Agent Grid */
 .config-agent-grid {
     display: flex;
