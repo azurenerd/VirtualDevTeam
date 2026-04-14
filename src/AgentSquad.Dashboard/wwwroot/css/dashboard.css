@@ -5207,7 +5207,7 @@ div[title] .config-agent-name {
 .agent-filter-dropdown {
     position: absolute;
     top: calc(100% + 6px);
-    left: 0;
+    right: 0;
     z-index: 100;
     min-width: 220px;
     background: #161b22;
