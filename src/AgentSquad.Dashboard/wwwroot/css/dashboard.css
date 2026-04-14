@@ -6033,6 +6033,8 @@ a.ntl-detail-pr-num:hover { text-decoration: underline; color: #79c0ff; }
 
 @keyframes rate-pulse {
     0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
 
 /* ── Cost Badge ── */
 .cost-badge {
