@@ -61,48 +61,74 @@ public sealed class HttpConfigurationService : IConfigurationService
 
     public async Task SaveConfigAsync(AgentSquadConfig updatedConfig)
     {
-        using var client = CreateClient();
-        var response = await client.PostAsJsonAsync("/api/configuration/save", updatedConfig);
-        response.EnsureSuccessStatusCode();
+        // Serialize on the calling thread (safe, CPU-bound)
+        var json = System.Text.Json.JsonSerializer.Serialize(updatedConfig);
+        _logger.LogInformation("SaveConfigAsync: {Bytes} bytes, dispatching to thread pool...", json.Length);
+
+        // Run the HTTP call on a thread-pool thread to completely bypass the
+        // Blazor Server synchronization context, which can interfere with
+        // SocketsHttpHandler I/O on some Windows/.NET combinations.
+        await Task.Run(async () =>
+        {
+            using var client = CreateClient();
+            using var content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
+
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var response = await client.PostAsync("/api/configuration/save", content);
+            sw.Stop();
+
+            _logger.LogInformation("SaveConfigAsync: response {Status} in {Ms}ms", response.StatusCode, sw.ElapsedMilliseconds);
+            response.EnsureSuccessStatusCode();
+        });
+
         _cachedConfig = updatedConfig;
         _logger.LogInformation("Configuration saved via Runner API");
     }
 
     public async Task<PatValidationResult> ValidatePatAsync(string token, string repoFullName, CancellationToken ct = default)
     {
-        var request = new { Token = token, RepoFullName = repoFullName };
-        using var client = CreateClient();
-        var response = await client.PostAsJsonAsync("/api/configuration/validate-pat", request, ct);
+        return await Task.Run(async () =>
+        {
+            var request = new { Token = token, RepoFullName = repoFullName };
+            using var client = CreateClient();
+            var response = await client.PostAsJsonAsync("/api/configuration/validate-pat", request, ct);
 
-        if (!response.IsSuccessStatusCode)
-            return new PatValidationResult { Success = false, Error = $"Runner returned {response.StatusCode}" };
+            if (!response.IsSuccessStatusCode)
+                return new PatValidationResult { Success = false, Error = $"Runner returned {response.StatusCode}" };
 
-        return await response.Content.ReadFromJsonAsync<PatValidationResult>(JsonOptions, ct)
-            ?? new PatValidationResult { Success = false, Error = "Empty response from Runner" };
+            return await response.Content.ReadFromJsonAsync<PatValidationResult>(JsonOptions, ct)
+                ?? new PatValidationResult { Success = false, Error = "Empty response from Runner" };
+        }, ct);
     }
 
     public async Task<CleanupSummary> ScanRepoForCleanupAsync(CancellationToken ct = default)
     {
-        using var client = CreateClient();
-        var response = await client.GetAsync("/api/configuration/cleanup/scan", ct);
+        return await Task.Run(async () =>
+        {
+            using var client = CreateClient();
+            var response = await client.GetAsync("/api/configuration/cleanup/scan", ct);
 
-        if (!response.IsSuccessStatusCode)
-            return new CleanupSummary { Error = $"Runner returned {response.StatusCode}" };
+            if (!response.IsSuccessStatusCode)
+                return new CleanupSummary { Error = $"Runner returned {response.StatusCode}" };
 
-        return await response.Content.ReadFromJsonAsync<CleanupSummary>(JsonOptions, ct)
-            ?? new CleanupSummary { Error = "Empty response from Runner" };
+            return await response.Content.ReadFromJsonAsync<CleanupSummary>(JsonOptions, ct)
+                ?? new CleanupSummary { Error = "Empty response from Runner" };
+        }, ct);
     }
 
     public async Task<CleanupResult> ExecuteCleanupAsync(string? caveats, CancellationToken ct = default)
     {
-        var request = new { Caveats = caveats };
-        using var client = CreateClient();
-        var response = await client.PostAsJsonAsync("/api/configuration/cleanup/execute", request, ct);
+        return await Task.Run(async () =>
+        {
+            var request = new { Caveats = caveats };
+            using var client = CreateClient();
+            var response = await client.PostAsJsonAsync("/api/configuration/cleanup/execute", request, ct);
 
-        if (!response.IsSuccessStatusCode)
-            return new CleanupResult { Success = false, Phase = "Error", Errors = [$"Runner returned {response.StatusCode}"] };
+            if (!response.IsSuccessStatusCode)
+                return new CleanupResult { Success = false, Phase = "Error", Errors = [$"Runner returned {response.StatusCode}"] };
 
-        return await response.Content.ReadFromJsonAsync<CleanupResult>(JsonOptions, ct)
-            ?? new CleanupResult { Success = false, Phase = "Error", Errors = ["Empty response from Runner"] };
+            return await response.Content.ReadFromJsonAsync<CleanupResult>(JsonOptions, ct)
+                ?? new CleanupResult { Success = false, Phase = "Error", Errors = ["Empty response from Runner"] };
+        }, ct);
     }
 }

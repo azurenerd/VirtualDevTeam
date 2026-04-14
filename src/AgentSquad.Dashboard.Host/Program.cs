@@ -83,6 +83,49 @@ if (!app.Environment.IsDevelopment())
 app.UseStaticFiles();
 app.UseAntiforgery();
 
+// ── Diagnostic endpoint to test HTTP calls outside Blazor context ──
+app.MapGet("/api/diag/ping-runner", async (IHttpClientFactory factory) =>
+{
+    var sw = System.Diagnostics.Stopwatch.StartNew();
+    using var client = factory.CreateClient("RunnerApi");
+    var resp = await client.GetAsync("/api/configuration/current");
+    sw.Stop();
+    return Results.Ok(new { Status = resp.StatusCode.ToString(), ElapsedMs = sw.ElapsedMilliseconds });
+});
+
+app.MapPost("/api/diag/test-save", async (IHttpClientFactory factory) =>
+{
+    var sw = System.Diagnostics.Stopwatch.StartNew();
+    try
+    {
+        using var client = factory.CreateClient("RunnerApi");
+        // Step 1: Get current config
+        var config = await client.GetFromJsonAsync<AgentSquad.Core.Configuration.AgentSquadConfig>(
+            "/api/configuration/current");
+        var getMs = sw.ElapsedMilliseconds;
+
+        // Step 2: Save it back (same as what Blazor page does)
+        var json = System.Text.Json.JsonSerializer.Serialize(config);
+        var content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
+        var resp = await client.PostAsync("/api/configuration/save", content);
+        sw.Stop();
+
+        return Results.Ok(new
+        {
+            Status = resp.StatusCode.ToString(),
+            GetMs = getMs,
+            SaveMs = sw.ElapsedMilliseconds - getMs,
+            TotalMs = sw.ElapsedMilliseconds,
+            BodySize = json.Length
+        });
+    }
+    catch (Exception ex)
+    {
+        sw.Stop();
+        return Results.Ok(new { Error = ex.GetType().Name + ": " + ex.Message, ElapsedMs = sw.ElapsedMilliseconds });
+    }
+});
+
 app.MapHub<AgentHub>("/agenthub");
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
