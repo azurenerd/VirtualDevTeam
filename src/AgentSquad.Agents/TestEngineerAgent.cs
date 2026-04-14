@@ -864,7 +864,7 @@ public class TestEngineerAgent : AgentBase
             var unitResult = await RunTestTierWithRetryAsync(
                 TestTier.Unit,
                 wsConfig.UnitTestCommand ?? wsConfig.TestCommand,
-                wsConfig.UnitTestTimeoutSeconds, wsConfig, ct);
+                wsConfig.UnitTestTimeoutSeconds, wsConfig, ct, pr.Number);
             if (unitResult is not null)
                 tierResults.Add(unitResult);
 
@@ -876,7 +876,7 @@ public class TestEngineerAgent : AgentBase
                 {
                     var intResult = await RunTestTierWithRetryAsync(
                         TestTier.Integration, intCommand,
-                        wsConfig.IntegrationTestTimeoutSeconds, wsConfig, ct);
+                        wsConfig.IntegrationTestTimeoutSeconds, wsConfig, ct, pr.Number);
                     if (intResult is not null)
                         tierResults.Add(intResult);
                 }
@@ -3053,7 +3053,7 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
                 TestTier.Unit,
                 wsConfig.UnitTestCommand ?? wsConfig.TestCommand,
                 wsConfig.UnitTestTimeoutSeconds,
-                wsConfig, ct);
+                wsConfig, ct, sourcePR.Number);
             if (unitResult is not null)
                 tierResults.Add(unitResult);
 
@@ -3065,7 +3065,7 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
                     TestTier.Integration,
                     wsConfig.IntegrationTestCommand,
                     wsConfig.IntegrationTestTimeoutSeconds,
-                    wsConfig, ct);
+                    wsConfig, ct, sourcePR.Number);
                 if (intResult is not null)
                     tierResults.Add(intResult);
             }
@@ -3146,9 +3146,12 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
         string testCommand,
         int timeoutSeconds,
         WorkspaceConfig wsConfig,
-        CancellationToken ct)
+        CancellationToken ct,
+        int? prNumber = null)
     {
-        UpdateStatus(AgentStatus.Working, $"Running {tier} tests");
+        UpdateStatus(AgentStatus.Working, prNumber.HasValue
+            ? $"Running {tier} tests for PR #{prNumber.Value}"
+            : $"Running {tier} tests");
 
         // Pass PLAYWRIGHT_BROWSERS_PATH so dotnet test child processes find Chromium
         var envVars = new Dictionary<string, string>
