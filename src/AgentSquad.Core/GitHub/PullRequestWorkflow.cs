@@ -471,32 +471,10 @@ public partial class PullRequestWorkflow
             return existing;
         }
 
-        // Check if the document was already merged to main by a prior run's PR.
-        // This prevents creating duplicate PRs after a restart when the previous PR was already approved+merged.
-        try
-        {
-            var existingContent = await _github.GetFileContentAsync(documentPath, _defaultBranch, ct);
-            if (!string.IsNullOrWhiteSpace(existingContent))
-            {
-                _logger.LogInformation(
-                    "Document {Path} already exists on {Branch} — prior PR was already merged, skipping PR creation",
-                    documentPath, _defaultBranch);
-                return new AgentPullRequest
-                {
-                    Number = 0,
-                    Title = fullPrTitle,
-                    HeadBranch = _defaultBranch,
-                    BaseBranch = _defaultBranch,
-                    Url = "",
-                    MergedAt = DateTime.UtcNow, // Signals IsMerged = true
-                    Labels = new List<string>()
-                };
-            }
-        }
-        catch
-        {
-            // File doesn't exist on main — proceed to create PR
-        }
+        // NOTE: We intentionally do NOT check if the document exists on main here.
+        // A prior run may have merged a stale version, and the current run needs to
+        // regenerate with fresh content. Duplicate PRs on restart are preferable to
+        // silently skipping document generation.
 
         // 1. Create feature branch
         var docSlug = Slugify(System.IO.Path.GetFileNameWithoutExtension(documentPath));
