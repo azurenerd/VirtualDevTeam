@@ -44,6 +44,7 @@ public interface IDashboardDataService
     void ClearAgentChat(string agentId);
 
     // GitHub data
+    string RepositoryFullName { get; }
     bool IsGitHubRateLimited { get; }
     GitHubRateLimitInfo GetRateLimitInfo();
     Task<IReadOnlyList<AgentPullRequest>> GetPullRequestsAsync();

@@ -886,6 +886,8 @@ public sealed class DashboardDataService : BackgroundService, IDashboardDataServ
     /// <summary>True when GitHub API rate limit is active — dashboard should show cached data.</summary>
     public bool IsGitHubRateLimited => _rateLimitManager.IsRateLimited;
 
+    public string RepositoryFullName => _github.RepositoryFullName;
+
     public GitHubRateLimitInfo GetRateLimitInfo() => new()
     {
         Remaining = _rateLimitManager.Remaining == int.MaxValue ? 5000 : _rateLimitManager.Remaining,

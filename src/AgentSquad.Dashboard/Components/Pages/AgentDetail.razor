@@ -10,7 +10,6 @@
 @inject IDashboardDataService DataService
 @inject IServiceProvider ServiceProvider
 @inject NavigationManager Navigation
-@inject IGitHubService GitHubService
 
 <PageTitle>AgentSquad — @(_agent?.DisplayName ?? "Agent Detail")</PageTitle>
 
@@ -98,7 +97,7 @@ else
                         }
                         @if (_agent.AssignedPullRequest is not null)
                         {
-                            var prUrl = $"https://github.com/{GitHubService.RepositoryFullName}/pull/{_agent.AssignedPullRequest}";
+                            var prUrl = $"https://github.com/{DataService.RepositoryFullName}/pull/{_agent.AssignedPullRequest}";
                             <div class="detail-task-active">
                                 <span class="detail-field-label">Pull Request</span>
                                 <a class="detail-pr-link" href="@prUrl" target="_blank" rel="noopener noreferrer">

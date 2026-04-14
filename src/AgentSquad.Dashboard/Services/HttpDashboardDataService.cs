@@ -28,6 +28,7 @@ public sealed class HttpDashboardDataService : IDashboardDataService, IHostedSer
     private GitHubRateLimitInfo _rateLimitInfo = new() { Remaining = 5000, Limit = 5000 };
     private decimal _cachedTotalCost;
     private int _cachedTotalCalls;
+    private string _repoFullName = "";
 
     public event Action? OnChange;
 
@@ -70,6 +71,12 @@ public sealed class HttpDashboardDataService : IDashboardDataService, IHostedSer
             {
                 _cachedTotalCost = cost.TotalCost;
                 _cachedTotalCalls = cost.TotalCalls;
+            }
+
+            if (string.IsNullOrEmpty(_repoFullName))
+            {
+                var repo = await _http.GetFromJsonAsync<RepoInfoResponse>("/api/dashboard/repo-info");
+                if (repo is not null) _repoFullName = repo.FullName;
             }
 
             OnChange?.Invoke();
@@ -294,6 +301,7 @@ public sealed class HttpDashboardDataService : IDashboardDataService, IHostedSer
     // ── GitHub data ──
 
     public bool IsGitHubRateLimited => _isRateLimited;
+    public string RepositoryFullName => _repoFullName;
 
     public GitHubRateLimitInfo GetRateLimitInfo() => _rateLimitInfo;
 
@@ -341,4 +349,5 @@ public sealed class HttpDashboardDataService : IDashboardDataService, IHostedSer
     private record DeadlockResponse(bool HasDeadlock, List<string>? Cycle);
     private record RateLimitResponse(bool IsRateLimited);
     private record CostSummaryResponse(decimal TotalCost, int TotalCalls);
+    private record RepoInfoResponse(string FullName);
 }

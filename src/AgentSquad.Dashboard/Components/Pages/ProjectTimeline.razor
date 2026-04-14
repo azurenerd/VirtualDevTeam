@@ -6,6 +6,7 @@
 @implements IAsyncDisposable
 @inject IDashboardDataService DataService
 @inject NavigationManager Navigation
+@inject IJSRuntime JS
 
 <PageTitle>AgentSquad — Project Timeline</PageTitle>
 
@@ -68,6 +69,15 @@ else
                 <button class="ntl-pill @(_statusFilter == "closed" ? "active" : "")" @onclick='() => SetFilter("closed")'>Closed</button>
             </div>
             <button class="ntl-refresh-btn @(_refreshing ? "spinning" : "")" @onclick="ForceRefreshAsync" title="Force refresh from GitHub" disabled="@_refreshing"><svg class="ntl-refresh-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v2h-2"/></svg></button>
+            <span class="ntl-topbar-divider">|</span>
+            <div class="ntl-zoom-controls">
+                <button class="ntl-zoom-btn" @onclick="ScrollToStart" title="Jump to beginning">⏮</button>
+                <button class="ntl-zoom-btn" @onclick="ZoomOut" title="Zoom out">−</button>
+                <span class="ntl-zoom-label">@(_zoomPercent)%</span>
+                <button class="ntl-zoom-btn" @onclick="ZoomIn" title="Zoom in">+</button>
+                <button class="ntl-zoom-btn" @onclick="ZoomFit" title="Fit all on screen">⊞</button>
+                <button class="ntl-zoom-btn" @onclick="ScrollToEnd" title="Jump to end">⏭</button>
+            </div>
         </div>
     </div>
 
@@ -81,8 +91,8 @@ else
 
     <!-- Horizontal timeline with full-height phase columns -->
     <div class="ntl-viewport">
-        <div class="ntl-scroll-area">
-            <div class="ntl-timeline theme-@_designTheme">
+        <div class="ntl-scroll-area" id="ntl-scroll-area">
+            <div class="ntl-timeline theme-@_designTheme" style="transform: scale(@(_zoomPercent / 100.0)); transform-origin: top left;">
                 @{ int nodeIdx = 0; }
                 @foreach (var phase in GetFilteredPhases())
                 {
@@ -251,8 +261,9 @@ else
     private int _openCount;
 
     private string _statusFilter = "all";
-    private string _devViewMode = "pm"; // "pm" = enhancement issues, "engineering" = engineering-task issues with PR children
+    private string _devViewMode = "engineering"; // "pm" = enhancement issues, "engineering" = engineering-task issues with PR children
     private string _designTheme = "default"; // "default", "blueprint", "metro", "cards"
+    private int _zoomPercent = 100;
     private int? _selectedIssue;
     private IssueGroup? _selectedGroup;
 
@@ -685,6 +696,12 @@ else
 
     private void SetFilter(string f) { _statusFilter = f; StateHasChanged(); }
     private void SetTheme(string t) { _designTheme = t; StateHasChanged(); }
+
+    private void ZoomIn() { _zoomPercent = Math.Min(200, _zoomPercent + 15); StateHasChanged(); }
+    private void ZoomOut() { _zoomPercent = Math.Max(30, _zoomPercent - 15); StateHasChanged(); }
+    private void ZoomFit() { _zoomPercent = 50; StateHasChanged(); }
+    private async Task ScrollToStart() { await JS.InvokeVoidAsync("eval", "document.getElementById('ntl-scroll-area')?.scrollTo({left:0,behavior:'smooth'})"); }
+    private async Task ScrollToEnd() { await JS.InvokeVoidAsync("eval", "document.getElementById('ntl-scroll-area')?.scrollTo({left:999999,behavior:'smooth'})"); }
 
     private async Task ForceRefreshAsync()
     {
