@@ -688,11 +688,19 @@ public class PrincipalEngineerAgent : EngineerAgentBase
         await ValidateEnhancementCoverageAsync(enhancementIssues, ct);
 
         // === Gate: EngineeringPlan — human reviews plan before finalization ===
-        UpdateStatus(AgentStatus.Working, "⏳ Awaiting human approval — engineering plan");
-        await _gateCheck.WaitForGateAsync(
-            GateIds.EngineeringPlan,
-            "Engineering plan ready for human review before finalization",
-            ct: ct);
+        // Skip gate on resume if tasks are already loaded (plan was already approved)
+        if (_taskManager.TotalCount > 0 && _taskManager.Tasks.Any(t => t.AssignedTo is not null))
+        {
+            Logger.LogInformation("Tasks already assigned, skipping EngineeringPlan gate (resume scenario)");
+        }
+        else
+        {
+            UpdateStatus(AgentStatus.Working, "⏳ Awaiting human approval — engineering plan");
+            await _gateCheck.WaitForGateAsync(
+                GateIds.EngineeringPlan,
+                "Engineering plan ready for human review before finalization",
+                ct: ct);
+        }
 
         Logger.LogInformation("Engineering plan created with {Count} tasks from {IssueCount} issues",
             _taskManager.TotalCount, enhancementIssues.Count);
@@ -969,11 +977,19 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 registeredEngineers.Add(new EngineerInfo { AgentId = agent.Identity.Id, Name = agent.Identity.DisplayName, Role = AgentRole.JuniorEngineer });
 
             // === Gate: TaskAssignment — human reviews task assignments ===
-            UpdateStatus(AgentStatus.Working, "⏳ Awaiting human approval — task assignments");
-            await _gateCheck.WaitForGateAsync(
-                GateIds.TaskAssignment,
-                $"Ready to assign {_taskManager.PendingCount} engineering tasks to available engineers",
-                ct: ct);
+            // Skip gate on resume if agents already have assignments
+            if (_agentAssignments.Count > 0)
+            {
+                Logger.LogInformation("Agents already have assignments, skipping TaskAssignment gate (resume scenario)");
+            }
+            else
+            {
+                UpdateStatus(AgentStatus.Working, "⏳ Awaiting human approval — task assignments");
+                await _gateCheck.WaitForGateAsync(
+                    GateIds.TaskAssignment,
+                    $"Ready to assign {_taskManager.PendingCount} engineering tasks to available engineers",
+                    ct: ct);
+            }
 
             foreach (var engineer in registeredEngineers)
             {

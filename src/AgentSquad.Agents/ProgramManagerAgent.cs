@@ -1231,12 +1231,22 @@ public class ProgramManagerAgent : AgentBase
             _pmSpecCreated = true;
             Logger.LogInformation("Research complete signal received — generating PMSpec.md");
 
-            // === Gate: ResearchCompleteness — human reviews research before PM proceeds ===
-            UpdateStatus(AgentStatus.Working, "⏳ Awaiting human approval — research completeness");
-            await _gateCheck.WaitForGateAsync(
-                GateIds.ResearchCompleteness,
-                "Research phase complete, PM ready to create specification",
-                ct: ct);
+            // Skip gate if PMSpec already exists (resume scenario — no need to re-approve)
+            var existingSpec = await _projectFiles.GetPMSpecAsync(ct);
+            if (!string.IsNullOrWhiteSpace(existingSpec) &&
+                !existingSpec.Contains("No PM specification has been created yet", StringComparison.OrdinalIgnoreCase))
+            {
+                Logger.LogInformation("PMSpec.md already exists, skipping ResearchCompleteness gate");
+            }
+            else
+            {
+                // === Gate: ResearchCompleteness — human reviews research before PM proceeds ===
+                UpdateStatus(AgentStatus.Working, "⏳ Awaiting human approval — research completeness");
+                await _gateCheck.WaitForGateAsync(
+                    GateIds.ResearchCompleteness,
+                    "Research phase complete, PM ready to create specification",
+                    ct: ct);
+            }
 
             await CreatePMSpecAsync(ct);
         }
