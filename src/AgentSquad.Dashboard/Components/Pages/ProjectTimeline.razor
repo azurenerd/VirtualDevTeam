@@ -92,7 +92,7 @@ else
     <!-- Horizontal timeline with full-height phase columns -->
     <div class="ntl-viewport">
         <div class="ntl-scroll-area" id="ntl-scroll-area">
-            <div class="ntl-timeline theme-@_designTheme" style="transform: scale(@(_zoomPercent / 100.0)); transform-origin: top left;">
+            <div class="ntl-timeline theme-@_designTheme" style="zoom: @(_zoomPercent)%;">
                 @{ int nodeIdx = 0; }
                 @foreach (var phase in GetFilteredPhases())
                 {
@@ -698,10 +698,31 @@ else
     private void SetTheme(string t) { _designTheme = t; StateHasChanged(); }
 
     private void ZoomIn() { _zoomPercent = Math.Min(200, _zoomPercent + 15); StateHasChanged(); }
-    private void ZoomOut() { _zoomPercent = Math.Max(30, _zoomPercent - 15); StateHasChanged(); }
-    private void ZoomFit() { _zoomPercent = 50; StateHasChanged(); }
+    private void ZoomOut() { _zoomPercent = Math.Max(20, _zoomPercent - 15); StateHasChanged(); }
+    private async Task ZoomFit()
+    {
+        // Calculate zoom to fit: viewport width / content width at 100% zoom
+        var pct = await JS.InvokeAsync<int>("eval", @"
+            (function() {
+                var sa = document.getElementById('ntl-scroll-area');
+                var tl = sa?.querySelector('.ntl-timeline');
+                if (!sa || !tl) return 50;
+                // Temporarily reset zoom to measure natural width
+                var oldZoom = tl.style.zoom;
+                tl.style.zoom = '100%';
+                var contentW = tl.scrollWidth;
+                tl.style.zoom = oldZoom;
+                var viewportW = sa.clientWidth;
+                var pct = Math.max(20, Math.min(200, Math.floor(viewportW / contentW * 100)));
+                return pct;
+            })()");
+        _zoomPercent = pct;
+        // Scroll to start so content is visible
+        await JS.InvokeVoidAsync("eval", "document.getElementById('ntl-scroll-area')?.scrollTo({left:0,behavior:'instant'})");
+        StateHasChanged();
+    }
     private async Task ScrollToStart() { await JS.InvokeVoidAsync("eval", "document.getElementById('ntl-scroll-area')?.scrollTo({left:0,behavior:'smooth'})"); }
-    private async Task ScrollToEnd() { await JS.InvokeVoidAsync("eval", "document.getElementById('ntl-scroll-area')?.scrollTo({left:999999,behavior:'smooth'})"); }
+    private async Task ScrollToEnd() { await JS.InvokeVoidAsync("eval", "var el=document.getElementById('ntl-scroll-area'); if(el) el.scrollTo({left:el.scrollWidth,behavior:'smooth'})"); }
 
     private async Task ForceRefreshAsync()
     {
