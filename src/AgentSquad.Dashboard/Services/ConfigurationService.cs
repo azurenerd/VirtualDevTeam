@@ -146,7 +146,12 @@ public sealed class ConfigurationService : IConfigurationService
         root["AgentSquad"] = configJson;
 
         var output = root.ToJsonString(JsonOptions);
-        await File.WriteAllTextAsync(_appSettingsPath, output);
+
+        // Write to a temp file then move — avoids "user-mapped section open" IOException
+        // on Windows where ASP.NET's file watcher memory-maps appsettings.json.
+        var tempPath = _appSettingsPath + ".tmp";
+        await File.WriteAllTextAsync(tempPath, output);
+        File.Move(tempPath, _appSettingsPath, overwrite: true);
 
         // Cache the saved config so GetCurrentConfig returns it immediately
         _lastSavedConfig = updatedConfig;
