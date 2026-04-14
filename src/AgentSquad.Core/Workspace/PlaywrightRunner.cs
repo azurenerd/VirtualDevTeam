@@ -485,6 +485,9 @@ public class PlaywrightRunner
 
             // Restore original command
             config.AppStartCommand = originalCommand;
+
+            // Restore any patched Program.cs files
+            RestoreOriginalPortBindings(workspacePath);
         }
     }
 
@@ -501,6 +504,11 @@ public class PlaywrightRunner
         Dictionary<string, string> envVars,
         CancellationToken ct)
     {
+        // Patch hardcoded port bindings in the target app so it respects ASPNETCORE_URLS.
+        // AI-generated apps often have app.Urls.Clear()/app.Urls.Add("http://localhost:5050")
+        // which overrides all env vars and CLI args, causing port conflicts with the runner.
+        PatchHardcodedPortBindings(workspacePath, envVars);
+
         var appCommand = ResolveAppStartCommand(workspacePath, config);
         var (exe, args) = BuildRunner.ParseCommand(appCommand);
 
@@ -582,6 +590,112 @@ public class PlaywrightRunner
             _logger.LogDebug("No listening URL detected from process output after 60s");
 
         return (process, detectedUrl);
+    }
+
+    /// <summary>
+    /// Patch hardcoded port bindings in the target app's Program.cs so it respects
+    /// the ASPNETCORE_URLS environment variable. AI-generated apps frequently contain:
+    ///   app.Urls.Clear();
+    ///   app.Urls.Add("http://localhost:5050");
+    /// which overrides ALL external configuration (env vars, --urls, launchSettings).
+    /// This causes port conflicts when the runner is already on that port, and prevents
+    /// the PlaywrightRunner from assigning a unique port per workspace.
+    ///
+    /// The patch replaces hardcoded Urls.Add/Urls.Clear calls with code that reads
+    /// ASPNETCORE_URLS, falling back to the original hardcoded value.
+    /// A .bak file is saved so the original can be restored after tests.
+    /// </summary>
+    private void PatchHardcodedPortBindings(string workspacePath, Dictionary<string, string> envVars)
+    {
+        // Find Program.cs files (exclude test projects)
+        var programFiles = Directory.EnumerateFiles(workspacePath, "Program.cs", SearchOption.AllDirectories)
+            .Where(f => !Path.GetRelativePath(workspacePath, f).Contains("test", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        foreach (var programFile in programFiles)
+        {
+            try
+            {
+                var content = File.ReadAllText(programFile);
+
+                // Check if it has hardcoded port bindings
+                if (!content.Contains("app.Urls.Add") && !content.Contains("Urls.Add(") &&
+                    !content.Contains(".UseUrls("))
+                    continue;
+
+                var relPath = Path.GetRelativePath(workspacePath, programFile);
+
+                // Save backup for restoration
+                var backupPath = programFile + ".playwright-bak";
+                if (!File.Exists(backupPath))
+                    File.Copy(programFile, backupPath);
+
+                var patched = content;
+
+                // Replace app.Urls.Clear() — just comment it out
+                patched = System.Text.RegularExpressions.Regex.Replace(
+                    patched,
+                    @"^\s*app\.Urls\.Clear\(\);\s*$",
+                    "// [PlaywrightRunner] Removed hardcoded Urls.Clear() — using ASPNETCORE_URLS",
+                    System.Text.RegularExpressions.RegexOptions.Multiline);
+
+                // Replace app.Urls.Add("http://...") with env-var-aware version
+                // Captures the original URL as fallback
+                patched = System.Text.RegularExpressions.Regex.Replace(
+                    patched,
+                    @"app\.Urls\.Add\(""(https?://[^""]+)""\);",
+                    match =>
+                    {
+                        var originalUrl = match.Groups[1].Value;
+                        return $"app.Urls.Add(Environment.GetEnvironmentVariable(\"ASPNETCORE_URLS\") ?? \"{originalUrl}\");";
+                    });
+
+                // Also handle builder.WebHost.UseUrls("...") pattern
+                patched = System.Text.RegularExpressions.Regex.Replace(
+                    patched,
+                    @"\.UseUrls\(""(https?://[^""]+)""\)",
+                    match =>
+                    {
+                        var originalUrl = match.Groups[1].Value;
+                        return $".UseUrls(Environment.GetEnvironmentVariable(\"ASPNETCORE_URLS\") ?? \"{originalUrl}\")";
+                    });
+
+                if (patched != content)
+                {
+                    File.WriteAllText(programFile, patched);
+                    _logger.LogInformation(
+                        "Patched hardcoded port bindings in {File} to respect ASPNETCORE_URLS",
+                        relPath);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Failed to patch port bindings in {File}", programFile);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Restore any Program.cs files that were patched by <see cref="PatchHardcodedPortBindings"/>.
+    /// Called in the finally block after UI tests complete.
+    /// </summary>
+    private void RestoreOriginalPortBindings(string workspacePath)
+    {
+        try
+        {
+            var backups = Directory.EnumerateFiles(workspacePath, "*.playwright-bak", SearchOption.AllDirectories);
+            foreach (var backup in backups)
+            {
+                var original = backup[..^".playwright-bak".Length];
+                File.Copy(backup, original, overwrite: true);
+                File.Delete(backup);
+                _logger.LogDebug("Restored original {File}", Path.GetRelativePath(workspacePath, original));
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to restore patched files in {Path}", workspacePath);
+        }
     }
 
     /// <summary>
@@ -1086,6 +1200,9 @@ public class PlaywrightRunner
         {
             // Restore original command
             config.AppStartCommand = originalCommand;
+
+            // Restore any patched Program.cs files
+            RestoreOriginalPortBindings(workspacePath);
 
             if (appProcess is not null)
             {
