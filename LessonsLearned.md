@@ -24,6 +24,8 @@
 14. [GitHub API Rate Limiting and Caching](#14-github-api-rate-limiting-and-caching)
 15. [Vision-Based Screenshot Review](#15-vision-based-screenshot-review)
 16. [Human Gate Configuration Must Be Enforced on ALL Code Paths](#16-human-gate-configuration-must-be-enforced-on-all-code-paths)
+17. [Port Conflicts When Multiple Agents Run Apps Simultaneously](#17-port-conflicts-when-multiple-agents-run-apps-simultaneously)
+18. [Standalone Dashboard Data Hydration from SQLite](#18-standalone-dashboard-data-hydration-from-sqlite)
 
 ---
 
@@ -484,4 +486,49 @@ The agents will not "figure out" what you want from a high-level description. Th
 
 ---
 
-*This document was compiled from 80+ checkpoints, 400+ conversation turns, and 85+ end-to-end test runs across five Copilot CLI sessions building the AgentSquad system.*
+## 17. Port Conflicts When Multiple Agents Run Apps Simultaneously
+
+**Lesson:** When multiple agents (PE + TE, or multiple PEs) try to start the application under test on the same port (e.g., `:5100`), the second process fails because the port is already bound. This manifests as "App did not respond at http://localhost:5100 within 90s" — a timeout that looks like a build failure but is actually a port conflict.
+
+### What happened:
+- The workspace config had a single `AppBaseUrl` of `http://localhost:5100` shared by all agents.
+- PE 1 starts the app on `:5100` to capture a screenshot — succeeds.
+- TE starts the app on `:5100` to run UI tests — the port is occupied by PE 1's still-running app, so `dotnet run` fails silently or can't bind.
+- Activity log shows concurrent screenshot capture (PE at 19:02) and UI test execution (TE at 18:56-19:04) on the same port.
+- The TE's "app not responding" error was misdiagnosed as a build failure, missing data.json, or project path issue.
+
+### Technical solution:
+- Added `DeriveUniquePort(workspacePath)` to `PlaywrightRunner` — hashes the workspace path to a port in the range 5100–5899.
+- Each agent's workspace path contains their unique agent ID (e.g., `C:\Agents\testengineer-8f2b...\`), so each gets a different port.
+- Applied port rewriting in both `RunUITestsAsync` (TE tests) and `CaptureAppScreenshotAsync` (PE screenshots).
+- Port rewrite also updates `ASPNETCORE_URLS` env var and the `--urls` flag in the start command.
+- Config's `AppStartCommand` is temporarily swapped during execution and restored in the finally block.
+
+### Takeaway:
+**Any shared resource (port, file, temp directory) becomes a contention point in multi-agent systems.** When debugging "works for one agent but fails for another," check for resource sharing before investigating code bugs. The fix is to derive per-agent resources from the agent's identity — workspace path, agent ID, or a stable hash.
+
+---
+
+## 18. Standalone Dashboard Data Hydration from SQLite
+
+**Lesson:** The standalone Dashboard process (port 5051) has an empty in-memory `AgentRegistry` because it's a separate process from the Runner. The `agent_state` SQLite table is also always empty because agents never call `SaveCheckpointAsync`. Dashboard data must be hydrated from the `ai_usage` and `activity_log` tables instead.
+
+### What happened:
+- Standalone Dashboard created its own empty SQLite DB in its working directory instead of reading the Runner's DB.
+- After fixing the DB path, the `agent_state` table had 0 rows — no agent data.
+- The `ai_usage` table (15 agents, with model/cost info) and `activity_log` table (287 entries, with status/timestamps) had all the data.
+- Initial hydration showed 48 "agents" with wrong display names because the DB accumulated records from ALL previous restarts (old GUIDs + new GUIDs).
+
+### Technical solution:
+1. **DB path**: Dashboard's `Program.cs` resolves the Runner's DB file via relative path (`../AgentSquad.Runner/agentsquad_*.db`).
+2. **Data hydration**: `DashboardDataService.SeedFromDatabase()` queries `ai_usage` for agent IDs + cost + model, and `activity_log` for latest status per agent.
+3. **Boot time filtering**: `AgentStateStore.RecordBoot()` writes `last_boot_utc` to `run_metadata` table on each Runner startup. Dashboard filters agents to only those with activity AFTER `last_boot_utc`.
+4. **Display names**: `InferRole()` extracts role from agent ID prefix (e.g., `principalengineer-xxx` → "Principal Engineer"). `FormatDisplayName()` numbers agents per role.
+5. **Periodic refresh**: Timer loop re-seeds from DB every 10 seconds.
+
+### Takeaway:
+**When a read-only satellite process needs data from a write-primary process, plan the data contract.** Don't assume the schema has the right tables — check which tables actually get populated during operation. Accumulated historical records need filtering by run identity (boot timestamp, run ID, etc.) to avoid showing stale agents.
+
+---
+
+*This document was compiled from 80+ checkpoints, 400+ conversation turns, and 85+ end-to-end test runs across six Copilot CLI sessions building the AgentSquad system.*

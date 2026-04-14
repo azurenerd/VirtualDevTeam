@@ -1300,6 +1300,14 @@ Each phase of the sequential pipeline has its **own independent retry limit**:
 - **REQ-WS-004c**: If no `.sln` file exists at the repository root, auto-scaffold one referencing all `.csproj` files in the tree.
 - **REQ-WS-004d**: PE's foundation task (T1) SHOULD include project scaffolding as part of its scope. Downstream tasks inherit the project structure from T1 rather than each creating their own.
 
+### REQ-WS-005: Port Isolation for App Under Test
+
+- **REQ-WS-005a**: Each agent MUST use a unique port when starting the application under test. Multiple agents (PE screenshots, TE UI tests) may run simultaneously, and shared ports cause silent bind failures.
+- **REQ-WS-005b**: Port derivation uses a deterministic hash of the workspace path, mapped to a safe range (5100–5899). This ensures the same agent always gets the same port across restarts.
+- **REQ-WS-005c**: Port rewriting applies to: the `--urls` argument in the app start command, the `ASPNETCORE_URLS` environment variable, and the `BASE_URL` env var passed to test processes.
+- **REQ-WS-005d**: The original `config.AppStartCommand` is temporarily overridden during test/screenshot execution and restored in the `finally` block to avoid side effects.
+- **REQ-WS-005e**: If the app reports a different listening URL via stdout ("Now listening on: ..."), the detected URL takes precedence over the derived port (handles cases where the app ignores `--urls`).
+
 **Scenario: Agent Workspace Lifecycle**
 1. PE assigns Issue #45 to Senior Engineer 1
 2. Senior Engineer 1 clones repo to `C:\Agents\senior-engineer-1\` (or pulls latest if exists)
@@ -1479,3 +1487,6 @@ These bugs were discovered during scenario analysis and fixed. Listed here as re
 | Gate config not hot-reloadable | MODERATE | Changing gate settings required runner restart | `GateCheckService` used `IOptions` (snapshot at construction) | Changed to `IOptionsMonitor` with `Config` property reading current value |
 | Config page gate CSS missing | MODERATE | Human Interaction section on Configuration page showed unstyled raw HTML | CSS classes `.config-gate-*` and `.config-preset-*` were not in dashboard.css | Added full CSS for preset buttons, gate grid, gate items, phase titles, badges |
 | Standalone dashboard PR links 404 | MODERATE | PR links in agent cards went to github.com/standalone/not-connected/pull/N | `NullGitHubService.RepositoryFullName` returns placeholder in standalone mode | Added `/api/dashboard/repo-info` endpoint, `HttpDashboardDataService` fetches real name |
+| TE/PE port conflict on app start | CRITICAL | TE UI tests fail with "App did not respond at http://localhost:5100 within 90s" | All agents share the same `AppBaseUrl` port (5100). When PE and TE start apps simultaneously, second process can't bind the port. | Added `DeriveUniquePort(workspacePath)` — hashes workspace path to unique port in 5100–5899 range. Applied in both `RunUITestsAsync` and `CaptureAppScreenshotAsync`. |
+| Standalone dashboard shows no agents | CRITICAL | Dashboard on port 5051 shows empty agent list | Dashboard creates its own empty SQLite DB instead of reading Runner's DB. `agent_state` table is always empty (agents never persist checkpoints). | Fixed DB path to Runner's directory. Hydrate from `ai_usage` + `activity_log` tables. Added boot time filtering via `run_metadata.last_boot_utc`. |
+| Dashboard shows duplicate agents from old runs | MODERATE | Dashboard shows 48 agents instead of 8 — includes agents from all previous restarts | SQLite DB accumulates agent records across restarts. Each restart creates new agent GUIDs. | Added `RecordBoot()` to write `last_boot_utc` on each startup. Dashboard filters agents to only those with activity after boot time. |

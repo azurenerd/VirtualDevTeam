@@ -233,8 +233,11 @@ Key settings:
 7. **Standalone dashboard limitations**: Configuration page and Engineering Plan page are hidden. Use embedded dashboard (port 5050) or `fresh-reset.ps1` script for cleanup.
 8. **Vision review requires network access**: Screenshot download in PR reviews needs the runner to reach GitHub's raw content URLs. If behind a proxy, images fall back to URL-only text context.
 9. **Gate config hot-reload**: Gate settings are hot-reloaded via `IOptionsMonitor`. Other config sections (Models, Agents, Limits) still require restart.
+10. **Port conflicts between agents**: PE screenshots and TE UI tests both start the app under test. Each agent now uses a unique port derived from its workspace path (range 5100–5899). If you see "App did not respond" errors, check for port conflicts.
+11. **Standalone dashboard stale agents**: The DB accumulates agent records across restarts. `RecordBoot()` writes `last_boot_utc` to filter to current-run agents only. If dashboard shows old agents, restart the Runner to update the boot timestamp.
+12. **TE data.json**: Blazor apps that depend on `wwwroot/data.json` may fail on fresh clones. `EnsureSampleDataExists()` auto-creates a sample data file if missing.
 
 Note: Don't do any long pauses that are more than 1 minute long in the Copilot chat, as that makes it so you ignore me for X minutes--always keep checking back no more than a minute so the chat
 thread isn't blocked to get instructions from me. 
 
-*Last updated: 2026-04-14*
+*Last updated: 2026-04-15*
