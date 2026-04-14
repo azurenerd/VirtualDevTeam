@@ -1241,7 +1241,8 @@ public class ProgramManagerAgent : AgentBase
             else
             {
                 // === Gate: ResearchCompleteness — human reviews research before PM proceeds ===
-                UpdateStatus(AgentStatus.Working, "⏳ Awaiting human approval — research completeness");
+                if (_gateCheck.RequiresHuman(GateIds.ResearchCompleteness))
+                    UpdateStatus(AgentStatus.Working, "⏳ Awaiting human approval — research completeness");
                 await _gateCheck.WaitForGateAsync(
                     GateIds.ResearchCompleteness,
                     "Research phase complete, PM ready to create specification",
@@ -1437,7 +1438,8 @@ public class ProgramManagerAgent : AgentBase
                     var maxRevisions = 3;
                     for (var revision = 0; revision < maxRevisions; revision++)
                     {
-                        UpdateStatus(AgentStatus.Working, $"⏳ Awaiting human approval on PR #{qPr.Number}");
+                        if (_gateCheck.RequiresHuman(GateIds.PMSpecification))
+                            UpdateStatus(AgentStatus.Working, $"⏳ Awaiting human approval on PR #{qPr.Number}");
                         var gateWait = await _gateCheck.WaitForGateAsync(
                             GateIds.PMSpecification,
                             "PMSpec.md ready for human review before merge",
@@ -1702,7 +1704,8 @@ public class ProgramManagerAgent : AgentBase
                 var maxRevisions = 3;
                 for (var revision = 0; revision < maxRevisions; revision++)
                 {
-                    UpdateStatus(AgentStatus.Working, $"⏳ Awaiting human approval on PR #{pr.Number}");
+                    if (_gateCheck.RequiresHuman(GateIds.PMSpecification))
+                        UpdateStatus(AgentStatus.Working, $"⏳ Awaiting human approval on PR #{pr.Number}");
                     var gateWait = await _gateCheck.WaitForGateAsync(
                         GateIds.PMSpecification,
                         "PMSpec.md ready for human review before merge",

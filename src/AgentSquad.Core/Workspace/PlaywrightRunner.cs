@@ -316,7 +316,16 @@ public class PlaywrightRunner
             ["HEADED"] = config.PlaywrightHeadless ? "0" : "1",
             ["BASE_URL"] = baseUrl,
             ["BROWSER"] = "chromium",
-            ["ASPNETCORE_URLS"] = baseUrl
+            ["ASPNETCORE_URLS"] = baseUrl,
+            // Force Development environment so Kestrel logs "Now listening on:" to stdout.
+            // AI-generated apps often hardcode UseUrls()/app.Urls.Add() which overrides
+            // ASPNETCORE_URLS — URL detection from stdout is our fallback to discover the
+            // actual listening port.
+            ["ASPNETCORE_ENVIRONMENT"] = "Development",
+            ["DOTNET_ENVIRONMENT"] = "Development",
+            // Ensure hosting lifetime logs (including "Now listening on:") are emitted even
+            // if the app configures a higher minimum log level.
+            ["Logging__Console__LogLevel__Microsoft.Hosting.Lifetime"] = "Information"
         };
 
         // Video recording: set env vars so test fixtures can configure BrowserNewContextOptions
@@ -363,6 +372,30 @@ public class PlaywrightRunner
                 // Wait for app readiness
                 var ready = await WaitForAppReadyAsync(
                     baseUrl, config.AppStartupTimeoutSeconds, ct);
+
+                if (!ready)
+                {
+                    // Fallback: AI-generated apps may hardcode UseUrls()/app.Urls.Add()
+                    // which overrides ASPNETCORE_URLS. If URL detection also failed (e.g.,
+                    // Production log level suppressed the "Now listening on:" message), try
+                    // the original configured port as a last resort.
+                    var configuredUrl = config.AppBaseUrl;
+                    if (!string.Equals(baseUrl, configuredUrl, StringComparison.OrdinalIgnoreCase))
+                    {
+                        _logger.LogInformation(
+                            "Derived port {DerivedUrl} not responding, trying configured base URL {ConfiguredUrl}",
+                            baseUrl, configuredUrl);
+                        ready = await WaitForAppReadyAsync(configuredUrl, 15, ct);
+                        if (ready)
+                        {
+                            _logger.LogInformation(
+                                "App responded on configured URL {ConfiguredUrl} — hardcoded port likely overrides ASPNETCORE_URLS",
+                                configuredUrl);
+                            baseUrl = configuredUrl;
+                            envVars["BASE_URL"] = baseUrl;
+                        }
+                    }
+                }
 
                 if (!ready)
                 {

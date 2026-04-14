@@ -705,7 +705,8 @@ public class PrincipalEngineerAgent : EngineerAgentBase
         }
         else
         {
-            UpdateStatus(AgentStatus.Working, "⏳ Awaiting human approval — engineering plan");
+            if (_gateCheck.RequiresHuman(GateIds.EngineeringPlan))
+                UpdateStatus(AgentStatus.Working, "⏳ Awaiting human approval — engineering plan");
             await _gateCheck.WaitForGateAsync(
                 GateIds.EngineeringPlan,
                 "Engineering plan ready for human review before finalization",
@@ -996,7 +997,8 @@ public class PrincipalEngineerAgent : EngineerAgentBase
             }
             else
             {
-                UpdateStatus(AgentStatus.Working, "⏳ Awaiting human approval — task assignments");
+                if (_gateCheck.RequiresHuman(GateIds.TaskAssignment))
+                    UpdateStatus(AgentStatus.Working, "⏳ Awaiting human approval — task assignments");
                 await _gateCheck.WaitForGateAsync(
                     GateIds.TaskAssignment,
                     $"Ready to assign {_taskManager.PendingCount} engineering tasks to available engineers",
@@ -1561,7 +1563,8 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 // === Gate: PRReviewApproval — human reviews before PE approval ===
                 if (approved)
                 {
-                    UpdateStatus(AgentStatus.Working, $"⏳ Awaiting human approval on PR #{prNumber}");
+                    if (_gateCheck.RequiresHuman(GateIds.PRReviewApproval))
+                        UpdateStatus(AgentStatus.Working, $"⏳ Awaiting human approval on PR #{prNumber}");
                     var prGateResult = await _gateCheck.WaitForGateAsync(
                         GateIds.PRReviewApproval,
                         $"PE ready to approve PR #{prNumber}",
@@ -1759,7 +1762,8 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 }
 
                 // === Gate: FinalPRApproval — human reviews before final merge ===
-                UpdateStatus(AgentStatus.Working, $"⏳ Awaiting human approval on PR #{pr.Number}");
+                if (_gateCheck.RequiresHuman(GateIds.FinalPRApproval))
+                    UpdateStatus(AgentStatus.Working, $"⏳ Awaiting human approval on PR #{pr.Number}");
                 var finalGateResult = await _gateCheck.WaitForGateAsync(
                     GateIds.FinalPRApproval,
                     $"PR #{pr.Number} has passed all reviews and tests, ready for final merge",

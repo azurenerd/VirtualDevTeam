@@ -182,7 +182,8 @@ public class ResearcherAgent : AgentBase
                             var maxRevisions = 3;
                             for (var revision = 0; revision < maxRevisions; revision++)
                             {
-                                UpdateStatus(AgentStatus.Working, $"⏳ Awaiting human approval on PR #{pr.Number}");
+                                if (_gateCheck.RequiresHuman(GateIds.ResearchFindings))
+                                    UpdateStatus(AgentStatus.Working, $"⏳ Awaiting human approval on PR #{pr.Number}");
                                 var gateWait = await _gateCheck.WaitForGateAsync(
                                     GateIds.ResearchFindings,
                                     $"Research findings for '{directive.Topic}' ready for review",

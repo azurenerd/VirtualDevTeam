@@ -592,7 +592,8 @@ public class ArchitectAgent : AgentBase
             var maxRevisions = 3;
             for (var revision = 0; revision < maxRevisions; revision++)
             {
-                UpdateStatus(AgentStatus.Working, $"⏳ Awaiting human approval on PR #{pr.Number}");
+                if (_gateCheck.RequiresHuman(GateIds.ArchitectureDesign))
+                    UpdateStatus(AgentStatus.Working, $"⏳ Awaiting human approval on PR #{pr.Number}");
                 var gateWait = await _gateCheck.WaitForGateAsync(
                     GateIds.ArchitectureDesign,
                     "Architecture.md ready for human review before merge",
