@@ -399,17 +399,27 @@ public class PlaywrightRunner
 
                 if (!ready)
                 {
-                    _logger.LogWarning("App under test did not become ready at {Url} within {Timeout}s",
-                        baseUrl, config.AppStartupTimeoutSeconds);
+                    // Capture diagnostic info about why the app didn't start
+                    var exitInfo = "";
+                    if (appProcess is not null)
+                    {
+                        if (appProcess.HasExited)
+                            exitInfo = $" Process exited with code {appProcess.ExitCode}.";
+                        else
+                            exitInfo = " Process is still running but not responding on expected port.";
+                    }
+
+                    _logger.LogWarning("App under test did not become ready at {Url} within {Timeout}s.{ExitInfo}",
+                        baseUrl, config.AppStartupTimeoutSeconds, exitInfo);
 
                     return new TestResult
                     {
                         Success = false,
-                        Output = $"App under test failed to start at {baseUrl}",
+                        Output = $"App under test failed to start at {baseUrl}.{exitInfo}",
                         Passed = 0, Failed = 0, Skipped = 0,
                         Duration = TimeSpan.Zero,
                         Tier = TestTier.UI,
-                        FailureDetails = [$"App did not respond at {baseUrl} within {config.AppStartupTimeoutSeconds}s"]
+                        FailureDetails = [$"App did not respond at {baseUrl} within {config.AppStartupTimeoutSeconds}s.{exitInfo}"]
                     };
                 }
 
@@ -666,6 +676,24 @@ public class PlaywrightRunner
                     _logger.LogInformation(
                         "Patched hardcoded port bindings in {File} to respect ASPNETCORE_URLS",
                         relPath);
+
+                    // Force rebuild: delete bin/ directory so dotnet run doesn't use
+                    // the stale pre-patch build output. Without this, dotnet run may
+                    // skip recompilation and run the old DLL with hardcoded ports.
+                    var projectDir = Path.GetDirectoryName(programFile)!;
+                    var binDir = Path.Combine(projectDir, "bin");
+                    if (Directory.Exists(binDir))
+                    {
+                        try
+                        {
+                            Directory.Delete(binDir, true);
+                            _logger.LogInformation("Deleted {BinDir} to force rebuild with patched port bindings", binDir);
+                        }
+                        catch (Exception binEx)
+                        {
+                            _logger.LogDebug(binEx, "Could not delete bin/ directory, rebuild may use stale output");
+                        }
+                    }
                 }
             }
             catch (Exception ex)
