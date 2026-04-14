@@ -1291,6 +1291,59 @@ public class ProgramManagerAgent : AgentBase
 
     #region AI-Assisted Methods
 
+    /// <summary>Revise a document based on reviewer feedback using AI.</summary>
+    private async Task<string?> ReviseDocumentAsync(string docName, string feedback, CancellationToken ct)
+    {
+        try
+        {
+            var currentContent = docName switch
+            {
+                "PMSpec.md" => await _projectFiles.GetPMSpecAsync(ct),
+                _ => null
+            };
+            if (string.IsNullOrWhiteSpace(currentContent)) return null;
+
+            var kernel = _modelRegistry.GetKernel(Identity.ModelTier, Identity.Id);
+            var chat = kernel.GetRequiredService<IChatCompletionService>();
+            var history = new ChatHistory();
+            history.AddSystemMessage(
+                $"You are a Program Manager revising {docName} based on human reviewer feedback. " +
+                "Make the specific changes requested while preserving the overall structure.");
+            history.AddUserMessage(
+                $"## Current {docName}:\n\n{currentContent}\n\n" +
+                $"## Reviewer Feedback:\n\n{feedback}\n\n" +
+                $"Revise the {docName} to address the feedback. Return the COMPLETE revised document.");
+
+            var response = await chat.GetChatMessageContentsAsync(history, cancellationToken: ct);
+            var revised = string.Join("", response.Select(r => r.Content ?? ""));
+            return string.IsNullOrWhiteSpace(revised) ? null : revised;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to revise {DocName}", docName);
+            return null;
+        }
+    }
+
+    /// <summary>Reset gate labels on a PR for re-review after revision.</summary>
+    private async Task ResetGateLabelsAsync(int prNumber, CancellationToken ct)
+    {
+        try
+        {
+            var pr = await _github.GetPullRequestAsync(prNumber, ct);
+            if (pr is null) return;
+            var labels = pr.Labels?.ToList() ?? [];
+            labels.Remove("human-approved");
+            if (!labels.Contains("awaiting-human-review"))
+                labels.Add("awaiting-human-review");
+            await _github.UpdatePullRequestAsync(prNumber, labels: labels.ToArray(), ct: ct);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to reset gate labels on PR #{Number}", prNumber);
+        }
+    }
+
     /// <summary>
     /// Creates a PM Specification document from the research findings and project description.
     /// Uses a multi-turn AI conversation to produce a structured business spec, then
@@ -1371,11 +1424,33 @@ public class ProgramManagerAgent : AgentBase
                 // === Gate: PMSpecification — human reviews PMSpec before merge ===
                 if (qGateStatus != GateStatus.Approved)
                 {
-                    UpdateStatus(AgentStatus.Working, $"⏳ Awaiting human approval on PR #{qPr.Number}");
-                    await _gateCheck.WaitForGateAsync(
-                        GateIds.PMSpecification,
-                        "PMSpec.md ready for human review before merge",
-                        qPr.Number, ct: ct);
+                    var maxRevisions = 3;
+                    for (var revision = 0; revision < maxRevisions; revision++)
+                    {
+                        UpdateStatus(AgentStatus.Working, $"⏳ Awaiting human approval on PR #{qPr.Number}");
+                        var gateWait = await _gateCheck.WaitForGateAsync(
+                            GateIds.PMSpecification,
+                            "PMSpec.md ready for human review before merge",
+                            qPr.Number, ct: ct);
+
+                        if (!gateWait.WasRejected)
+                            break;
+
+                        Logger.LogInformation("PMSpec gate rejected on PR #{Number}: {Feedback}", qPr.Number, gateWait.Feedback);
+                        LogActivity("task", $"📝 Revising PMSpec based on feedback: {gateWait.Feedback}");
+                        UpdateStatus(AgentStatus.Working, $"Revising PMSpec (attempt {revision + 2})");
+
+                        var revised = await ReviseDocumentAsync("PMSpec.md", gateWait.Feedback!, ct);
+                        if (revised is not null && !qPr.IsMerged)
+                        {
+                            await _prWorkflow.CommitDocumentToPRAsync(
+                                qPr, "PMSpec.md", revised,
+                                $"Revise PMSpec based on reviewer feedback (attempt {revision + 2})", ct);
+                        }
+                        await ResetGateLabelsAsync(qPr.Number, ct);
+                        await _github.AddPullRequestCommentAsync(qPr.Number,
+                            $"📝 **Revised** based on your feedback:\n\n> {gateWait.Feedback}\n\nPlease review the updated PMSpec.md.", ct);
+                    }
                 }
 
                 if (!qPr.IsMerged)
@@ -1614,11 +1689,33 @@ public class ProgramManagerAgent : AgentBase
             // === Gate: PMSpecification — human reviews PMSpec before merge ===
             if (pmGateStatus != GateStatus.Approved)
             {
-                UpdateStatus(AgentStatus.Working, $"⏳ Awaiting human approval on PR #{pr.Number}");
-                await _gateCheck.WaitForGateAsync(
-                    GateIds.PMSpecification,
-                    "PMSpec.md ready for human review before merge",
-                    pr.Number, ct: ct);
+                var maxRevisions = 3;
+                for (var revision = 0; revision < maxRevisions; revision++)
+                {
+                    UpdateStatus(AgentStatus.Working, $"⏳ Awaiting human approval on PR #{pr.Number}");
+                    var gateWait = await _gateCheck.WaitForGateAsync(
+                        GateIds.PMSpecification,
+                        "PMSpec.md ready for human review before merge",
+                        pr.Number, ct: ct);
+
+                    if (!gateWait.WasRejected)
+                        break;
+
+                    Logger.LogInformation("PMSpec gate rejected on PR #{Number}: {Feedback}", pr.Number, gateWait.Feedback);
+                    LogActivity("task", $"📝 Revising PMSpec based on feedback: {gateWait.Feedback}");
+                    UpdateStatus(AgentStatus.Working, $"Revising PMSpec (attempt {revision + 2})");
+
+                    var revised = await ReviseDocumentAsync("PMSpec.md", gateWait.Feedback!, ct);
+                    if (revised is not null && !pr.IsMerged)
+                    {
+                        await _prWorkflow.CommitDocumentToPRAsync(
+                            pr, "PMSpec.md", revised,
+                            $"Revise PMSpec based on reviewer feedback (attempt {revision + 2})", ct);
+                    }
+                    await ResetGateLabelsAsync(pr.Number, ct);
+                    await _github.AddPullRequestCommentAsync(pr.Number,
+                        $"📝 **Revised** based on your feedback:\n\n> {gateWait.Feedback}\n\nPlease review the updated PMSpec.md.", ct);
+                }
             }
 
             if (!pr.IsMerged)

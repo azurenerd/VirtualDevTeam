@@ -1,18 +1,17 @@
 using System.Collections.Concurrent;
+using System.Text.Json;
 using AgentSquad.Core.GitHub;
 using AgentSquad.Core.Notifications;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Microsoft.SemanticKernel;
+using Microsoft.SemanticKernel.ChatCompletion;
 
 namespace AgentSquad.Core.Configuration;
 
 /// <summary>
 /// Evaluates human interaction gates at workflow touchpoints.
-/// Supports two approval paths:
-///   1. GitHub-based: labels/comments on a PR or issue (when resourceNumber is provided)
-///   2. Local: in-memory approval via REST API/dashboard (always available, required for
-///      workflow-level gates like ResearchCompleteness that have no associated PR)
-/// When gates are disabled or set to auto, returns Proceed immediately.
+/// Uses AI to assess human comments for approval/rejection intent — no hardcoded keyword matching.
 /// </summary>
 public class GateCheckService : IGateCheckService
 {
@@ -20,27 +19,26 @@ public class GateCheckService : IGateCheckService
     private const string HumanApprovedLabel = "human-approved";
     private const string GateCommentPrefix = "🚦 **Human Review Gate";
 
-    /// <summary>
-    /// Tracks gates approved via the local path (REST API / dashboard).
-    /// Key = gateId, Value = UTC timestamp of approval. Thread-safe.
-    /// </summary>
     private readonly ConcurrentDictionary<string, DateTime> _localApprovals = new();
 
     private readonly HumanInteractionConfig _config;
     private readonly IGitHubService _github;
     private readonly GateNotificationService? _notificationService;
+    private readonly ModelRegistry? _modelRegistry;
     private readonly ILogger<GateCheckService> _logger;
 
     public GateCheckService(
         IOptions<AgentSquadConfig> config,
         IGitHubService github,
         ILogger<GateCheckService> logger,
-        GateNotificationService? notificationService = null)
+        GateNotificationService? notificationService = null,
+        ModelRegistry? modelRegistry = null)
     {
         _config = config.Value.HumanInteraction;
         _github = github;
         _logger = logger;
         _notificationService = notificationService;
+        _modelRegistry = modelRegistry;
     }
 
     public bool IsEnabled => _config.Enabled;
@@ -134,18 +132,17 @@ public class GateCheckService : IGateCheckService
         return GateResult.WaitingForHuman;
     }
 
-    public async Task<bool> IsGateApprovedAsync(
+    public async Task<GateCommentAssessment> AssessGateApprovalAsync(
         string gateId, int resourceNumber, CancellationToken ct = default)
     {
         if (!_config.RequiresHuman(gateId))
-            return true;
+            return new GateCommentAssessment(GateDecision.Approved);
 
-        // Always check local approvals first (fast, no API call)
         if (_localApprovals.ContainsKey(gateId))
         {
             _logger.LogInformation("Gate {GateId} approved locally (while polling PR #{Number})", gateId, resourceNumber);
             _notificationService?.Resolve(gateId, resourceNumber);
-            return true;
+            return new GateCommentAssessment(GateDecision.Approved);
         }
 
         try
@@ -155,18 +152,24 @@ public class GateCheckService : IGateCheckService
             {
                 _logger.LogInformation("Gate {GateId} approved via label on PR #{Number}", gateId, resourceNumber);
                 _notificationService?.Resolve(gateId, resourceNumber);
-                return true;
+                return new GateCommentAssessment(GateDecision.Approved);
             }
 
             var comments = await _github.GetPullRequestCommentsAsync(resourceNumber, ct);
+
+            // Find the most recent non-bot human comment (skip gate notification comments)
             foreach (var comment in comments.Reverse())
             {
                 if (comment.Body?.Contains(GateCommentPrefix) == true) continue;
+                var body = comment.Body?.Trim() ?? "";
+                if (string.IsNullOrEmpty(body)) continue;
 
-                var body = comment.Body?.Trim().ToLowerInvariant() ?? "";
-                if (body.Contains("approved") || body.Contains("lgtm") || body.Contains("ship it"))
+                // Use AI to assess the comment intent
+                var assessment = await AssessCommentWithAIAsync(body, ct);
+
+                if (assessment.Decision == GateDecision.Approved)
                 {
-                    _logger.LogInformation("Gate {GateId} approved via comment on PR #{Number}", gateId, resourceNumber);
+                    _logger.LogInformation("Gate {GateId} approved via AI assessment on PR #{Number}", gateId, resourceNumber);
                     _notificationService?.Resolve(gateId, resourceNumber);
 
                     if (pr is not null)
@@ -178,8 +181,18 @@ public class GateCheckService : IGateCheckService
                         await _github.UpdatePullRequestAsync(resourceNumber, labels: labels.ToArray(), ct: ct);
                     }
 
-                    return true;
+                    return assessment;
                 }
+
+                if (assessment.Decision == GateDecision.Rejected)
+                {
+                    _logger.LogInformation(
+                        "Gate {GateId} REJECTED via AI assessment on PR #{Number}: {Feedback}",
+                        gateId, resourceNumber, assessment.Feedback ?? "(no feedback)");
+                    return assessment;
+                }
+
+                // If Pending/unclear, check next comment
             }
         }
         catch (Exception ex)
@@ -188,7 +201,14 @@ public class GateCheckService : IGateCheckService
                 gateId, resourceNumber);
         }
 
-        return false;
+        return new GateCommentAssessment(GateDecision.Pending);
+    }
+
+    public async Task<bool> IsGateApprovedAsync(
+        string gateId, int resourceNumber, CancellationToken ct = default)
+    {
+        var assessment = await AssessGateApprovalAsync(gateId, resourceNumber, ct);
+        return assessment.Decision == GateDecision.Approved;
     }
 
     public void ApproveGate(string gateId)
@@ -210,7 +230,7 @@ public class GateCheckService : IGateCheckService
         string gateId, int resourceNumber, CancellationToken ct = default)
     {
         if (!_config.RequiresHuman(gateId))
-            return GateStatus.Approved; // gate not active → treat as approved
+            return GateStatus.Approved;
 
         if (_localApprovals.ContainsKey(gateId))
             return GateStatus.Approved;
@@ -221,7 +241,6 @@ public class GateCheckService : IGateCheckService
             if (pr is null)
                 return GateStatus.NotActivated;
 
-            // PR already merged → gate was approved in a prior run
             if (pr.IsMerged)
                 return GateStatus.Approved;
 
@@ -233,14 +252,20 @@ public class GateCheckService : IGateCheckService
             if (labels.Contains(AwaitingHumanLabel))
                 return GateStatus.AwaitingApproval;
 
-            // Check comments for approval
+            // Check comments using AI assessment
             var comments = await _github.GetPullRequestCommentsAsync(resourceNumber, ct);
             foreach (var comment in comments.Reverse())
             {
                 if (comment.Body?.Contains(GateCommentPrefix) == true) continue;
-                var body = comment.Body?.Trim().ToLowerInvariant() ?? "";
-                if (body.Contains("approved") || body.Contains("lgtm") || body.Contains("ship it"))
+                var body = comment.Body?.Trim() ?? "";
+                if (string.IsNullOrEmpty(body)) continue;
+
+                var assessment = await AssessCommentWithAIAsync(body, ct);
+                if (assessment.Decision == GateDecision.Approved)
                     return GateStatus.Approved;
+                // Rejected = still awaiting (agent needs to revise)
+                if (assessment.Decision == GateDecision.Rejected)
+                    return GateStatus.AwaitingApproval;
             }
         }
         catch (Exception ex)
@@ -276,6 +301,96 @@ public class GateCheckService : IGateCheckService
             if (id == gateId) return name;
         }
         return gateId;
+    }
+
+    /// <summary>
+    /// Use AI to assess whether a human comment indicates approval, rejection, or is unrelated.
+    /// Falls back to simple heuristics if AI is unavailable.
+    /// </summary>
+    private async Task<GateCommentAssessment> AssessCommentWithAIAsync(string commentBody, CancellationToken ct)
+    {
+        if (_modelRegistry is null)
+        {
+            // Fallback: simple heuristics when AI is not available (e.g., standalone dashboard)
+            return AssessCommentWithHeuristics(commentBody);
+        }
+
+        try
+        {
+            var kernel = _modelRegistry.GetKernel("budget");
+            var chatService = kernel.GetRequiredService<IChatCompletionService>();
+
+            var history = new ChatHistory();
+            history.AddSystemMessage(
+                """
+                You are a gate-approval classifier. A human left a comment on a pull request that is paused for review.
+                Determine whether the comment is:
+                1. APPROVED — the human is satisfied and wants to proceed (e.g., "approved", "lgtm", "ship it", "looks good")
+                2. REJECTED — the human is NOT satisfied and wants changes (e.g., "not approved", "needs work", "please fix X", "change Y to Z", or any comment providing critical feedback/instructions for revision)
+                3. UNCLEAR — the comment is unrelated, a question, or doesn't express a clear approval/rejection
+
+                IMPORTANT: "Not approved" or "I don't approve" means REJECTED, not APPROVED.
+                Any comment that provides specific guidance on what to change is REJECTED with that guidance as feedback.
+
+                Respond with ONLY a JSON object (no markdown, no code fences):
+                {"decision": "approved|rejected|unclear", "feedback": "extracted feedback if rejected, null otherwise"}
+                """);
+            history.AddUserMessage($"Comment:\n{commentBody}");
+
+            var response = await chatService.GetChatMessageContentsAsync(history, cancellationToken: ct);
+            var responseText = response.FirstOrDefault()?.Content?.Trim() ?? "";
+
+            // Strip markdown code fences if present
+            if (responseText.StartsWith("```"))
+            {
+                var lines = responseText.Split('\n');
+                responseText = string.Join('\n', lines.Skip(1).TakeWhile(l => !l.StartsWith("```")));
+            }
+
+            // Parse JSON response
+            using var doc = JsonDocument.Parse(responseText);
+            var root = doc.RootElement;
+            var decision = root.GetProperty("decision").GetString()?.ToLowerInvariant();
+            var feedback = root.TryGetProperty("feedback", out var fb) ? fb.GetString() : null;
+
+            _logger.LogDebug("AI gate assessment: decision={Decision}, feedback={Feedback}", decision, feedback);
+
+            return decision switch
+            {
+                "approved" => new GateCommentAssessment(GateDecision.Approved),
+                "rejected" => new GateCommentAssessment(GateDecision.Rejected, feedback ?? commentBody),
+                _ => new GateCommentAssessment(GateDecision.Pending),
+            };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "AI gate assessment failed, falling back to heuristics");
+            return AssessCommentWithHeuristics(commentBody);
+        }
+    }
+
+    /// <summary>Fallback heuristic assessment when AI is unavailable.</summary>
+    private static GateCommentAssessment AssessCommentWithHeuristics(string commentBody)
+    {
+        var lower = commentBody.Trim().ToLowerInvariant();
+
+        // Check rejection patterns FIRST (before approval, since "not approved" contains "approved")
+        if (lower.Contains("not approved") || lower.Contains("don't approve") || lower.Contains("do not approve")
+            || lower.Contains("rejected") || lower.Contains("needs work") || lower.Contains("changes requested")
+            || lower.Contains("please fix") || lower.Contains("please change") || lower.Contains("not ready")
+            || lower.StartsWith("no,") || lower.StartsWith("no.") || lower == "no")
+        {
+            return new GateCommentAssessment(GateDecision.Rejected, commentBody);
+        }
+
+        // Then check approval patterns
+        if (lower.Contains("approved") || lower.Contains("lgtm") || lower.Contains("ship it")
+            || lower.Contains("looks good") || lower == "yes" || lower.StartsWith("yes,") || lower.StartsWith("yes."))
+        {
+            return new GateCommentAssessment(GateDecision.Approved);
+        }
+
+        return new GateCommentAssessment(GateDecision.Pending);
     }
 }
 

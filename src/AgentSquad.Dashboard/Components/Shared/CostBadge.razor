@@ -1,0 +1,69 @@
+@using AgentSquad.Dashboard.Services
+@inject IServiceProvider ServiceProvider
+@implements IDisposable
+
+<div class="cost-badge" title="@TooltipText">
+    <span class="cost-icon">💰</span>
+    <span class="cost-text">@FormatCost(_totalCost)</span>
+    <span class="cost-calls">@_totalCalls calls</span>
+</div>
+
+@code {
+    private decimal _totalCost;
+    private int _totalCalls;
+    private Timer? _refreshTimer;
+    private IDashboardDataService? _dataService;
+
+    protected override void OnInitialized()
+    {
+        _dataService = ServiceProvider.GetService<DashboardDataService>() as IDashboardDataService
+            ?? ServiceProvider.GetService<HttpDashboardDataService>() as IDashboardDataService;
+
+        if (_dataService is not null)
+        {
+            _dataService.OnChange += HandleChange;
+            RefreshData();
+        }
+
+        _refreshTimer = new Timer(_ => InvokeAsync(() =>
+        {
+            RefreshData();
+            StateHasChanged();
+        }), null, TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10));
+    }
+
+    private void HandleChange()
+    {
+        InvokeAsync(() =>
+        {
+            RefreshData();
+            StateHasChanged();
+        });
+    }
+
+    private void RefreshData()
+    {
+        if (_dataService is null) return;
+        _totalCost = _dataService.GetTotalEstimatedCost();
+        _totalCalls = _dataService.GetTotalAiCalls();
+    }
+
+    private static string FormatCost(decimal cost) => cost switch
+    {
+        < 0.01m => "$0.00",
+        < 1m => cost.ToString("$0.00"),
+        < 10m => cost.ToString("$0.00"),
+        < 100m => cost.ToString("$0.00"),
+        _ => cost.ToString("$#,##0.00")
+    };
+
+    private string TooltipText =>
+        $"Estimated AI cost this run: {FormatCost(_totalCost)} across {_totalCalls} AI calls (MSRP pricing)";
+
+    public void Dispose()
+    {
+        _refreshTimer?.Dispose();
+        if (_dataService is not null)
+            _dataService.OnChange -= HandleChange;
+    }
+}

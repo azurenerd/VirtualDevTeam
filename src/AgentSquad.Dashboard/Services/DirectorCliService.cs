@@ -116,18 +116,15 @@ public class DirectorCliService : IDisposable
             await process.StandardInput.FlushAsync();
             process.StandardInput.Close();
 
-            // Stream stdout in real-time
+            // Stream stdout in real-time, converting markdown to ANSI per line
             var outputTask = Task.Run(async () =>
             {
-                var buffer = new char[256];
-                int bytesRead;
-                while ((bytesRead = await process.StandardOutput.ReadAsync(buffer, ct)) > 0)
+                string? line;
+                while ((line = await process.StandardOutput.ReadLineAsync(ct)) is not null)
                 {
-                    var chunk = new string(buffer, 0, bytesRead);
-                    // Normalize line endings for xterm
-                    chunk = chunk.Replace("\n", "\r\n").Replace("\r\r\n", "\r\n");
-                    onOutput(chunk);
-                    thread.OutputBuffer.Append(chunk);
+                    var ansi = MarkdownToAnsi(line);
+                    onOutput(ansi + "\r\n");
+                    thread.OutputBuffer.AppendLine(ansi);
                 }
             }, ct);
 
@@ -275,6 +272,72 @@ public class DirectorCliService : IDisposable
         public DateTime LastActivityAt { get; set; }
         public required StringBuilder OutputBuffer { get; set; }
         public Process? Process { get; set; }
+    }
+
+    /// <summary>Convert a single line of markdown to ANSI escape codes for xterm rendering.</summary>
+    private static string MarkdownToAnsi(string line)
+    {
+        // Headers: ### → bold cyan
+        if (line.StartsWith("#### "))
+            return $"\x1b[1;36m{line[5..]}\x1b[0m";
+        if (line.StartsWith("### "))
+            return $"\x1b[1;36m{line[4..]}\x1b[0m";
+        if (line.StartsWith("## "))
+            return $"\x1b[1;96m{line[3..]}\x1b[0m";
+        if (line.StartsWith("# "))
+            return $"\x1b[1;97m{line[2..]}\x1b[0m";
+
+        // Horizontal rules
+        if (line.Trim() is "---" or "***" or "___")
+            return "\x1b[90m────────────────────────────────────────\x1b[0m";
+
+        // Bullet lists: - or * → cyan bullet
+        if (line.TrimStart().StartsWith("- ") || line.TrimStart().StartsWith("* "))
+        {
+            var indent = line.Length - line.TrimStart().Length;
+            var content = line.TrimStart()[2..];
+            content = ApplyInlineFormatting(content);
+            return new string(' ', indent) + $"\x1b[36m•\x1b[0m {content}";
+        }
+
+        // Numbered lists: keep but apply inline formatting
+        if (line.TrimStart().Length > 0 && char.IsDigit(line.TrimStart()[0]) && line.Contains(". "))
+        {
+            return ApplyInlineFormatting(line);
+        }
+
+        // Code blocks (``` lines) → dim
+        if (line.TrimStart().StartsWith("```"))
+            return $"\x1b[90m{line}\x1b[0m";
+
+        // Regular lines: apply inline formatting
+        return ApplyInlineFormatting(line);
+    }
+
+    /// <summary>Apply inline markdown formatting: **bold**, *italic*, `code`.</summary>
+    private static string ApplyInlineFormatting(string text)
+    {
+        // Bold: **text** → bright white bold
+        while (text.Contains("**"))
+        {
+            var start = text.IndexOf("**", StringComparison.Ordinal);
+            var end = text.IndexOf("**", start + 2, StringComparison.Ordinal);
+            if (end < 0) break;
+            var inner = text[(start + 2)..end];
+            text = string.Concat(text[..start], "\x1b[1;97m", inner, "\x1b[0m", text[(end + 2)..]);
+        }
+
+        // Inline code: `text` → yellow on dark bg
+        while (text.Contains('`'))
+        {
+            var start = text.IndexOf('`');
+            var end = text.IndexOf('`', start + 1);
+            if (end < 0) break;
+            var inner = text[(start + 1)..end];
+            text = string.Concat(text[..start], "\x1b[33m", inner, "\x1b[0m", text[(end + 1)..]);
+        }
+
+        return text;
     }
 }
 

@@ -203,6 +203,56 @@ public class ArchitectAgent : AgentBase
 
     #region Architecture Design
 
+    /// <summary>Revise Architecture.md based on reviewer feedback using AI.</summary>
+    private async Task<string?> ReviseArchitectureAsync(
+        ArchitectureDirective directive, string feedback, CancellationToken ct)
+    {
+        try
+        {
+            var currentContent = await _projectFiles.GetArchitectureDocAsync(ct);
+            if (string.IsNullOrWhiteSpace(currentContent)) return null;
+
+            var kernel = _modelRegistry.GetKernel(Identity.ModelTier, Identity.Id);
+            var chat = kernel.GetRequiredService<IChatCompletionService>();
+            var history = new ChatHistory();
+            history.AddSystemMessage(
+                "You are a senior software architect revising Architecture.md based on human reviewer feedback. " +
+                "Make the specific changes requested while preserving the overall structure.");
+            history.AddUserMessage(
+                $"## Current Architecture.md:\n\n{currentContent}\n\n" +
+                $"## Reviewer Feedback:\n\n{feedback}\n\n" +
+                "Revise the Architecture.md to address the feedback. Return the COMPLETE revised document.");
+
+            var response = await chat.GetChatMessageContentsAsync(history, cancellationToken: ct);
+            var revised = string.Join("", response.Select(r => r.Content ?? ""));
+            return string.IsNullOrWhiteSpace(revised) ? null : revised;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to revise Architecture.md");
+            return null;
+        }
+    }
+
+    /// <summary>Reset gate labels on a PR for re-review after revision.</summary>
+    private async Task ResetGateLabelsAsync(int prNumber, CancellationToken ct)
+    {
+        try
+        {
+            var pr = await _github.GetPullRequestAsync(prNumber, ct);
+            if (pr is null) return;
+            var labels = pr.Labels?.ToList() ?? [];
+            labels.Remove("human-approved");
+            if (!labels.Contains("awaiting-human-review"))
+                labels.Add("awaiting-human-review");
+            await _github.UpdatePullRequestAsync(prNumber, labels: labels.ToArray(), ct: ct);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to reset gate labels on PR #{Number}", prNumber);
+        }
+    }
+
     private async Task DesignArchitectureAsync(ArchitectureDirective directive, CancellationToken ct)
     {
         // Idempotency: check if Architecture.md already has real architectural content
@@ -539,11 +589,33 @@ public class ArchitectAgent : AgentBase
         // === Gate: ArchitectureDesign — human reviews architecture before merge ===
         if (gateStatus != GateStatus.Approved)
         {
-            UpdateStatus(AgentStatus.Working, $"⏳ Awaiting human approval on PR #{pr.Number}");
-            await _gateCheck.WaitForGateAsync(
-                GateIds.ArchitectureDesign,
-                "Architecture.md ready for human review before merge",
-                pr.Number, ct: ct);
+            var maxRevisions = 3;
+            for (var revision = 0; revision < maxRevisions; revision++)
+            {
+                UpdateStatus(AgentStatus.Working, $"⏳ Awaiting human approval on PR #{pr.Number}");
+                var gateWait = await _gateCheck.WaitForGateAsync(
+                    GateIds.ArchitectureDesign,
+                    "Architecture.md ready for human review before merge",
+                    pr.Number, ct: ct);
+
+                if (!gateWait.WasRejected)
+                    break;
+
+                Logger.LogInformation("Architecture gate rejected on PR #{Number}: {Feedback}", pr.Number, gateWait.Feedback);
+                LogActivity("task", $"📝 Revising architecture based on feedback: {gateWait.Feedback}");
+                UpdateStatus(AgentStatus.Working, $"Revising Architecture.md (attempt {revision + 2})");
+
+                var revised = await ReviseArchitectureAsync(directive, gateWait.Feedback!, ct);
+                if (revised is not null && !pr.IsMerged)
+                {
+                    await _prWorkflow.CommitDocumentToPRAsync(
+                        pr, "Architecture.md", revised,
+                        $"Revise architecture based on reviewer feedback (attempt {revision + 2})", ct);
+                }
+                await ResetGateLabelsAsync(pr.Number, ct);
+                await _github.AddPullRequestCommentAsync(pr.Number,
+                    $"📝 **Revised** based on your feedback:\n\n> {gateWait.Feedback}\n\nPlease review the updated Architecture.md.", ct);
+            }
         }
 
         // Merge after gate approval (skip if PR already merged)

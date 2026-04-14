@@ -164,7 +164,7 @@
         return agentId.Replace("-", " ").ToUpperInvariant() switch
         {
             var s when s.Contains("RESEARCH") => "🔬 Researcher",
-            var s when s.Contains("PM") => "📋 Program Manager",
+            var s when s.Contains("PROGRAM") && s.Contains("MANAGER") => "📋 Program Manager",
             var s when s.Contains("ARCHITECT") => "🏗️ Architect",
             var s when s.Contains("PRINCIPAL") => "👨‍💻 Principal Engineer",
             var s when s.Contains("SENIOR") => "💻 Senior Engineer",

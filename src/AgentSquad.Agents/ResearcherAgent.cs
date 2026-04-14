@@ -179,11 +179,49 @@ public class ResearcherAgent : AgentBase
                         // === Gate: ResearchFindings — human reviews before merge ===
                         if (gateStatus != GateStatus.Approved)
                         {
-                            UpdateStatus(AgentStatus.Working, $"⏳ Awaiting human approval on PR #{pr.Number}");
-                            await _gateCheck.WaitForGateAsync(
-                                GateIds.ResearchFindings,
-                                $"Research findings for '{directive.Topic}' ready for review",
-                                pr.Number, ct: ct);
+                            var maxRevisions = 3;
+                            for (var revision = 0; revision < maxRevisions; revision++)
+                            {
+                                UpdateStatus(AgentStatus.Working, $"⏳ Awaiting human approval on PR #{pr.Number}");
+                                var gateWait = await _gateCheck.WaitForGateAsync(
+                                    GateIds.ResearchFindings,
+                                    $"Research findings for '{directive.Topic}' ready for review",
+                                    pr.Number, ct: ct);
+
+                                if (!gateWait.WasRejected)
+                                    break;
+
+                                // Human requested changes — revise the research
+                                Logger.LogInformation(
+                                    "Research gate rejected on PR #{Number}, revision {Rev}: {Feedback}",
+                                    pr.Number, revision + 1, gateWait.Feedback);
+                                LogActivity("task", $"📝 Revising research based on feedback: {gateWait.Feedback}");
+                                UpdateStatus(AgentStatus.Working, $"Revising research (attempt {revision + 2})");
+
+                                var revisedDoc = await ReviseResearchAsync(
+                                    directive, gateWait.Feedback!, ct);
+
+                                if (revisedDoc is not null && !pr.IsMerged)
+                                {
+                                    await _prWorkflow.CommitDocumentToPRAsync(
+                                        pr, "Research.md", revisedDoc,
+                                        $"Revise research based on reviewer feedback (attempt {revision + 2})", ct);
+                                }
+
+                                // Remove human-approved label if present (reset the gate)
+                                var currentPr = await _github.GetPullRequestAsync(pr.Number, ct);
+                                if (currentPr is not null)
+                                {
+                                    var labels = currentPr.Labels?.ToList() ?? [];
+                                    labels.Remove("human-approved");
+                                    if (!labels.Contains("awaiting-human-review"))
+                                        labels.Add("awaiting-human-review");
+                                    await _github.UpdatePullRequestAsync(pr.Number, labels: labels.ToArray(), ct: ct);
+                                }
+
+                                await _github.AddPullRequestCommentAsync(pr.Number,
+                                    $"📝 **Revised** based on your feedback:\n\n> {gateWait.Feedback}\n\nPlease review the updated Research.md.", ct);
+                            }
                         }
 
                         // Merge after gate approval (skip if PR already merged)
@@ -661,6 +699,48 @@ public class ResearcherAgent : AgentBase
             Logger.LogError(ex, "Failed to append research for '{Topic}' to Research.md", topic);
             throw;
         }
+    }
+
+    /// <summary>
+    /// Revise research based on human reviewer feedback. Reads the current Research.md,
+    /// sends it along with the feedback to the AI, and returns the revised document.
+    /// </summary>
+    private async Task<string?> ReviseResearchAsync(
+        ResearchDirective directive, string feedback, CancellationToken ct)
+    {
+        var kernel = _modelRegistry.GetKernel(Identity.ModelTier, Identity.Id);
+        var chat = kernel.GetRequiredService<IChatCompletionService>();
+
+        var currentDoc = await _projectFiles.GetResearchDocAsync(ct);
+        if (string.IsNullOrWhiteSpace(currentDoc))
+        {
+            Logger.LogWarning("No existing Research.md to revise");
+            return null;
+        }
+
+        var history = new ChatHistory();
+        history.AddSystemMessage(
+            "You are a senior technical researcher revising a research document based on human reviewer feedback. " +
+            "Read the existing document and the reviewer's feedback carefully. " +
+            "Make the specific changes requested while preserving the overall structure and any parts the reviewer didn't mention. " +
+            $"The project's technology stack is: **{_config.Project.TechStack}**.");
+
+        history.AddUserMessage(
+            $"## Current Research.md:\n\n{currentDoc}\n\n" +
+            $"## Reviewer Feedback:\n\n{feedback}\n\n" +
+            "Please revise the Research.md document to address the reviewer's feedback. " +
+            "Return the COMPLETE revised document (not just the changes).");
+
+        var response = await chat.GetChatMessageContentsAsync(history, cancellationToken: ct);
+        var revisedContent = string.Join("", response.Select(r => r.Content ?? ""));
+
+        if (string.IsNullOrWhiteSpace(revisedContent))
+        {
+            Logger.LogWarning("AI returned empty revision for Research.md");
+            return null;
+        }
+
+        return revisedContent;
     }
 
     private static string FormatResearchSection(string topic, ResearchResult result)

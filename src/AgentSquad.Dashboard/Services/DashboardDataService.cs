@@ -706,6 +706,12 @@ public sealed class DashboardDataService : BackgroundService, IDashboardDataServ
         }
     }
 
+    /// <summary>Get total estimated cost across all agents for this run.</summary>
+    public decimal GetTotalEstimatedCost() => _modelRegistry.UsageTracker.GetTotalCost();
+
+    /// <summary>Get total AI calls across all agents for this run.</summary>
+    public int GetTotalAiCalls() => _modelRegistry.UsageTracker.GetAllStats().Values.Sum(s => s.TotalCalls);
+
     /// <summary>Send a chat message to an agent and get an AI-generated response.</summary>
     public async Task<AgentChatMessage> SendAgentChatAsync(
         string agentId, string message, CancellationToken ct = default)

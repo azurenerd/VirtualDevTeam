@@ -12,14 +12,16 @@ public interface IGateCheckService
     /// If the gate doesn't require human approval, returns Proceed immediately.
     /// If human approval is required, posts a notification and returns WaitingForHuman.
     /// </summary>
-    /// <param name="gateId">The gate identifier (use <see cref="GateIds"/> constants).</param>
-    /// <param name="context">Human-readable description of what's being gated (e.g., "PMSpec.md review").</param>
-    /// <param name="resourceNumber">Optional PR or Issue number to label/comment on.</param>
-    /// <param name="ct">Cancellation token.</param>
     Task<GateResult> CheckGateAsync(string gateId, string context, int? resourceNumber = null, CancellationToken ct = default);
 
     /// <summary>
     /// Check if a gate has been approved by a human (looks for approval label/comment on the resource).
+    /// Uses AI to assess comment intent — handles "not approved", rejection with feedback, etc.
+    /// </summary>
+    Task<GateCommentAssessment> AssessGateApprovalAsync(string gateId, int resourceNumber, CancellationToken ct = default);
+
+    /// <summary>
+    /// Legacy bool check — wraps AssessGateApprovalAsync. Returns true only for clear approval.
     /// </summary>
     Task<bool> IsGateApprovedAsync(string gateId, int resourceNumber, CancellationToken ct = default);
 
@@ -78,21 +80,47 @@ public enum GateResult
     TimedOutWithFallback,
 }
 
+/// <summary>AI-assessed decision on human gate comments.</summary>
+public enum GateDecision
+{
+    /// <summary>Human approved — proceed with merge.</summary>
+    Approved,
+
+    /// <summary>Human rejected or requested changes — agent must revise.</summary>
+    Rejected,
+
+    /// <summary>No actionable human comment found yet — keep waiting.</summary>
+    Pending,
+}
+
+/// <summary>
+/// Result of AI assessment of human comments on a gated PR/issue.
+/// When rejected, contains the human's feedback for the agent to act on.
+/// </summary>
+public record GateCommentAssessment(
+    GateDecision Decision,
+    string? Feedback = null);
+
+/// <summary>
+/// Result of waiting for a gate — includes rejection feedback if the human requested changes.
+/// </summary>
+public record GateWaitResult(
+    bool WasActivated,
+    GateDecision Decision,
+    string? Feedback = null)
+{
+    /// <summary>True if the human rejected/requested changes and feedback is available.</summary>
+    public bool WasRejected => Decision == GateDecision.Rejected;
+}
+
 /// <summary>Extension methods for <see cref="IGateCheckService"/>.</summary>
 public static class GateCheckExtensions
 {
     /// <summary>
-    /// Check a gate and, if human approval is required, poll until approved.
-    /// This is the primary method agents should call at gate points.
+    /// Check a gate and, if human approval is required, poll until approved or rejected.
+    /// Returns a <see cref="GateWaitResult"/> with the decision and any rejection feedback.
     /// </summary>
-    /// <param name="gateCheck">The gate check service.</param>
-    /// <param name="gateId">Gate identifier from <see cref="GateIds"/>.</param>
-    /// <param name="context">Human-readable description of what's gated.</param>
-    /// <param name="resourceNumber">PR or Issue number for label/comment notifications.</param>
-    /// <param name="pollIntervalSeconds">Seconds between approval polls (default 30).</param>
-    /// <param name="ct">Cancellation token.</param>
-    /// <returns>True if gate was activated (human was involved), false if auto-proceeded.</returns>
-    public static async Task<bool> WaitForGateAsync(
+    public static async Task<GateWaitResult> WaitForGateAsync(
         this IGateCheckService gateCheck,
         string gateId,
         string context,
@@ -102,31 +130,34 @@ public static class GateCheckExtensions
     {
         var result = await gateCheck.CheckGateAsync(gateId, context, resourceNumber, ct);
         if (result == GateResult.Proceed)
-            return false;
+            return new GateWaitResult(WasActivated: false, Decision: GateDecision.Approved);
 
-        // Gate requires human — poll for approval
+        // Gate requires human — poll for approval or rejection
         if (resourceNumber.HasValue)
         {
-            // Poll GitHub for label/comment approval
             while (!ct.IsCancellationRequested)
             {
                 await Task.Delay(TimeSpan.FromSeconds(pollIntervalSeconds), ct);
-                if (await gateCheck.IsGateApprovedAsync(gateId, resourceNumber.Value, ct))
-                    return true;
+                var assessment = await gateCheck.AssessGateApprovalAsync(gateId, resourceNumber.Value, ct);
+
+                if (assessment.Decision == GateDecision.Approved)
+                    return new GateWaitResult(WasActivated: true, Decision: GateDecision.Approved);
+
+                if (assessment.Decision == GateDecision.Rejected)
+                    return new GateWaitResult(WasActivated: true, Decision: GateDecision.Rejected, Feedback: assessment.Feedback);
             }
         }
         else
         {
-            // No GitHub resource — poll local approval (dashboard/REST API)
             while (!ct.IsCancellationRequested)
             {
                 await Task.Delay(TimeSpan.FromSeconds(pollIntervalSeconds), ct);
                 if (gateCheck.IsGateApprovedLocally(gateId))
-                    return true;
+                    return new GateWaitResult(WasActivated: true, Decision: GateDecision.Approved);
             }
         }
 
         ct.ThrowIfCancellationRequested();
-        return true;
+        return new GateWaitResult(WasActivated: true, Decision: GateDecision.Approved);
     }
 }

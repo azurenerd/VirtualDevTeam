@@ -318,6 +318,16 @@ public sealed class HttpDashboardDataService : IDashboardDataService, IHostedSer
         catch { /* best effort */ }
     }
 
+    public decimal GetTotalEstimatedCost()
+    {
+        return _agents.Sum(a => a.EstimatedCost);
+    }
+
+    public int GetTotalAiCalls()
+    {
+        return _agents.Sum(a => a.AiCalls);
+    }
+
     // DTOs for deserialization
     private record DeadlockResponse(bool HasDeadlock, List<string>? Cycle);
     private record RateLimitResponse(bool IsRateLimited);

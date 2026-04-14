@@ -52,6 +52,10 @@ public interface IDashboardDataService
     // Cache management
     void ResetCaches();
 
+    // Cost tracking
+    decimal GetTotalEstimatedCost();
+    int GetTotalAiCalls();
+
     // Change notification
     event Action? OnChange;
 }
