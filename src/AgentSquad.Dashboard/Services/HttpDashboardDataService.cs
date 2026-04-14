@@ -26,6 +26,8 @@ public sealed class HttpDashboardDataService : IDashboardDataService, IHostedSer
     private IReadOnlyList<string> _models = [];
     private bool _isRateLimited;
     private GitHubRateLimitInfo _rateLimitInfo = new() { Remaining = 5000, Limit = 5000 };
+    private decimal _cachedTotalCost;
+    private int _cachedTotalCalls;
 
     public event Action? OnChange;
 
@@ -62,6 +64,13 @@ public sealed class HttpDashboardDataService : IDashboardDataService, IHostedSer
 
             var rli = await _http.GetFromJsonAsync<GitHubRateLimitInfo>("/api/dashboard/github/rate-limit-info");
             if (rli is not null) _rateLimitInfo = rli;
+
+            var cost = await _http.GetFromJsonAsync<CostSummaryResponse>("/api/dashboard/cost-summary");
+            if (cost is not null)
+            {
+                _cachedTotalCost = cost.TotalCost;
+                _cachedTotalCalls = cost.TotalCalls;
+            }
 
             OnChange?.Invoke();
         }
@@ -320,15 +329,16 @@ public sealed class HttpDashboardDataService : IDashboardDataService, IHostedSer
 
     public decimal GetTotalEstimatedCost()
     {
-        return _agents.Sum(a => a.EstimatedCost);
+        return _cachedTotalCost;
     }
 
     public int GetTotalAiCalls()
     {
-        return _agents.Sum(a => a.AiCalls);
+        return _cachedTotalCalls;
     }
 
     // DTOs for deserialization
     private record DeadlockResponse(bool HasDeadlock, List<string>? Cycle);
     private record RateLimitResponse(bool IsRateLimited);
+    private record CostSummaryResponse(decimal TotalCost, int TotalCalls);
 }

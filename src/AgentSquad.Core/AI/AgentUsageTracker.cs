@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using AgentSquad.Core.Persistence;
 
 namespace AgentSquad.Core.AI;
 
@@ -6,10 +7,20 @@ namespace AgentSquad.Core.AI;
 /// Tracks estimated token usage and MSRP cost per agent, accumulated across all AI calls.
 /// Thread-safe for concurrent agent access. Costs are estimates based on character-to-token
 /// conversion since the Copilot CLI doesn't return exact token counts.
+/// Persists to SQLite so costs survive restarts.
 /// </summary>
 public sealed class AgentUsageTracker
 {
     private readonly ConcurrentDictionary<string, AgentUsageStats> _stats = new();
+    private readonly AgentStateStore? _stateStore;
+
+    public AgentUsageTracker() { }
+
+    public AgentUsageTracker(AgentStateStore stateStore)
+    {
+        _stateStore = stateStore;
+        RestoreFromStore();
+    }
 
     /// <summary>
     /// Record a completed AI call for an agent.
@@ -20,7 +31,7 @@ public sealed class AgentUsageTracker
         var responseTokens = ModelPricing.EstimateTokens(responseChars);
         var cost = ModelPricing.EstimateCost(modelName, promptChars, responseChars);
 
-        _stats.AddOrUpdate(
+        var updated = _stats.AddOrUpdate(
             agentId,
             _ => new AgentUsageStats
             {
@@ -32,7 +43,6 @@ public sealed class AgentUsageTracker
             },
             (_, existing) =>
             {
-                // Atomically update via replace (ConcurrentDictionary guarantees safety)
                 return new AgentUsageStats
                 {
                     PromptTokens = existing.PromptTokens + promptTokens,
@@ -42,6 +52,10 @@ public sealed class AgentUsageTracker
                     LastModel = modelName
                 };
             });
+
+        // Persist to SQLite
+        _stateStore?.SaveAiUsage(agentId, updated.PromptTokens, updated.CompletionTokens,
+            updated.TotalCalls, updated.EstimatedCost, updated.LastModel);
     }
 
     /// <summary>Get usage stats for a specific agent.</summary>
@@ -55,6 +69,27 @@ public sealed class AgentUsageTracker
     /// <summary>Get total estimated cost across all agents.</summary>
     public decimal GetTotalCost() =>
         _stats.Values.Sum(s => s.EstimatedCost);
+
+    private void RestoreFromStore()
+    {
+        if (_stateStore is null) return;
+        try
+        {
+            var saved = _stateStore.LoadAllAiUsage();
+            foreach (var (agentId, data) in saved)
+            {
+                _stats[agentId] = new AgentUsageStats
+                {
+                    PromptTokens = data.PromptTokens,
+                    CompletionTokens = data.CompletionTokens,
+                    TotalCalls = data.TotalCalls,
+                    EstimatedCost = data.EstimatedCost,
+                    LastModel = data.LastModel
+                };
+            }
+        }
+        catch { /* DB may not have the table yet on first run */ }
+    }
 }
 
 /// <summary>

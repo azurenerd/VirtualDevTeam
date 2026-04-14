@@ -124,6 +124,16 @@ public class AgentStateStore : IDisposable
                 value TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS ai_usage (
+                agent_id          TEXT PRIMARY KEY,
+                prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+                completion_tokens INTEGER NOT NULL DEFAULT 0,
+                total_calls       INTEGER NOT NULL DEFAULT 0,
+                estimated_cost    REAL NOT NULL DEFAULT 0,
+                last_model        TEXT,
+                updated_at        DATETIME NOT NULL DEFAULT (datetime('now'))
+            );
+
             INSERT OR IGNORE INTO run_metadata (key, value)
             VALUES ('run_started_utc', datetime('now'));
             """;
@@ -509,6 +519,50 @@ public class AgentStateStore : IDisposable
             DELETE FROM processed_items;
             """;
         await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    /// <summary>Save AI usage stats for an agent (upsert).</summary>
+    public void SaveAiUsage(string agentId, int promptTokens, int completionTokens, int totalCalls, decimal estimatedCost, string? lastModel)
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO ai_usage (agent_id, prompt_tokens, completion_tokens, total_calls, estimated_cost, last_model, updated_at)
+                VALUES (@id, @pt, @ct, @tc, @ec, @lm, datetime('now'))
+            ON CONFLICT(agent_id) DO UPDATE SET
+                prompt_tokens = excluded.prompt_tokens,
+                completion_tokens = excluded.completion_tokens,
+                total_calls = excluded.total_calls,
+                estimated_cost = excluded.estimated_cost,
+                last_model = excluded.last_model,
+                updated_at = excluded.updated_at;
+            """;
+        cmd.Parameters.AddWithValue("@id", agentId);
+        cmd.Parameters.AddWithValue("@pt", promptTokens);
+        cmd.Parameters.AddWithValue("@ct", completionTokens);
+        cmd.Parameters.AddWithValue("@tc", totalCalls);
+        cmd.Parameters.AddWithValue("@ec", (double)estimatedCost);
+        cmd.Parameters.AddWithValue("@lm", (object?)lastModel ?? DBNull.Value);
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>Load all persisted AI usage stats (for restoring after restart).</summary>
+    public Dictionary<string, (int PromptTokens, int CompletionTokens, int TotalCalls, decimal EstimatedCost, string? LastModel)> LoadAllAiUsage()
+    {
+        var result = new Dictionary<string, (int, int, int, decimal, string?)>();
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "SELECT agent_id, prompt_tokens, completion_tokens, total_calls, estimated_cost, last_model FROM ai_usage";
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            result[reader.GetString(0)] = (
+                reader.GetInt32(1),
+                reader.GetInt32(2),
+                reader.GetInt32(3),
+                (decimal)reader.GetDouble(4),
+                reader.IsDBNull(5) ? null : reader.GetString(5)
+            );
+        }
+        return result;
     }
 
     public void Dispose()

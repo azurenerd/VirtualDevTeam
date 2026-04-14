@@ -31,7 +31,8 @@ if (!builder.Environment.IsDevelopment())
 
 // Core services
 builder.Services.AddInProcessMessageBus();
-builder.Services.AddSingleton<AgentSquad.Core.AI.AgentUsageTracker>();
+builder.Services.AddSingleton<AgentSquad.Core.AI.AgentUsageTracker>(sp =>
+    new AgentSquad.Core.AI.AgentUsageTracker(sp.GetRequiredService<AgentStateStore>()));
 builder.Services.AddSingleton<AgentSquad.Core.Diagnostics.RequirementsCache>();
 builder.Services.AddSingleton<AgentSquad.Core.Diagnostics.AgentChatService>();
 builder.Services.AddSemanticKernelModels();
@@ -201,6 +202,12 @@ api.MapGet("/github/rate-limit-info", (DashboardDataService svc) =>
 
 api.MapPost("/reset", (DashboardDataService svc) =>
     { svc.ResetCaches(); return Results.Ok(); });
+
+api.MapGet("/engineering-plan", async (EngineeringPlanDataService svc, CancellationToken ct) =>
+    Results.Ok(await svc.GetPlanAsync(forceRefresh: true, ct: ct)));
+
+api.MapGet("/cost-summary", (DashboardDataService svc) =>
+    Results.Ok(new { TotalCost = svc.GetTotalEstimatedCost(), TotalCalls = svc.GetTotalAiCalls() }));
 
 // ── Configuration REST API (consumed by standalone Dashboard.Host) ──
 var configApi = app.MapGroup("/api/configuration").WithTags("Configuration");

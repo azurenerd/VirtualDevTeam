@@ -1,3 +1,5 @@
+using AgentSquad.Core.GitHub;
+using AgentSquad.Core.Persistence;
 using AgentSquad.Dashboard.Components;
 using AgentSquad.Dashboard.Host;
 using AgentSquad.Dashboard.Hubs;
@@ -60,8 +62,13 @@ builder.Services.AddSingleton<HttpGateNotificationService>(sp =>
     return svc;
 });
 
-// Engineering plan visualization (works with the NullGitHubService stub)
-builder.Services.AddScoped<EngineeringPlanDataService>();
+// Engineering plan visualization (standalone: fetch from Runner API)
+builder.Services.AddScoped<EngineeringPlanDataService>(sp =>
+    new EngineeringPlanDataService(
+        sp.GetRequiredService<IGitHubService>(),
+        sp.GetRequiredService<AgentStateStore>(),
+        sp.GetRequiredService<IHttpClientFactory>(),
+        sp.GetRequiredService<ILogger<EngineeringPlanDataService>>()));
 
 // Director CLI — runs local copilot processes, no Runner dependency
 builder.Services.AddSingleton<DirectorCliService>();

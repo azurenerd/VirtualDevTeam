@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using System.Net.Http.Json;
 using AgentSquad.Core.GitHub;
 using AgentSquad.Core.GitHub.Models;
 using AgentSquad.Core.Persistence;
@@ -8,14 +9,15 @@ namespace AgentSquad.Dashboard.Services;
 
 /// <summary>
 /// Provides engineering plan data for the dashboard visualization.
-/// Queries GitHub issues with "engineering-task" label and parses their
-/// bodies to build a dependency graph suitable for Cytoscape.js rendering.
+/// In embedded mode: queries GitHub issues directly.
+/// In standalone mode: fetches pre-built plan from Runner API.
 /// </summary>
 public sealed partial class EngineeringPlanDataService
 {
     private readonly IGitHubService _github;
     private readonly AgentStateStore _stateStore;
     private readonly ILogger<EngineeringPlanDataService> _logger;
+    private readonly HttpClient? _httpClient;
 
     private EngineeringPlanViewModel? _cache;
     private DateTime _lastFetchUtc = DateTime.MinValue;
@@ -28,10 +30,36 @@ public sealed partial class EngineeringPlanDataService
         _logger = logger;
     }
 
+    public EngineeringPlanDataService(IGitHubService github, AgentStateStore stateStore, IHttpClientFactory httpClientFactory, ILogger<EngineeringPlanDataService> logger)
+        : this(github, stateStore, logger)
+    {
+        _httpClient = httpClientFactory.CreateClient("RunnerApi");
+    }
+
     public async Task<EngineeringPlanViewModel> GetPlanAsync(bool forceRefresh = false, CancellationToken ct = default)
     {
         if (!forceRefresh && _cache is not null && DateTime.UtcNow - _lastFetchUtc < CacheExpiry)
             return _cache;
+
+        // Standalone mode: fetch from Runner API
+        if (_httpClient is not null)
+        {
+            try
+            {
+                var plan = await _httpClient.GetFromJsonAsync<EngineeringPlanViewModel>("/api/dashboard/engineering-plan", ct);
+                if (plan is not null)
+                {
+                    _cache = plan;
+                    _lastFetchUtc = DateTime.UtcNow;
+                    return _cache;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to fetch engineering plan from Runner API, using cache");
+                return _cache ?? new EngineeringPlanViewModel();
+            }
+        }
 
         try
         {

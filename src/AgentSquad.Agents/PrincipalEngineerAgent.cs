@@ -209,8 +209,17 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                     // Preserve "Engineering complete" status once signaled so HealthMonitor can detect it
                     if (!_engineeringSignaled)
                     {
-                        UpdateStatus(hasActionableWork ? AgentStatus.Working : AgentStatus.Idle,
-                            $"[{leaderTag}] {statusVerb} tasks ({done}/{total} done, {pending} pending, {_reviewQueue.Count} PRs queued)");
+                        // Workers with an active PR: show the PR they're working on
+                        if (!isLeader && CurrentPrNumber is not null)
+                        {
+                            UpdateStatus(AgentStatus.Working,
+                                $"[{leaderTag}] PR #{CurrentPrNumber} ({done}/{total} done, {pending} pending)");
+                        }
+                        else
+                        {
+                            UpdateStatus(hasActionableWork ? AgentStatus.Working : AgentStatus.Idle,
+                                $"[{leaderTag}] {statusVerb} tasks ({done}/{total} done, {pending} pending, {_reviewQueue.Count} PRs queued)");
+                        }
                     }
 
                     // Recovery: re-track and re-broadcast review for our own ready-for-review PRs
