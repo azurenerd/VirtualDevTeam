@@ -70,6 +70,7 @@ public class TestEngineerAgent : AgentBase
     private readonly ConcurrentQueue<(int PrNumber, string PrTitle, string Feedback, string Reviewer)> _reworkQueue = new();
     private readonly Dictionary<int, int> _reworkAttempts = new();
     private readonly Dictionary<int, string> _prSessionIds = new();
+    private readonly AgentStateStore? _stateStore;
     private readonly DateTime _sessionStartUtc = DateTime.UtcNow.AddHours(-4); // Look back 4h to catch PRs from recent runs without massive backlog
     private int? _currentTestPrNumber;
 
@@ -100,7 +101,8 @@ public class TestEngineerAgent : AgentBase
         TestRunner? testRunner = null,
         PlaywrightRunner? playwrightRunner = null,
         TestStrategyAnalyzer? testStrategyAnalyzer = null,
-        Core.Metrics.BuildTestMetrics? metrics = null)
+        Core.Metrics.BuildTestMetrics? metrics = null,
+        AgentStateStore? stateStore = null)
         : base(identity, logger, memoryStore, roleContextProvider)
     {
         _messageBus = messageBus ?? throw new ArgumentNullException(nameof(messageBus));
@@ -115,6 +117,7 @@ public class TestEngineerAgent : AgentBase
         _playwrightRunner = playwrightRunner;
         _testStrategyAnalyzer = testStrategyAnalyzer;
         _metrics = metrics;
+        _stateStore = stateStore;
     }
 
     protected override async Task OnInitializeAsync(CancellationToken ct)
@@ -158,6 +161,24 @@ public class TestEngineerAgent : AgentBase
             {
                 Logger.LogWarning(ex, "TestEngineer failed to initialize local workspace, falling back to API mode");
                 _workspace = null;
+            }
+        }
+
+        // Restore CLI session IDs from database so test rework resumes the same conversation
+        if (_stateStore is not null)
+        {
+            try
+            {
+                var sessions = await _stateStore.LoadCliSessionsAsync(Identity.Id, ct);
+                foreach (var (prNumber, sessionId) in sessions)
+                    _prSessionIds[prNumber] = sessionId;
+
+                if (sessions.Count > 0)
+                    Logger.LogInformation("TestEngineer restored {Count} CLI session(s) from database", sessions.Count);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex, "TestEngineer failed to restore CLI sessions from database");
             }
         }
     }
@@ -3811,6 +3832,16 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
         {
             sessionId = Guid.NewGuid().ToString();
             _prSessionIds[prNumber] = sessionId;
+
+            // Persist to DB so session survives runner restarts
+            if (_stateStore is not null)
+            {
+                _ = Task.Run(async () =>
+                {
+                    try { await _stateStore.SaveCliSessionAsync(Identity.Id, prNumber, sessionId); }
+                    catch (Exception ex) { Logger.LogWarning(ex, "Failed to persist CLI session for test PR #{Pr}", prNumber); }
+                });
+            }
         }
         SetCliSession(sessionId);
     }

@@ -140,6 +140,23 @@ public abstract class EngineerAgentBase : AgentBase
             }
         }
 
+        // Restore CLI session IDs from database so rework resumes the same conversation
+        try
+        {
+            var sessions = await StateStore.LoadCliSessionsAsync(Identity.Id, ct);
+            foreach (var (prNumber, sessionId) in sessions)
+                _prSessionIds[prNumber] = sessionId;
+
+            if (sessions.Count > 0)
+                Logger.LogInformation("{Role} {Name} restored {Count} CLI session(s) from database",
+                    Identity.Role, Identity.DisplayName, sessions.Count);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "{Role} {Name} failed to restore CLI sessions from database",
+                Identity.Role, Identity.DisplayName);
+        }
+
         // Restore rework attempt counts from checkpoint
         try
         {
@@ -432,6 +449,13 @@ public abstract class EngineerAgentBase : AgentBase
             _prSessionIds[prNumber] = sessionId;
             Logger.LogDebug("{Role} {Name} created CLI session {Session} for PR #{Pr}",
                 Identity.Role, Identity.DisplayName, sessionId, prNumber);
+
+            // Persist to DB so session survives runner restarts
+            _ = Task.Run(async () =>
+            {
+                try { await StateStore.SaveCliSessionAsync(Identity.Id, prNumber, sessionId); }
+                catch (Exception ex) { Logger.LogWarning(ex, "Failed to persist CLI session for PR #{Pr}", prNumber); }
+            });
         }
         SetCliSession(sessionId);
         return sessionId;

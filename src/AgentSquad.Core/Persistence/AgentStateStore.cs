@@ -139,6 +139,14 @@ public class AgentStateStore : IDisposable
                 approved_at DATETIME NOT NULL DEFAULT (datetime('now'))
             );
 
+            CREATE TABLE IF NOT EXISTS cli_sessions (
+                agent_id   TEXT NOT NULL,
+                pr_number  INTEGER NOT NULL,
+                session_id TEXT NOT NULL,
+                created_at DATETIME NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (agent_id, pr_number)
+            );
+
             CREATE TABLE IF NOT EXISTS gate_notifications (
                 id              TEXT PRIMARY KEY,
                 gate_id         TEXT NOT NULL,
@@ -806,6 +814,36 @@ public class AgentStateStore : IDisposable
         cmd.Parameters.AddWithValue("@key", key);
         cmd.Parameters.AddWithValue("@value", value);
         cmd.ExecuteNonQuery();
+    }
+
+    // ── CLI Session Persistence ────────────────────────────────────────
+
+    /// <summary>Persist a CLI session ID mapping for an agent + PR number.</summary>
+    public async Task SaveCliSessionAsync(string agentId, int prNumber, string sessionId, CancellationToken ct = default)
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO cli_sessions (agent_id, pr_number, session_id)
+            VALUES (@agentId, @prNumber, @sessionId)
+            ON CONFLICT(agent_id, pr_number) DO UPDATE SET session_id = excluded.session_id;
+            """;
+        cmd.Parameters.AddWithValue("@agentId", agentId);
+        cmd.Parameters.AddWithValue("@prNumber", prNumber);
+        cmd.Parameters.AddWithValue("@sessionId", sessionId);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    /// <summary>Load all CLI session ID mappings for an agent.</summary>
+    public async Task<Dictionary<int, string>> LoadCliSessionsAsync(string agentId, CancellationToken ct = default)
+    {
+        var result = new Dictionary<int, string>();
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "SELECT pr_number, session_id FROM cli_sessions WHERE agent_id = @agentId;";
+        cmd.Parameters.AddWithValue("@agentId", agentId);
+        using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            result[reader.GetInt32(0)] = reader.GetString(1);
+        return result;
     }
 
     public void Dispose()

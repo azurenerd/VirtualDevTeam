@@ -966,6 +966,7 @@ Each phase of the sequential pipeline has its **own independent retry limit**:
 - **REQ-IDEM-004f**: The in-process message bus (`InProcessMessageBus`) is volatile — ALL messages are lost on restart. Recovery logic MUST use GitHub API (comments, labels, PR state) as the source of truth, never depend on bus message replay.
 - **REQ-IDEM-004g**: PE reconciles task statuses against merged PRs on startup. Tasks whose PRs are already merged are marked Done (issue closed) using `GetMergedPullRequestsAsync`.
 - **REQ-IDEM-004h**: Test Engineer recovery: scans for open PRs with `architect-approved` label, checks GitHub comments for unaddressed feedback, re-requests review for PRs with no reviews. Uses `tested` label on source PRs as persistent dedup marker.
+- **REQ-IDEM-004i**: CLI session IDs (`_prSessionIds`) MUST be persisted to the SQLite database (`cli_sessions` table) so that after a runner restart, agents resume the same Copilot CLI session for each PR. This preserves the AI's full conversation history (implementation context, prior rework feedback) across restarts, enabling higher-quality rework responses. Both `EngineerAgentBase` and `TestEngineerAgent` restore their session mappings from the database during `OnInitializeAsync`.
 
 ### REQ-IDEM-005: Runner Startup vs Fresh Reset (Task File Preservation)
 
@@ -980,8 +981,8 @@ Each phase of the sequential pipeline has its **own independent retry limit**:
 1. System crashes while Senior Engineer 1 has PR #35 (ready-for-review) and Junior Engineer 1 has PR #36 (in-progress)
 2. On restart: PM reads TeamMembers.md → restores Senior Engineer 1 and Junior Engineer 1
 3. PE loads engineering-task issues from GitHub → restores task backlog → enters development loop
-4. Senior Engineer 1 starts → CurrentPrNumber is null → finds PR #35 with "ready-for-review" → re-tracks it (CurrentPrNumber = 35) but does NOT re-implement
-5. Junior Engineer 1 starts → CurrentPrNumber is null → finds PR #36 with "in-progress" → calls `WorkOnExistingPrAsync` → re-implements
+4. Senior Engineer 1 starts → restores CLI session mapping from DB → CurrentPrNumber is null → finds PR #35 with "ready-for-review" → re-tracks it (CurrentPrNumber = 35) but does NOT re-implement → rework uses restored CLI session so AI has full prior context
+5. Junior Engineer 1 starts → restores CLI session mapping from DB → CurrentPrNumber is null → finds PR #36 with "in-progress" → calls `WorkOnExistingPrAsync` → re-implements using restored CLI session
 6. PE loop: finds Senior Engineer 1 not in `_agentAssignments` → checks if their Issue is still open → Issue #43 is open → re-assigns to them
 
 ---
