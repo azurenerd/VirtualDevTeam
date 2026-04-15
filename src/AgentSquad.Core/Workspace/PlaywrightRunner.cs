@@ -522,11 +522,16 @@ public class PlaywrightRunner
         var appCommand = ResolveAppStartCommand(workspacePath, config);
         var (exe, args) = BuildRunner.ParseCommand(appCommand);
 
+        // Resolve the app project directory for WorkingDirectory.
+        // Using the workspace root causes relative path issues (e.g., data.json not found)
+        // when the app resolves files relative to its CWD.
+        var appWorkDir = ResolveAppProjectDirectory(workspacePath, appCommand) ?? workspacePath;
+
         var startInfo = new ProcessStartInfo
         {
             FileName = exe,
             Arguments = args,
-            WorkingDirectory = workspacePath,
+            WorkingDirectory = appWorkDir,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
@@ -779,6 +784,51 @@ public class PlaywrightRunner
         _logger.LogWarning("Could not find project file {FileName} in workspace {Path}, using configured command as-is",
             fileName, workspacePath);
         return command;
+    }
+
+    /// <summary>
+    /// Resolves the app project directory from the start command.
+    /// Used to set WorkingDirectory so the app can find relative files (data.json, wwwroot, etc.).
+    /// </summary>
+    private string? ResolveAppProjectDirectory(string workspacePath, string appCommand)
+    {
+        // Extract --project path from the command
+        var projectMatch = System.Text.RegularExpressions.Regex.Match(
+            appCommand, @"--project\s+""?([^""]+\.csproj)""?");
+        if (projectMatch.Success)
+        {
+            var projectPath = Path.Combine(workspacePath, projectMatch.Groups[1].Value.Replace('/', Path.DirectorySeparatorChar));
+            if (File.Exists(projectPath))
+            {
+                var dir = Path.GetDirectoryName(projectPath);
+                if (dir is not null)
+                {
+                    _logger.LogDebug("Resolved app working directory from --project: {Dir}", dir);
+                    return dir;
+                }
+            }
+        }
+
+        // Fallback: find the main (non-test) .csproj
+        var candidates = Directory.EnumerateFiles(workspacePath, "*.csproj", SearchOption.AllDirectories)
+            .Where(f => !Path.GetRelativePath(workspacePath, f).Contains("test", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (candidates.Count > 0)
+        {
+            var preferred = candidates
+                .OrderByDescending(f => Path.GetRelativePath(workspacePath, f)
+                    .StartsWith("src", StringComparison.OrdinalIgnoreCase) ? 1 : 0)
+                .First();
+            var dir = Path.GetDirectoryName(preferred);
+            if (dir is not null)
+            {
+                _logger.LogDebug("Resolved app working directory from csproj search: {Dir}", dir);
+                return dir;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>

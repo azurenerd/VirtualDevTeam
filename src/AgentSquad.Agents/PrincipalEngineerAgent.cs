@@ -55,6 +55,14 @@ public class PrincipalEngineerAgent : EngineerAgentBase
     private readonly HashSet<int> _forceApprovalPrs = new();
     private readonly HashSet<int> _mergedTestedPrNumbers = new();
     private readonly ConcurrentQueue<int> _reviewQueue = new();
+
+    /// <summary>
+    /// Shared across ALL PE instances in-process. Prevents the race condition where
+    /// multiple PEs discover the same PR, both check GitHub (no review posted yet),
+    /// and both post duplicate review comments. TryAdd gives atomic claim semantics.
+    /// Value is (agentId, claimedAtUtc) for debugging stale claims.
+    /// </summary>
+    private static readonly ConcurrentDictionary<int, (string AgentId, DateTime ClaimedAt)> s_activeReviews = new();
     private readonly Dictionary<int, int> _conflictRetryCount = new();
     private DateTime _lastReviewDiscovery = DateTime.MinValue;
     private static readonly TimeSpan ReviewDiscoveryInterval = TimeSpan.FromMinutes(2);
@@ -1509,8 +1517,10 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 if (pr.Title.StartsWith($"{Identity.DisplayName}:", StringComparison.OrdinalIgnoreCase))
                     continue;
 
-                // Skip if already reviewed or already queued
+                // Skip if already reviewed or already queued or claimed by another PE
                 if (_reviewedPrNumbers.Contains(pr.Number))
+                    continue;
+                if (s_activeReviews.ContainsKey(pr.Number))
                     continue;
 
                 // Add to review queue
@@ -1545,6 +1555,17 @@ public class PrincipalEngineerAgent : EngineerAgentBase
             {
                 if (_reviewedPrNumbers.Contains(prNumber))
                     continue;
+
+                // Atomic cross-PE claim: prevent multiple PE instances from reviewing
+                // the same PR simultaneously. Only one PE can claim a PR at a time.
+                if (!s_activeReviews.TryAdd(prNumber, (Identity.Id, DateTime.UtcNow)))
+                {
+                    Logger.LogDebug("PR #{Number} already claimed by another PE, skipping", prNumber);
+                    continue;
+                }
+
+                try
+                {
 
                 // Cross-PE dedup: if ANY PE has already reviewed this PR, skip it.
                 // This prevents multiple PE agents from reviewing the same PR.
@@ -1750,6 +1771,12 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 }
 
                 _reviewedPrNumbers.Add(prNumber);
+
+                } // end try
+                finally
+                {
+                    s_activeReviews.TryRemove(prNumber, out _);
+                }
             }
 
             // Reset status after review loop completes

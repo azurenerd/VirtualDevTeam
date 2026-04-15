@@ -1070,6 +1070,13 @@ public partial class PullRequestWorkflow
                 var alt = match.Groups[1].Value;
                 var url = match.Groups[2].Value;
 
+                // Determine screenshot source for PM review annotation
+                var source = comment.Body.Contains("Test Engineer", StringComparison.OrdinalIgnoreCase)
+                    ? "[Test Engineer]"
+                    : comment.Body.Contains("PrincipalEngineer", StringComparison.OrdinalIgnoreCase)
+                        ? "[Engineer/Author]"
+                        : "[Unknown source]";
+
                 var lines = comment.Body.Split('\n');
                 var contextLines = lines
                     .Where(l => l.Contains("Step", StringComparison.OrdinalIgnoreCase)
@@ -1080,6 +1087,7 @@ public partial class PullRequestWorkflow
                 var ctx = string.Join(" ", contextLines).Trim();
                 if (string.IsNullOrEmpty(ctx)) ctx = alt;
                 if (string.IsNullOrEmpty(ctx)) ctx = $"Screenshot from PR #{prNumber}";
+                ctx = $"{source} {ctx}";
 
                 imageInfos.Add((url, ctx));
             }
