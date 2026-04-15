@@ -6,6 +6,7 @@ using AgentSquad.Core.GitHub;
 using AgentSquad.Core.GitHub.Models;
 using AgentSquad.Core.Messaging;
 using AgentSquad.Core.Persistence;
+using AgentSquad.Core.Prompts;
 using AgentSquad.Core.Workspace;
 using Microsoft.Extensions.Logging;
 using Microsoft.SemanticKernel;
@@ -29,6 +30,7 @@ public abstract class EngineerAgentBase : AgentBase
     protected readonly ModelRegistry Models;
     protected readonly AgentSquadConfig Config;
     protected readonly AgentStateStore StateStore;
+    protected readonly IPromptTemplateService PromptService;
     private readonly IGateCheckService _gateCheck;
 
     protected readonly HashSet<int> ProcessedIssueIds = new();
@@ -72,6 +74,7 @@ public abstract class EngineerAgentBase : AgentBase
         AgentMemoryStore memoryStore,
         IGateCheckService gateCheck,
         ILogger<AgentBase> logger,
+        IPromptTemplateService? promptService = null,
         RoleContextProvider? roleContextProvider = null,
         BuildRunner? buildRunner = null,
         TestRunner? testRunner = null,
@@ -88,6 +91,7 @@ public abstract class EngineerAgentBase : AgentBase
         StateStore = stateStore ?? throw new ArgumentNullException(nameof(stateStore));
         Config = config ?? throw new ArgumentNullException(nameof(config));
         _gateCheck = gateCheck ?? throw new ArgumentNullException(nameof(gateCheck));
+        PromptService = promptService!; // null-safe: fallback pattern handles null
         BuildRunnerSvc = buildRunner;
         TestRunnerSvc = testRunner;
         Metrics = metrics;
@@ -511,25 +515,43 @@ public abstract class EngineerAgentBase : AgentBase
             // Use AI to understand the Issue and plan approach
             var memoryContext = await GetMemoryContextAsync(ct: ct);
             var planHistory = CreateChatHistory();
-            planHistory.AddSystemMessage(
-                $"You are a {GetRoleDisplayName()} analyzing a GitHub Issue (User Story) before starting work. " +
-                $"The project uses {techStack}. " +
-                "Read the Issue carefully and produce:\n" +
-                "1. A summary of what you understand needs to be built\n" +
-                "2. The acceptance criteria extracted from the Issue\n" +
-                "3. Detailed **Implementation Steps** — an ordered, numbered list of discrete steps " +
-                "to complete this task. Step 1 should be scaffolding (project structure, config, boilerplate). " +
-                "All file paths MUST be relative to the repo root. Place .sln at repo root, project under ProjectName/. " +
-                "NEVER create redundant same-named nested folders (e.g., RepoName/RepoName/ is WRONG). " +
-                "Each step should be a self-contained unit of committable work. 3-6 steps total.\n" +
-                "4. Any questions you have — if the requirements are UNCLEAR, list them. " +
-                "If you understand everything well enough to proceed, say 'NO_QUESTIONS'." +
-                (string.IsNullOrEmpty(memoryContext) ? "" : $"\n\n{memoryContext}"));
+            var planSys = PromptService is not null
+                ? await PromptService.RenderAsync("engineer-base/planning-system", new Dictionary<string, string>
+                {
+                    ["role_display_name"] = GetRoleDisplayName(),
+                    ["tech_stack"] = techStack,
+                    ["memory_context"] = string.IsNullOrEmpty(memoryContext) ? "" : $"\n\n{memoryContext}"
+                }, ct)
+                : null;
+            planHistory.AddSystemMessage(planSys
+                ?? $"You are a {GetRoleDisplayName()} analyzing a GitHub Issue (User Story) before starting work. " +
+                   $"The project uses {techStack}. " +
+                   "Read the Issue carefully and produce:\n" +
+                   "1. A summary of what you understand needs to be built\n" +
+                   "2. The acceptance criteria extracted from the Issue\n" +
+                   "3. Detailed **Implementation Steps** — an ordered, numbered list of discrete steps " +
+                   "to complete this task. Step 1 should be scaffolding (project structure, config, boilerplate). " +
+                   "All file paths MUST be relative to the repo root. Place .sln at repo root, project under ProjectName/. " +
+                   "NEVER create redundant same-named nested folders (e.g., RepoName/RepoName/ is WRONG). " +
+                   "Each step should be a self-contained unit of committable work. 3-6 steps total.\n" +
+                   "4. Any questions you have — if the requirements are UNCLEAR, list them. " +
+                   "If you understand everything well enough to proceed, say 'NO_QUESTIONS'." +
+                   (string.IsNullOrEmpty(memoryContext) ? "" : $"\n\n{memoryContext}"));
 
-            planHistory.AddUserMessage(
-                $"## PM Specification\n{pmSpecDoc}\n\n" +
-                $"## Architecture\n{architectureDoc}\n\n" +
-                $"## Issue #{issue.Number}: {issue.Title}\n{issue.Body}");
+            var planUser = PromptService is not null
+                ? await PromptService.RenderAsync("engineer-base/planning-user", new Dictionary<string, string>
+                {
+                    ["pm_spec"] = pmSpecDoc,
+                    ["architecture"] = architectureDoc,
+                    ["issue_number"] = issue.Number.ToString(),
+                    ["issue_title"] = issue.Title,
+                    ["issue_body"] = issue.Body ?? ""
+                }, ct)
+                : null;
+            planHistory.AddUserMessage(planUser
+                ?? $"## PM Specification\n{pmSpecDoc}\n\n" +
+                   $"## Architecture\n{architectureDoc}\n\n" +
+                   $"## Issue #{issue.Number}: {issue.Title}\n{issue.Body}");
 
             var planResponse = await chat.GetChatMessageContentAsync(planHistory, cancellationToken: ct);
             var planContent = planResponse.Content?.Trim() ?? "";
@@ -864,29 +886,47 @@ public abstract class EngineerAgentBase : AgentBase
         try
         {
             var history = CreateChatHistory();
-            history.AddSystemMessage(
-                $"You are a {GetRoleDisplayName()} planning implementation steps for a coding task. " +
-                $"The project uses {techStack}. " +
-                "Break the task into 3-6 discrete, ordered implementation steps. " +
-                "IMPORTANT rules:\n" +
-                "- Step 1 MUST be project scaffolding: folder structure, config files, boilerplate, " +
-                "package manifests, and empty placeholder files that establish the project skeleton.\n" +
-                "- All file paths are relative to the REPOSITORY ROOT. The repo root IS the solution root.\n" +
-                "- Place .sln at repo root, project files under a single ProjectName/ subfolder.\n" +
-                "- NEVER create multiple levels of same-named folders (e.g., MyApp/MyApp/MyApp/ is WRONG).\n" +
-                "- Only ONE .gitignore at the repo root.\n" +
-                "- Each subsequent step should build on what the previous steps created.\n" +
-                "- Each step should be a self-contained unit of work that produces committable code.\n" +
-                "- Steps should be small enough to complete in a single AI response.\n" +
-                "- The final step should handle polish: integration, cleanup, and any remaining wiring.\n\n" +
-                "Output ONLY a numbered list of steps, one per line. Each step should be a clear, " +
-                "actionable description (1-2 sentences) of what to build. No other text.");
+            var stepSys = PromptService is not null
+                ? await PromptService.RenderAsync("engineer-base/step-planning-system", new Dictionary<string, string>
+                {
+                    ["role_display_name"] = GetRoleDisplayName(),
+                    ["tech_stack"] = techStack
+                }, ct)
+                : null;
+            history.AddSystemMessage(stepSys
+                ?? $"You are a {GetRoleDisplayName()} planning implementation steps for a coding task. " +
+                   $"The project uses {techStack}. " +
+                   "Break the task into 3-6 discrete, ordered implementation steps. " +
+                   "IMPORTANT rules:\n" +
+                   "- Step 1 MUST be project scaffolding: folder structure, config files, boilerplate, " +
+                   "package manifests, and empty placeholder files that establish the project skeleton.\n" +
+                   "- All file paths are relative to the REPOSITORY ROOT. The repo root IS the solution root.\n" +
+                   "- Place .sln at repo root, project files under a single ProjectName/ subfolder.\n" +
+                   "- NEVER create multiple levels of same-named folders (e.g., MyApp/MyApp/MyApp/ is WRONG).\n" +
+                   "- Only ONE .gitignore at the repo root.\n" +
+                   "- Each subsequent step should build on what the previous steps created.\n" +
+                   "- Each step should be a self-contained unit of work that produces committable code.\n" +
+                   "- Steps should be small enough to complete in a single AI response.\n" +
+                   "- The final step should handle polish: integration, cleanup, and any remaining wiring.\n\n" +
+                   "Output ONLY a numbered list of steps, one per line. Each step should be a clear, " +
+                   "actionable description (1-2 sentences) of what to build. No other text.");
 
-            history.AddUserMessage(
-                $"## Issue #{issue.Number}: {issue.Title}\n{issue.Body}\n\n" +
-                $"## PR Description\n{pr.Body}\n\n" +
-                $"## Architecture\n{archDoc}\n\n" +
-                $"## PM Specification\n{pmSpec}");
+            var stepUser = PromptService is not null
+                ? await PromptService.RenderAsync("engineer-base/step-planning-user", new Dictionary<string, string>
+                {
+                    ["issue_number"] = issue.Number.ToString(),
+                    ["issue_title"] = issue.Title,
+                    ["issue_body"] = issue.Body ?? "",
+                    ["pr_body"] = pr.Body ?? "",
+                    ["architecture"] = archDoc,
+                    ["pm_spec"] = pmSpec
+                }, ct)
+                : null;
+            history.AddUserMessage(stepUser
+                ?? $"## Issue #{issue.Number}: {issue.Title}\n{issue.Body}\n\n" +
+                   $"## PR Description\n{pr.Body}\n\n" +
+                   $"## Architecture\n{archDoc}\n\n" +
+                   $"## PM Specification\n{pmSpec}");
 
             var response = await chat.GetChatMessageContentAsync(history, cancellationToken: ct);
             var content = response.Content?.Trim() ?? "";
@@ -993,6 +1033,26 @@ public abstract class EngineerAgentBase : AgentBase
     /// </summary>
     protected virtual string GetStepImplementationSystemPrompt(string techStack, int stepNumber, int totalSteps)
     {
+        // Try template first (sync check — templates are cached after first load)
+        if (PromptService is not null)
+        {
+            var gitignoreRule = stepNumber == 1
+                ? "GITIGNORE RULE: If the project does not already have a .gitignore, create one as your FIRST file. " +
+                  "Include ALL standard ignores for the project's technology stack (e.g., bin/obj for .NET, " +
+                  "node_modules for Node.js, __pycache__ for Python, target for Rust/Java, etc.). " +
+                  "This prevents build artifacts from being committed.\n\n"
+                : "";
+            var rendered = PromptService.RenderAsync("engineer-base/step-implementation-system", new Dictionary<string, string>
+            {
+                ["role_display_name"] = GetRoleDisplayName(),
+                ["step_number"] = stepNumber.ToString(),
+                ["total_steps"] = totalSteps.ToString(),
+                ["tech_stack"] = techStack,
+                ["gitignore_rule"] = gitignoreRule
+            }).GetAwaiter().GetResult();
+            if (rendered is not null) return rendered;
+        }
+
         return $"You are a {GetRoleDisplayName()} implementing step {stepNumber} of {totalSteps} " +
             $"in a coding task. The project uses {techStack}. " +
             "Focus ONLY on the current step described below. " +
@@ -1276,25 +1336,40 @@ public abstract class EngineerAgentBase : AgentBase
             history.AddSystemMessage(GetReworkSystemPrompt(techStack) +
                 (string.IsNullOrEmpty(reworkMemory) ? "" : $"\n\n{reworkMemory}"));
 
-            history.AddUserMessage(
-                $"## PR #{rework.PrNumber}: {rework.PrTitle}\n" +
-                $"## Original PR Description\n{pr.Body}\n\n" +
-                $"## Architecture\n{architectureDoc}\n\n" +
-                $"## PM Specification\n{pmSpecDoc}\n\n" +
-                await GetAdditionalReworkContextAsync(ct) +
-                (string.IsNullOrEmpty(currentFilesContext) ? "" :
-                    $"## Current Files on PR Branch\n{currentFilesContext}\n\n") +
-                $"## Review Feedback\n{combinedFeedback}\n\n" +
-                "REQUIRED: Start your response with CHANGES SUMMARY that addresses each numbered " +
-                "feedback item using the SAME numbers. Example:\n" +
-                "CHANGES SUMMARY\n" +
-                "1. Fixed the null check in AuthController.cs\n" +
-                "2. Added validation for empty strings as requested\n" +
-                "3. No change needed — the test already covers this case\n\n" +
-                "Then you MUST output the corrected files using this exact format:\n\n" +
-                "FILE: path/to/file.ext\n```language\n<file content>\n```\n\n" +
-                "Include the COMPLETE content of each changed file. " +
-                "You MUST include at least one FILE: block — a summary alone is not sufficient.");
+            var additionalCtx = await GetAdditionalReworkContextAsync(ct);
+            var reworkUser = PromptService is not null
+                ? await PromptService.RenderAsync("engineer-base/rework-user", new Dictionary<string, string>
+                {
+                    ["pr_number"] = rework.PrNumber.ToString(),
+                    ["pr_title"] = rework.PrTitle,
+                    ["pr_body"] = pr.Body ?? "",
+                    ["architecture"] = architectureDoc,
+                    ["pm_spec"] = pmSpecDoc,
+                    ["additional_context"] = string.IsNullOrEmpty(additionalCtx) ? "" : $"{additionalCtx}\n",
+                    ["current_files_context"] = string.IsNullOrEmpty(currentFilesContext) ? "" :
+                        $"## Current Files on PR Branch\n{currentFilesContext}\n\n",
+                    ["feedback"] = combinedFeedback
+                }, ct)
+                : null;
+            history.AddUserMessage(reworkUser
+                ?? $"## PR #{rework.PrNumber}: {rework.PrTitle}\n" +
+                   $"## Original PR Description\n{pr.Body}\n\n" +
+                   $"## Architecture\n{architectureDoc}\n\n" +
+                   $"## PM Specification\n{pmSpecDoc}\n\n" +
+                   additionalCtx +
+                   (string.IsNullOrEmpty(currentFilesContext) ? "" :
+                       $"## Current Files on PR Branch\n{currentFilesContext}\n\n") +
+                   $"## Review Feedback\n{combinedFeedback}\n\n" +
+                   "REQUIRED: Start your response with CHANGES SUMMARY that addresses each numbered " +
+                   "feedback item using the SAME numbers. Example:\n" +
+                   "CHANGES SUMMARY\n" +
+                   "1. Fixed the null check in AuthController.cs\n" +
+                   "2. Added validation for empty strings as requested\n" +
+                   "3. No change needed — the test already covers this case\n\n" +
+                   "Then you MUST output the corrected files using this exact format:\n\n" +
+                   "FILE: path/to/file.ext\n```language\n<file content>\n```\n\n" +
+                   "Include the COMPLETE content of each changed file. " +
+                   "You MUST include at least one FILE: block — a summary alone is not sufficient.");
 
             var response = await chat.GetChatMessageContentAsync(history, cancellationToken: ct);
             var updatedImpl = response.Content?.Trim() ?? "";
@@ -1444,10 +1519,14 @@ public abstract class EngineerAgentBase : AgentBase
                 {
                     responseReceived = true;
                     planHistory.AddAssistantMessage(planContent);
-                    planHistory.AddUserMessage(
-                        $"The PM has responded to your questions:\n\n{resp.Response}\n\n" +
-                        "Based on this clarification, update your understanding. " +
-                        "If you still have questions, list them. Otherwise say 'NO_QUESTIONS'.");
+                    var clarificationMsg = PromptService is not null
+                        ? await PromptService.RenderAsync("engineer-base/clarification-followup",
+                            new Dictionary<string, string> { ["pm_response"] = resp.Response }, ct)
+                        : null;
+                    planHistory.AddUserMessage(clarificationMsg
+                        ?? $"The PM has responded to your questions:\n\n{resp.Response}\n\n" +
+                           "Based on this clarification, update your understanding. " +
+                           "If you still have questions, list them. Otherwise say 'NO_QUESTIONS'.");
 
                     var updatedPlan = await chat.GetChatMessageContentAsync(
                         planHistory, cancellationToken: ct);
@@ -1623,17 +1702,28 @@ public abstract class EngineerAgentBase : AgentBase
 
                 var history = CreateChatHistory();
                 history.AddSystemMessage(GetImplementationSystemPrompt(techStack));
-                history.AddUserMessage(
-                    $"## PM Specification\n{pmSpecDoc}\n\n" +
-                    $"## Architecture\n{architectureDoc}\n\n" +
-                    $"## Task: {syntheticIssue.Title}\n{pr.Body}\n\n" +
-                    "Produce a complete implementation. Output each file using this format:\n\n" +
-                    "FILE: path/to/file.ext\n```language\n<file content>\n```\n\n" +
-                    $"Use the {techStack} technology stack. " +
-                    "Include all source code files, configuration, and tests. " +
-                    "Every file MUST use the FILE: marker format. " +
-                    "File paths must be valid filesystem paths (e.g., src/Models/User.cs). " +
-                    "Do NOT put code, directives, brackets, or instructions in the file path.");
+                var singlePassUser = PromptService is not null
+                    ? await PromptService.RenderAsync("engineer-base/single-pass-implementation",
+                        new Dictionary<string, string>
+                        {
+                            ["pm_spec"] = pmSpecDoc,
+                            ["architecture"] = architectureDoc,
+                            ["task_title"] = syntheticIssue.Title,
+                            ["pr_body"] = pr.Body ?? "",
+                            ["tech_stack"] = techStack
+                        }, ct)
+                    : null;
+                history.AddUserMessage(singlePassUser
+                    ?? $"## PM Specification\n{pmSpecDoc}\n\n" +
+                       $"## Architecture\n{architectureDoc}\n\n" +
+                       $"## Task: {syntheticIssue.Title}\n{pr.Body}\n\n" +
+                       "Produce a complete implementation. Output each file using this format:\n\n" +
+                       "FILE: path/to/file.ext\n```language\n<file content>\n```\n\n" +
+                       $"Use the {techStack} technology stack. " +
+                       "Include all source code files, configuration, and tests. " +
+                       "Every file MUST use the FILE: marker format. " +
+                       "File paths must be valid filesystem paths (e.g., src/Models/User.cs). " +
+                       "Do NOT put code, directives, brackets, or instructions in the file path.");
 
                 var implResponse = await chat.GetChatMessageContentAsync(history, cancellationToken: ct);
                 history.AddAssistantMessage(implResponse.Content ?? "");
@@ -1809,6 +1899,16 @@ public abstract class EngineerAgentBase : AgentBase
     /// <summary>System prompt for the rework AI call.</summary>
     protected virtual string GetReworkSystemPrompt(string techStack)
     {
+        if (PromptService is not null)
+        {
+            var rendered = PromptService.RenderAsync("engineer-base/rework-system", new Dictionary<string, string>
+            {
+                ["role_display_name"] = GetRoleDisplayName(),
+                ["tech_stack"] = techStack
+            }).GetAwaiter().GetResult();
+            if (rendered is not null) return rendered;
+        }
+
         return $"You are a {GetRoleDisplayName()} addressing review feedback on a pull request. " +
             $"The project uses {techStack}. " +
             "Carefully read the feedback, understand what needs to be fixed, and produce " +
@@ -2287,7 +2387,18 @@ public abstract class EngineerAgentBase : AgentBase
                 Identity.Role, Identity.DisplayName, attempt + 1, wsConfig.MaxBuildRetries + 1, buildResult.ParsedErrors.Count);
             LogActivity("build", $"🔧 Build failed (attempt {attempt + 1}), asking AI to fix {buildResult.ParsedErrors.Count} errors");
 
-            var fixPrompt = $"""
+            var fixPrompt = PromptService is not null
+                ? await PromptService.RenderAsync("engineer-base/build-fix",
+                    new Dictionary<string, string>
+                    {
+                        ["step_number"] = stepNumber.ToString(),
+                        ["total_steps"] = totalSteps.ToString(),
+                        ["step_description"] = stepDescription,
+                        ["error_count"] = buildResult.ParsedErrors.Count.ToString(),
+                        ["error_summary"] = lastErrorSummary
+                    }, ct)
+                : null;
+            fixPrompt ??= $"""
                 The code from step {stepNumber}/{totalSteps} ({stepDescription}) has build errors.
                 
                 BUILD ERRORS:
@@ -2492,7 +2603,19 @@ public abstract class EngineerAgentBase : AgentBase
                 ? string.Join("\n", testResult.FailureDetails.Take(10))
                 : testResult.Output.Length > 2000 ? testResult.Output[^2000..] : testResult.Output;
 
-            var fixPrompt = $"""
+            var fixPrompt = PromptService is not null
+                ? await PromptService.RenderAsync("engineer-base/test-fix",
+                    new Dictionary<string, string>
+                    {
+                        ["step_number"] = stepNumber.ToString(),
+                        ["total_steps"] = totalSteps.ToString(),
+                        ["step_description"] = stepDescription,
+                        ["failed_count"] = testResult.Failed.ToString(),
+                        ["total_count"] = testResult.Total.ToString(),
+                        ["failure_summary"] = failureSummary
+                    }, ct)
+                : null;
+            fixPrompt ??= $"""
                 The code from step {stepNumber}/{totalSteps} ({stepDescription}) has test failures.
                 
                 TEST FAILURES ({testResult.Failed} of {testResult.Total}):
@@ -2556,7 +2679,15 @@ public abstract class EngineerAgentBase : AgentBase
             ? string.Join("\n", lastTestResult.FailureDetails.Take(20))
             : lastTestResult.Output.Length > 3000 ? lastTestResult.Output[^3000..] : lastTestResult.Output;
 
-        var removePrompt = $"""
+        var removePrompt = PromptService is not null
+            ? await PromptService.RenderAsync("engineer-base/test-removal",
+                new Dictionary<string, string>
+                {
+                    ["max_retries"] = wsConfig.MaxTestRetries.ToString(),
+                    ["failure_details"] = failureSummary
+                }, ct)
+            : null;
+        removePrompt ??= $"""
             The following tests have been failing despite {wsConfig.MaxTestRetries} attempts to fix them.
             These tests MUST be removed because they cannot be made to pass within the current constraints.
 
@@ -2655,7 +2786,15 @@ public abstract class EngineerAgentBase : AgentBase
         {
             var failedFileList = string.Join(", ", failedFiles.Select(f => $"`{f.Path}`"));
 
-            var regenPrompt = $"""
+            var regenPrompt = PromptService is not null
+                ? await PromptService.RenderAsync("engineer-base/regeneration",
+                    new Dictionary<string, string>
+                    {
+                        ["failed_file_list"] = failedFileList,
+                        ["step_description"] = stepDescription
+                    }, ct)
+                : null;
+            regenPrompt ??= $"""
                 Your previous implementation for step {stepNumber}/{totalSteps} ("{stepDescription}") had build errors 
                 that could not be fixed. You need to regenerate the code from scratch with a different approach.
 

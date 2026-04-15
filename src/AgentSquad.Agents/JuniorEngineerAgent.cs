@@ -5,6 +5,7 @@ using AgentSquad.Core.GitHub;
 using AgentSquad.Core.GitHub.Models;
 using AgentSquad.Core.Messaging;
 using AgentSquad.Core.Persistence;
+using AgentSquad.Core.Prompts;
 using AgentSquad.Core.Workspace;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -33,6 +34,7 @@ public class JuniorEngineerAgent : EngineerAgentBase
         IOptions<AgentSquadConfig> config,
         IGateCheckService gateCheck,
         ILogger<JuniorEngineerAgent> logger,
+        IPromptTemplateService? promptService = null,
         RoleContextProvider? roleContextProvider = null,
         BuildRunner? buildRunner = null,
         TestRunner? testRunner = null,
@@ -40,18 +42,26 @@ public class JuniorEngineerAgent : EngineerAgentBase
         PlaywrightRunner? playwrightRunner = null)
         : base(identity, messageBus, github, prWorkflow, issueWorkflow,
                projectFiles, modelRegistry, stateStore, config.Value, memoryStore, gateCheck, logger,
-               roleContextProvider, buildRunner, testRunner, metrics, playwrightRunner)
+               promptService, roleContextProvider, buildRunner, testRunner, metrics, playwrightRunner)
     {
     }
 
     protected override string GetRoleDisplayName() => "Junior Engineer";
 
-    protected override string GetImplementationSystemPrompt(string techStack) =>
-        $"You are a Junior Engineer implementing a task from a GitHub Issue. " +
-        $"The project uses {techStack}. " +
-        "Follow the architecture closely. Write clean, well-commented code. " +
-        "Include proper error handling and basic unit tests. " +
-        "If something is too complex, say so clearly.";
+    protected override string GetImplementationSystemPrompt(string techStack)
+    {
+        if (PromptService is not null)
+        {
+            var rendered = PromptService.RenderAsync("junior-engineer/implementation-system",
+                new Dictionary<string, string> { ["tech_stack"] = techStack }).GetAwaiter().GetResult();
+            if (rendered is not null) return rendered;
+        }
+        return $"You are a Junior Engineer implementing a task from a GitHub Issue. " +
+            $"The project uses {techStack}. " +
+            "Follow the architecture closely. Write clean, well-commented code. " +
+            "Include proper error handling and basic unit tests. " +
+            "If something is too complex, say so clearly.";
+    }
 
     /// <summary>Truncate PMSpec for budget model context windows.</summary>
     protected override async Task<string> GetPMSpecForContextAsync(CancellationToken ct)

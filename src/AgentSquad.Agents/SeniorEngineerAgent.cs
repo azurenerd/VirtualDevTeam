@@ -4,6 +4,7 @@ using AgentSquad.Core.Configuration;
 using AgentSquad.Core.GitHub;
 using AgentSquad.Core.Messaging;
 using AgentSquad.Core.Persistence;
+using AgentSquad.Core.Prompts;
 using AgentSquad.Core.Workspace;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -31,6 +32,7 @@ public class SeniorEngineerAgent : EngineerAgentBase
         IOptions<AgentSquadConfig> config,
         IGateCheckService gateCheck,
         ILogger<SeniorEngineerAgent> logger,
+        IPromptTemplateService? promptService = null,
         RoleContextProvider? roleContextProvider = null,
         BuildRunner? buildRunner = null,
         TestRunner? testRunner = null,
@@ -38,19 +40,27 @@ public class SeniorEngineerAgent : EngineerAgentBase
         PlaywrightRunner? playwrightRunner = null)
         : base(identity, messageBus, github, prWorkflow, issueWorkflow,
                projectFiles, modelRegistry, stateStore, config.Value, memoryStore, gateCheck, logger,
-               roleContextProvider, buildRunner, testRunner, metrics, playwrightRunner)
+               promptService, roleContextProvider, buildRunner, testRunner, metrics, playwrightRunner)
     {
     }
 
     protected override string GetRoleDisplayName() => "Senior Engineer";
 
-    protected override string GetImplementationSystemPrompt(string techStack) =>
-        $"You are a Senior Engineer implementing a task from a GitHub Issue. " +
+    protected override string GetImplementationSystemPrompt(string techStack)
+    {
+        if (PromptService is not null)
+        {
+            var rendered = PromptService.RenderAsync("senior-engineer/implementation-system",
+                new Dictionary<string, string> { ["tech_stack"] = techStack }).GetAwaiter().GetResult();
+            if (rendered is not null) return rendered;
+        }
+        return $"You are a Senior Engineer implementing a task from a GitHub Issue. " +
         $"The project uses {techStack} as its technology stack. " +
         "You produce clean, well-structured code that follows the project architecture " +
         "and fulfills the business requirements from the PM specification. " +
         "Include proper error handling, logging, and unit tests. " +
         "Be thorough and practical.";
+    }
 
     /// <summary>
     /// Senior Engineers do an extra self-review turn for quality assurance.
@@ -61,14 +71,17 @@ public class SeniorEngineerAgent : EngineerAgentBase
         var kernel = Models.GetKernel(Identity.ModelTier, Identity.Id);
         var chat = kernel.GetRequiredService<IChatCompletionService>();
 
-        history.AddUserMessage(
-            "Review your implementation critically. Check for:\n" +
-            "1. Missing error handling\n" +
-            "2. Architecture alignment issues\n" +
-            "3. Edge cases not covered\n" +
-            "4. Any bugs or logic errors\n\n" +
-            "If you find issues, provide the COMPLETE corrected files using the same FILE: format. " +
-            "If it looks good, confirm with a brief summary.");
+        var selfReviewPrompt = PromptService is not null
+            ? await PromptService.RenderAsync("senior-engineer/self-review", new Dictionary<string, string>(), ct)
+            : null;
+        history.AddUserMessage(selfReviewPrompt
+            ?? "Review your implementation critically. Check for:\n" +
+               "1. Missing error handling\n" +
+               "2. Architecture alignment issues\n" +
+               "3. Edge cases not covered\n" +
+               "4. Any bugs or logic errors\n\n" +
+               "If you find issues, provide the COMPLETE corrected files using the same FILE: format. " +
+               "If it looks good, confirm with a brief summary.");
 
         var reviewResponse = await chat.GetChatMessageContentAsync(history, cancellationToken: ct);
         return reviewResponse.Content?.Trim() ?? implementation;

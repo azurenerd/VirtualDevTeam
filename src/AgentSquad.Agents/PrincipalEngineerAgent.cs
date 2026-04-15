@@ -8,6 +8,7 @@ using AgentSquad.Core.GitHub;
 using AgentSquad.Core.GitHub.Models;
 using AgentSquad.Core.Messaging;
 using AgentSquad.Core.Persistence;
+using AgentSquad.Core.Prompts;
 using AgentSquad.Core.Services;
 using AgentSquad.Core.Workspace;
 using AgentSquad.Orchestrator;
@@ -99,6 +100,7 @@ public class PrincipalEngineerAgent : EngineerAgentBase
         SelfAssessmentService selfAssessment,
         IAgentReasoningLog reasoningLog,
         ILogger<PrincipalEngineerAgent> logger,
+        IPromptTemplateService? promptService = null,
         RoleContextProvider? roleContextProvider = null,
         BuildRunner? buildRunner = null,
         TestRunner? testRunner = null,
@@ -108,7 +110,7 @@ public class PrincipalEngineerAgent : EngineerAgentBase
         AgentSpawnManager? spawnManager = null)
         : base(identity, messageBus, github, prWorkflow, issueWorkflow,
                projectFiles, modelRegistry, stateStore, config.Value, memoryStore, gateCheck, logger,
-               roleContextProvider, buildRunner, testRunner, metrics, playwrightRunner)
+               promptService, roleContextProvider, buildRunner, testRunner, metrics, playwrightRunner)
     {
         _registry = registry ?? throw new ArgumentNullException(nameof(registry));
         _gateCheck = gateCheck ?? throw new ArgumentNullException(nameof(gateCheck));
@@ -121,27 +123,43 @@ public class PrincipalEngineerAgent : EngineerAgentBase
 
     protected override string GetRoleDisplayName() => "Principal Engineer";
 
-    protected override string GetImplementationSystemPrompt(string techStack) =>
-        $"You are a Principal Engineer implementing a high-complexity engineering task. " +
-        $"The project uses {techStack} as its technology stack. " +
-        "The PM Specification defines the business requirements, and the Architecture " +
-        "document defines the technical design. The GitHub Issue contains the User Story " +
-        "and acceptance criteria for this specific task. " +
-        "Produce detailed, production-quality code. " +
-        "Ensure the implementation fulfills the business goals from the PM spec. " +
-        "Be thorough — this is the most critical part of the system.\n\n" +
-        "DEPENDENCY RULE: Before using ANY external library, package, or framework, check the project's " +
-        "dependency manifest (e.g., .csproj, package.json, requirements.txt, etc.). " +
-        "If a dependency is not already listed, add it to the manifest and include that file in your output. " +
-        "Never import/using/require a package without ensuring it is declared in the project.";
+    protected override string GetImplementationSystemPrompt(string techStack)
+    {
+        if (PromptService is not null)
+        {
+            var rendered = PromptService.RenderAsync("principal-engineer/implementation-system",
+                new Dictionary<string, string> { ["tech_stack"] = techStack }).GetAwaiter().GetResult();
+            if (rendered is not null) return rendered;
+        }
+        return $"You are a Principal Engineer implementing a high-complexity engineering task. " +
+            $"The project uses {techStack} as its technology stack. " +
+            "The PM Specification defines the business requirements, and the Architecture " +
+            "document defines the technical design. The GitHub Issue contains the User Story " +
+            "and acceptance criteria for this specific task. " +
+            "Produce detailed, production-quality code. " +
+            "Ensure the implementation fulfills the business goals from the PM spec. " +
+            "Be thorough — this is the most critical part of the system.\n\n" +
+            "DEPENDENCY RULE: Before using ANY external library, package, or framework, check the project's " +
+            "dependency manifest (e.g., .csproj, package.json, requirements.txt, etc.). " +
+            "If a dependency is not already listed, add it to the manifest and include that file in your output. " +
+            "Never import/using/require a package without ensuring it is declared in the project.";
+    }
 
-    protected override string GetReworkSystemPrompt(string techStack) =>
-        $"You are a Principal Engineer addressing review feedback on your pull request. " +
-        $"The project uses {techStack}. " +
-        "You have access to the full architecture, PM spec, and engineering plan. " +
-        "Carefully read the feedback, understand what needs to be fixed, and produce " +
-        "an updated implementation that addresses ALL the feedback points. " +
-        "Be thorough and produce production-quality fixes.";
+    protected override string GetReworkSystemPrompt(string techStack)
+    {
+        if (PromptService is not null)
+        {
+            var rendered = PromptService.RenderAsync("principal-engineer/rework-system",
+                new Dictionary<string, string> { ["tech_stack"] = techStack }).GetAwaiter().GetResult();
+            if (rendered is not null) return rendered;
+        }
+        return $"You are a Principal Engineer addressing review feedback on your pull request. " +
+            $"The project uses {techStack}. " +
+            "You have access to the full architecture, PM spec, and engineering plan. " +
+            "Carefully read the feedback, understand what needs to be fixed, and produce " +
+            "an updated implementation that addresses ALL the feedback points. " +
+            "Be thorough and produce production-quality fixes.";
+    }
 
     protected override Task<string> GetAdditionalReworkContextAsync(CancellationToken ct)
     {
