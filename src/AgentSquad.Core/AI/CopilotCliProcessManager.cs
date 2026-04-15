@@ -307,6 +307,9 @@ public sealed class CopilotCliProcessManager : IHostedService, IDisposable
     {
         try
         {
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(10));
+
             var psi = new ProcessStartInfo
             {
                 FileName = _config.ExecutablePath,
@@ -320,8 +323,8 @@ public sealed class CopilotCliProcessManager : IHostedService, IDisposable
             using var process = new Process { StartInfo = psi };
             process.Start();
 
-            var output = await process.StandardOutput.ReadToEndAsync(ct);
-            await process.WaitForExitAsync(ct);
+            var output = await process.StandardOutput.ReadToEndAsync(timeoutCts.Token);
+            await process.WaitForExitAsync(timeoutCts.Token);
 
             if (process.ExitCode == 0)
             {
@@ -330,6 +333,11 @@ public sealed class CopilotCliProcessManager : IHostedService, IDisposable
             }
 
             _logger.LogDebug("copilot --version exited with code {Code}", process.ExitCode);
+            return false;
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            _logger.LogWarning("Copilot CLI verification timed out after 10s — treating as unavailable");
             return false;
         }
         catch (Exception ex)

@@ -10,11 +10,15 @@ namespace AgentSquad.Integration.Tests;
 /// <summary>
 /// Integration tests for the Copilot CLI provider.
 /// These tests require the copilot CLI to be installed and available on PATH.
-/// Skip in CI by filtering: dotnet test --filter "Category!=Integration"
+/// All tests use a 15-second timeout to prevent hanging when copilot CLI is
+/// present but unresponsive (e.g., auth prompts, network issues).
+/// Skip in CI by filtering: dotnet test --filter "Category!=CopilotCli"
 /// </summary>
-[Trait("Category", "Integration")]
+[Trait("Category", "CopilotCli")]
 public class CopilotCliProviderTests : IDisposable
 {
+    private static readonly TimeSpan TestTimeout = TimeSpan.FromSeconds(15);
+
     private readonly ServiceProvider _serviceProvider;
     private readonly CopilotCliProcessManager _processManager;
 
@@ -30,7 +34,7 @@ public class CopilotCliProviderTests : IDisposable
                 Enabled = true,
                 ExecutablePath = "copilot",
                 MaxConcurrentRequests = 2,
-                RequestTimeoutSeconds = 120,
+                RequestTimeoutSeconds = 15,
                 ModelName = "claude-opus-4.6"
             },
             Models = new Dictionary<string, ModelConfig>
@@ -69,7 +73,8 @@ public class CopilotCliProviderTests : IDisposable
     [Fact]
     public async Task ProcessManager_CanDetectCopilotAvailability()
     {
-        await _processManager.StartAsync(CancellationToken.None);
+        using var cts = new CancellationTokenSource(TestTimeout);
+        await _processManager.StartAsync(cts.Token);
 
         // Validates the detection logic runs without crashing.
         // IsAvailable will be true if copilot is on PATH, false otherwise.
@@ -79,7 +84,8 @@ public class CopilotCliProviderTests : IDisposable
     [Fact]
     public async Task ModelRegistry_FallsBackWhenCliUnavailable()
     {
-        await _processManager.StartAsync(CancellationToken.None);
+        using var cts = new CancellationTokenSource(TestTimeout);
+        await _processManager.StartAsync(cts.Token);
 
         var registry = _serviceProvider.GetRequiredService<ModelRegistry>();
 
@@ -94,13 +100,14 @@ public class CopilotCliProviderTests : IDisposable
     [Fact]
     public async Task ProcessManager_ExecutePrompt_WhenAvailable()
     {
-        await _processManager.StartAsync(CancellationToken.None);
+        using var cts = new CancellationTokenSource(TestTimeout);
+        await _processManager.StartAsync(cts.Token);
 
         if (!_processManager.IsAvailable)
             return; // copilot not installed — skip gracefully
 
         var result = await _processManager.ExecutePromptAsync(
-            "Say hello in exactly 3 words.");
+            "Say hello in exactly 3 words.", cts.Token);
 
         Assert.True(result.IsSuccess, $"Expected success but got: {result.Error}");
         Assert.False(string.IsNullOrWhiteSpace(result.Output));
