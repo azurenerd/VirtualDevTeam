@@ -358,6 +358,72 @@ main {
     margin-top: 0.25rem;
 }
 
+/* ===== Team Composition Card ===== */
+.team-composition-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border-dim);
+    border-radius: 0.75rem;
+    margin-bottom: 1rem;
+    cursor: pointer;
+    transition: border-color 0.2s;
+}
+.team-composition-card:hover {
+    border-color: var(--accent-cyan);
+}
+.team-comp-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.75rem 1rem;
+}
+.team-comp-icon { font-size: 1.1rem; }
+.team-comp-title {
+    font-weight: 600;
+    color: var(--text-primary);
+    font-size: 0.9rem;
+}
+.team-comp-summary {
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    margin-left: auto;
+    margin-right: 0.5rem;
+}
+.team-comp-chevron {
+    color: var(--text-secondary);
+    font-size: 0.7rem;
+    transition: transform 0.2s;
+}
+.team-comp-chevron.expanded { transform: rotate(90deg); }
+.team-comp-body {
+    padding: 0 1rem 1rem;
+    border-top: 1px solid var(--border-dim);
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    line-height: 1.6;
+    cursor: default;
+}
+.team-comp-body h1, .team-comp-body h2, .team-comp-body h3 {
+    color: var(--text-primary);
+    font-size: 0.95rem;
+    margin: 0.75rem 0 0.5rem;
+}
+.team-comp-body table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0.5rem 0;
+}
+.team-comp-body th, .team-comp-body td {
+    padding: 0.4rem 0.75rem;
+    border: 1px solid var(--border-dim);
+    text-align: left;
+    font-size: 0.8rem;
+}
+.team-comp-body th {
+    background: rgba(0, 255, 255, 0.05);
+    color: var(--accent-cyan);
+    font-weight: 600;
+}
+
 /* ===== Agent Card Grid ===== */
 .agent-grid {
     display: grid;

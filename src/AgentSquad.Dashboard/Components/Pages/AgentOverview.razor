@@ -11,6 +11,7 @@
 @inject IDashboardDataService DataService
 @inject NavigationManager Navigation
 @inject IServiceProvider ServiceProvider
+@inject IGitHubService GitHub
 
 <PageTitle>AgentSquad — Overview</PageTitle>
 
@@ -76,6 +77,24 @@
         <div class="stat-value red">@CountByStatus(AgentStatus.Blocked)</div>
     </div>
 </div>
+
+@if (_teamComposition is not null)
+{
+    <div class="team-composition-card" @onclick="() => _teamCompExpanded = !_teamCompExpanded">
+        <div class="team-comp-header">
+            <span class="team-comp-icon">🏗️</span>
+            <span class="team-comp-title">Team Composition</span>
+            <span class="team-comp-summary">@_teamCompSummary</span>
+            <span class="team-comp-chevron @(_teamCompExpanded ? "expanded" : "")">▶</span>
+        </div>
+        @if (_teamCompExpanded)
+        {
+            <div class="team-comp-body" @onclick:stopPropagation="true">
+                @((MarkupString)Markdig.Markdown.ToHtml(_teamComposition, _mdPipeline))
+            </div>
+        }
+    </div>
+}
 
 @if (_agents.Count == 0)
 {
@@ -354,17 +373,43 @@ else
     private bool _chatSending;
     private bool _refreshing;
 
+    // Team composition state
+    private string? _teamComposition;
+    private string _teamCompSummary = "";
+    private bool _teamCompExpanded;
+
     protected override void OnInitialized()
     {
         RefreshData();
         _availableModels = DataService.GetAvailableModels();
         DataService.OnChange += OnDataChanged;
+        _ = LoadTeamCompositionAsync();
     }
 
     private void RefreshData()
     {
         _agents = DataService.GetAllAgentSnapshots().ToList();
         _hasDeadlock = DataService.HasDeadlock(out _deadlockCycle);
+    }
+
+    private async Task LoadTeamCompositionAsync()
+    {
+        try
+        {
+            var content = await GitHub.GetFileContentAsync("TeamComposition.md");
+            if (!string.IsNullOrWhiteSpace(content))
+            {
+                _teamComposition = content;
+                // Extract summary line: "X built-in, Y SME agents" or role count
+                var lines = content.Split('\n');
+                var rationale = lines.FirstOrDefault(l => l.StartsWith("This is", StringComparison.OrdinalIgnoreCase)
+                    || l.StartsWith("The project", StringComparison.OrdinalIgnoreCase));
+                var roleCount = lines.Count(l => l.TrimStart().StartsWith("|") && !l.Contains("---") && !l.Contains("Role"));
+                _teamCompSummary = roleCount > 0 ? $"{roleCount} roles assigned" : "View details";
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch { /* File not yet created — will appear after PM runs */ }
     }
 
     private void ToggleAgentFilter() => _showAgentFilter = !_showAgentFilter;

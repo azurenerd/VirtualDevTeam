@@ -602,7 +602,17 @@ public class PlaywrightRunner
         if (detectedUrl is not null)
             _logger.LogInformation("Detected app listening URL from process output: {Url}", detectedUrl);
         else
-            _logger.LogDebug("No listening URL detected from process output after 60s");
+        {
+            if (process.HasExited)
+            {
+                _logger.LogWarning("App process exited with code {Code} before becoming ready. Output:\n{Output}",
+                    process.ExitCode, outputBuffer.ToString().Trim());
+            }
+            else
+            {
+                _logger.LogDebug("No listening URL detected from process output after 60s");
+            }
+        }
 
         return (process, detectedUrl);
     }
@@ -760,19 +770,15 @@ public class PlaywrightRunner
 
         if (candidates.Count == 0)
         {
-            // Broader search for any web .csproj
-            candidates = Directory.EnumerateFiles(workspacePath, "*.csproj", SearchOption.AllDirectories)
-                .Where(f => !Path.GetRelativePath(workspacePath, f).Contains("test", StringComparison.OrdinalIgnoreCase))
-                .ToList();
+            // Broader search for any web .csproj — rank by web SDK preference
+            candidates = RankCsprojCandidates(
+                Directory.EnumerateFiles(workspacePath, "*.csproj", SearchOption.AllDirectories)
+                    .Where(f => !Path.GetRelativePath(workspacePath, f).Contains("test", StringComparison.OrdinalIgnoreCase)));
         }
 
         if (candidates.Count > 0)
         {
-            // Prefer src/ paths over root-level paths (PE typically puts app code in src/)
-            var preferred = candidates
-                .OrderByDescending(f => Path.GetRelativePath(workspacePath, f)
-                    .StartsWith("src", StringComparison.OrdinalIgnoreCase) ? 1 : 0)
-                .First();
+            var preferred = candidates.First();
             var resolvedPath = Path.GetRelativePath(workspacePath, preferred);
             var newCommand = command.Replace(projectMatch.Groups[1].Value, resolvedPath);
             _logger.LogInformation(
@@ -809,17 +815,14 @@ public class PlaywrightRunner
             }
         }
 
-        // Fallback: find the main (non-test) .csproj
-        var candidates = Directory.EnumerateFiles(workspacePath, "*.csproj", SearchOption.AllDirectories)
-            .Where(f => !Path.GetRelativePath(workspacePath, f).Contains("test", StringComparison.OrdinalIgnoreCase))
-            .ToList();
+        // Fallback: find the main (non-test) web .csproj — rank by web SDK preference
+        var candidates = RankCsprojCandidates(
+            Directory.EnumerateFiles(workspacePath, "*.csproj", SearchOption.AllDirectories)
+                .Where(f => !Path.GetRelativePath(workspacePath, f).Contains("test", StringComparison.OrdinalIgnoreCase)));
 
         if (candidates.Count > 0)
         {
-            var preferred = candidates
-                .OrderByDescending(f => Path.GetRelativePath(workspacePath, f)
-                    .StartsWith("src", StringComparison.OrdinalIgnoreCase) ? 1 : 0)
-                .First();
+            var preferred = candidates.First();
             var dir = Path.GetDirectoryName(preferred);
             if (dir is not null)
             {
@@ -829,6 +832,53 @@ public class PlaywrightRunner
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Ranks csproj candidates to prefer runnable web projects over class libraries.
+    /// Web projects use Microsoft.NET.Sdk.Web and are the ones we need to `dotnet run`.
+    /// </summary>
+    private List<string> RankCsprojCandidates(IEnumerable<string> candidates)
+    {
+        return candidates
+            .Select(f =>
+            {
+                var score = 0;
+                try
+                {
+                    var content = File.ReadAllText(f);
+                    // Strong signal: Web SDK means it's a runnable web app
+                    if (content.Contains("Microsoft.NET.Sdk.Web", StringComparison.OrdinalIgnoreCase))
+                        score += 100;
+                    // Medium signal: references typical web packages
+                    if (content.Contains("Microsoft.AspNetCore", StringComparison.OrdinalIgnoreCase))
+                        score += 50;
+                    // Medium signal: OutputType Exe (not Library)
+                    if (content.Contains("<OutputType>Exe</OutputType>", StringComparison.OrdinalIgnoreCase))
+                        score += 40;
+                    // Weak signal: project name contains "Web", "App", "Server", "Dashboard"
+                    var name = Path.GetFileNameWithoutExtension(f);
+                    if (name.Contains("Web", StringComparison.OrdinalIgnoreCase) ||
+                        name.Contains("App", StringComparison.OrdinalIgnoreCase) ||
+                        name.Contains("Server", StringComparison.OrdinalIgnoreCase) ||
+                        name.Contains("Dashboard", StringComparison.OrdinalIgnoreCase) ||
+                        name.Contains("Blazor", StringComparison.OrdinalIgnoreCase))
+                        score += 20;
+                    // Prefer src/ paths
+                    if (Path.GetRelativePath(".", f).StartsWith("src", StringComparison.OrdinalIgnoreCase))
+                        score += 10;
+                    // Penalize Models/Shared/Common libraries
+                    if (name.Contains("Model", StringComparison.OrdinalIgnoreCase) ||
+                        name.Contains("Shared", StringComparison.OrdinalIgnoreCase) ||
+                        name.Contains("Common", StringComparison.OrdinalIgnoreCase))
+                        score -= 30;
+                }
+                catch { /* can't read file, low priority */ }
+                return (File: f, Score: score);
+            })
+            .OrderByDescending(x => x.Score)
+            .Select(x => x.File)
+            .ToList();
     }
 
     /// <summary>
@@ -1143,14 +1193,15 @@ public class PlaywrightRunner
             var appStartCommand = config.AppStartCommand;
             if (string.IsNullOrWhiteSpace(appStartCommand))
             {
-                // Auto-detect — prefer src/ paths over root-level, exclude test projects
-                var csproj = Directory.EnumerateFiles(workspacePath, "*.csproj", SearchOption.AllDirectories)
-                    .Where(f => !Path.GetRelativePath(workspacePath, f).Contains("test", StringComparison.OrdinalIgnoreCase))
-                    .OrderByDescending(f => Path.GetRelativePath(workspacePath, f)
-                        .StartsWith("src", StringComparison.OrdinalIgnoreCase) ? 1 : 0)
-                    .FirstOrDefault();
+                // Auto-detect — prefer web projects (Sdk.Web) over class libraries
+                var nonTestProjects = Directory.EnumerateFiles(workspacePath, "*.csproj", SearchOption.AllDirectories)
+                    .Where(f => !Path.GetRelativePath(workspacePath, f).Contains("test", StringComparison.OrdinalIgnoreCase));
+                var csproj = RankCsprojCandidates(nonTestProjects).FirstOrDefault();
                 if (csproj is not null)
+                {
+                    _logger.LogInformation("Auto-detected app project: {Project}", Path.GetRelativePath(workspacePath, csproj));
                     appStartCommand = $"dotnet run --project \"{csproj}\" --urls {portUrl}";
+                }
                 else
                     return null; // Can't start app without a command
             }
