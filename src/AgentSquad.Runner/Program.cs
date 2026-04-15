@@ -91,6 +91,7 @@ builder.Services.AddSingleton<AgentSquad.Core.Services.McpServerSecurityPolicy>(
 builder.Services.AddSingleton<AgentSquad.Core.Services.SMEAgentDefinitionService>();
 builder.Services.AddSingleton<AgentSquad.Core.Services.AgentTeamComposer>();
 builder.Services.AddSingleton<AgentSquad.Core.Services.SmeDefinitionGenerator>();
+builder.Services.AddSingleton<AgentSquad.Core.Services.SmeMetrics>();
 builder.Services.AddSingleton<AgentSquad.Core.AI.CopilotCliMcpConfigManager>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<AgentSquad.Core.AI.CopilotCliMcpConfigManager>());
 

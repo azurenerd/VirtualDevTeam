@@ -385,6 +385,59 @@ public class AgentSpawnManager
     }
 
     /// <summary>
+    /// Gracefully retire an SME agent: stop it, unregister it, decrement counters, and log the retirement.
+    /// This is a specialized version of TerminateAgentAsync for SME agents.
+    /// </summary>
+    public async Task RetireSmeAgentAsync(string agentId, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(agentId);
+
+        var agent = _registry.GetAgent(agentId);
+        if (agent is null)
+        {
+            _logger.LogWarning("Attempted to retire unknown SME agent '{AgentId}'.", agentId);
+            return;
+        }
+
+        var agentName = agent.Identity.DisplayName;
+        var customAgentName = agent.Identity.CustomAgentName;
+
+        _logger.LogInformation(
+            "Retiring SME agent '{AgentId}' ({DisplayName}, definition: {DefId}).",
+            agentId, agentName, customAgentName);
+
+        try
+        {
+            // Stop the agent gracefully
+            await agent.StopAsync(ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Error stopping SME agent '{AgentId}' during retirement.", agentId);
+        }
+
+        // Unregister from the registry
+        try
+        {
+            await _registry.UnregisterAsync(agentId, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Error unregistering SME agent '{AgentId}' during retirement.", agentId);
+        }
+
+        // Decrement any tracking counters for the agent's role
+        lock (_lock)
+        {
+            DecrementSpawnCount(agent.Identity.Role);
+        }
+
+        _logger.LogInformation(
+            "SME agent '{AgentId}' ({DisplayName}) successfully retired.",
+            agentId, agentName);
+    }
+
+    /// <summary>
     /// Pause an agent by sending a control message.
     /// </summary>
     public async Task PauseAgentAsync(string agentId, CancellationToken ct = default)

@@ -4,6 +4,7 @@ using AgentSquad.Core.Configuration;
 using AgentSquad.Core.GitHub;
 using AgentSquad.Core.Messaging;
 using AgentSquad.Core.Persistence;
+using AgentSquad.Core.Services;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Microsoft.SemanticKernel;
@@ -22,6 +23,7 @@ public class SmeAgent : CustomAgent
     private readonly IMessageBus _messageBus;
     private readonly ModelRegistry _modelRegistry;
     private readonly AgentSquadConfig _config;
+    private readonly SmeMetrics _smeMetrics;
     private bool _hasCompletedOneShot;
 
     /// <summary>The definition that created this SME agent.</summary>
@@ -39,6 +41,7 @@ public class SmeAgent : CustomAgent
         IOptions<AgentSquadConfig> config,
         IGateCheckService gateCheck,
         ILogger<SmeAgent> logger,
+        SmeMetrics smeMetrics,
         RoleContextProvider? roleContextProvider = null)
         : base(identity, messageBus, github, prWorkflow, projectFiles, modelRegistry,
                memoryStore, config, gateCheck, logger, roleContextProvider)
@@ -47,6 +50,7 @@ public class SmeAgent : CustomAgent
         _messageBus = messageBus;
         _modelRegistry = modelRegistry;
         _config = config.Value;
+        _smeMetrics = smeMetrics ?? throw new ArgumentNullException(nameof(smeMetrics));
     }
 
     protected override async Task RunAgentLoopAsync(CancellationToken ct)
@@ -95,6 +99,58 @@ public class SmeAgent : CustomAgent
     {
         // Just return the parent token - the loop will be controlled by _hasCompletedOneShot flag
         return parent;
+    }
+
+    /// <summary>
+    /// Attempts to initialize and use MCP servers, with graceful degradation on failure.
+    /// If MCP servers fail to load or execute, the agent logs a warning and continues
+    /// without them, ensuring the agent loop does not crash due to MCP issues.
+    /// </summary>
+    protected void TryInitializeMcpServersWithDegradation()
+    {
+        try
+        {
+            // Attempt to set up MCP context. This may fail if:
+            // - MCP servers are unavailable
+            // - Config files are missing or corrupted
+            // - Network calls fail
+            TrySetMcpServerContext();
+        }
+        catch (Exception ex)
+        {
+            _smeMetrics.IncrementMcpServerErrors();
+            Logger.LogWarning(
+                ex,
+                "MCP server initialization failed for SME agent '{DisplayName}'. " +
+                "Continuing without MCP capabilities.",
+                Identity.DisplayName);
+        }
+    }
+
+    /// <summary>
+    /// Internal method to set up MCP server context. Extracted for testability.
+    /// Override or customize in subclasses if needed.
+    /// </summary>
+    protected virtual void TrySetMcpServerContext()
+    {
+        // This would typically be called by the task processing logic
+        // to set AgentCallContext.McpServers if RoleContext is available
+        if (RoleContext is not null)
+        {
+            try
+            {
+                var mcpServers = RoleContext.GetMcpServers(Identity.Role, Identity.CustomAgentName);
+                if (mcpServers.Count > 0)
+                {
+                    AgentCallContext.McpServers = mcpServers;
+                }
+            }
+            catch (Exception ex)
+            {
+                _smeMetrics.IncrementMcpServerErrors();
+                Logger.LogWarning(ex, "Failed to retrieve MCP servers for SME agent '{DisplayName}'.", Identity.DisplayName);
+            }
+        }
     }
 
     /// <summary>
