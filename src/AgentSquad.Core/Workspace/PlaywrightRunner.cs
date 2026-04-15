@@ -564,12 +564,18 @@ public class PlaywrightRunner
         PatchHardcodedPortBindings(workspacePath, envVars);
 
         var appCommand = ResolveAppStartCommand(workspacePath, config);
-        var (exe, args) = BuildRunner.ParseCommand(appCommand);
 
         // Resolve the app project directory for WorkingDirectory.
         // Using the workspace root causes relative path issues (e.g., data.json not found)
         // when the app resolves files relative to its CWD.
         var appWorkDir = ResolveAppProjectDirectory(workspacePath, appCommand) ?? workspacePath;
+
+        // If WorkingDirectory changed from workspace root, rewrite the --project path
+        // to be relative to the new WorkingDirectory. Otherwise dotnet run fails because
+        // the --project path (relative to workspace root) doesn't exist from the project subdir.
+        appCommand = RewriteProjectPathForWorkDir(appCommand, workspacePath, appWorkDir);
+
+        var (exe, args) = BuildRunner.ParseCommand(appCommand);
 
         var startInfo = new ProcessStartInfo
         {
@@ -804,7 +810,7 @@ public class PlaywrightRunner
     /// --project path doesn't exist in the workspace (e.g., config says src/Foo/Foo.csproj
     /// but the repo has Foo/Foo.csproj at root).
     /// </summary>
-    private string ResolveAppStartCommand(string workspacePath, WorkspaceConfig config)
+    internal string ResolveAppStartCommand(string workspacePath, WorkspaceConfig config)
     {
         var command = config.AppStartCommand!;
 
@@ -855,7 +861,7 @@ public class PlaywrightRunner
     /// Resolves the app project directory from the start command.
     /// Used to set WorkingDirectory so the app can find relative files (data.json, wwwroot, etc.).
     /// </summary>
-    private string? ResolveAppProjectDirectory(string workspacePath, string appCommand)
+    internal string? ResolveAppProjectDirectory(string workspacePath, string appCommand)
     {
         // Extract --project path from the command
         var projectMatch = System.Text.RegularExpressions.Regex.Match(
@@ -894,10 +900,31 @@ public class PlaywrightRunner
     }
 
     /// <summary>
+    /// Rewrites the --project path in an app command when the WorkingDirectory differs
+    /// from the workspace root. The --project path is originally relative to the workspace,
+    /// so it must be recalculated relative to the new WorkingDirectory.
+    /// </summary>
+    internal static string RewriteProjectPathForWorkDir(string appCommand, string workspacePath, string appWorkDir)
+    {
+        if (string.Equals(appWorkDir, workspacePath, StringComparison.OrdinalIgnoreCase))
+            return appCommand;
+
+        var projectMatch = System.Text.RegularExpressions.Regex.Match(
+            appCommand, @"--project\s+""?([^""]+\.csproj)""?");
+        if (!projectMatch.Success)
+            return appCommand;
+
+        var originalRelative = projectMatch.Groups[1].Value.Replace('/', Path.DirectorySeparatorChar);
+        var absoluteProject = Path.GetFullPath(Path.Combine(workspacePath, originalRelative));
+        var newRelative = Path.GetRelativePath(appWorkDir, absoluteProject);
+        return appCommand.Replace(projectMatch.Groups[1].Value, newRelative);
+    }
+
+    /// <summary>
     /// Ranks csproj candidates to prefer runnable web projects over class libraries.
     /// Web projects use Microsoft.NET.Sdk.Web and are the ones we need to `dotnet run`.
     /// </summary>
-    private List<string> RankCsprojCandidates(IEnumerable<string> candidates)
+    internal List<string> RankCsprojCandidates(IEnumerable<string> candidates)
     {
         return candidates
             .Select(f =>
