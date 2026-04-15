@@ -7,6 +7,7 @@ using AgentSquad.Core.GitHub;
 using AgentSquad.Core.GitHub.Models;
 using AgentSquad.Core.Messaging;
 using AgentSquad.Core.Persistence;
+using AgentSquad.Core.Prompts;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Microsoft.SemanticKernel;
@@ -29,6 +30,7 @@ public class CustomAgent : AgentBase
     private readonly ModelRegistry _modelRegistry;
     private readonly AgentSquadConfig _config;
     private readonly IGateCheckService _gateCheck;
+    private readonly IPromptTemplateService? _promptService;
 
     private readonly ConcurrentQueue<IssueAssignmentMessage> _issueQueue = new();
     private readonly ConcurrentQueue<TaskAssignmentMessage> _taskQueue = new();
@@ -46,7 +48,8 @@ public class CustomAgent : AgentBase
         IOptions<AgentSquadConfig> config,
         IGateCheckService gateCheck,
         ILogger<CustomAgent> logger,
-        RoleContextProvider? roleContextProvider = null)
+        RoleContextProvider? roleContextProvider = null,
+        IPromptTemplateService? promptService = null)
         : base(identity, logger, memoryStore, roleContextProvider)
     {
         _messageBus = messageBus ?? throw new ArgumentNullException(nameof(messageBus));
@@ -56,6 +59,7 @@ public class CustomAgent : AgentBase
         _modelRegistry = modelRegistry ?? throw new ArgumentNullException(nameof(modelRegistry));
         _config = config?.Value ?? throw new ArgumentNullException(nameof(config));
         _gateCheck = gateCheck ?? throw new ArgumentNullException(nameof(gateCheck));
+        _promptService = promptService;
     }
 
     protected override Task OnInitializeAsync(CancellationToken ct)
@@ -218,11 +222,24 @@ public class CustomAgent : AgentBase
             var projectContext = await GatherProjectContextAsync(ct);
 
             var history = CreateChatHistory();
-            history.AddSystemMessage(BuildSystemPrompt(
+            var taskSys = _promptService is not null
+                ? await _promptService.RenderAsync("custom/task-system",
+                    new Dictionary<string, string> { ["display_name"] = Identity.DisplayName }, ct)
+                : null;
+            history.AddSystemMessage(BuildSystemPrompt(taskSys ??
                 $"You are {Identity.DisplayName}, a custom agent on a software development team. " +
                 $"You have been assigned a task. Produce a detailed, actionable work product."));
 
-            history.AddUserMessage(
+            var taskUser = _promptService is not null
+                ? await _promptService.RenderAsync("custom/task-user",
+                    new Dictionary<string, string>
+                    {
+                        ["task_title"] = task.Title,
+                        ["task_description"] = task.Description,
+                        ["project_context"] = projectContext
+                    }, ct)
+                : null;
+            history.AddUserMessage(taskUser ??
                 $"## Task: {task.Title}\n\n{task.Description}\n\n" +
                 $"## Project Context\n{projectContext}\n\n" +
                 "Produce your work product. Be thorough and specific.");
@@ -312,12 +329,26 @@ public class CustomAgent : AgentBase
         AgentIssue issue, string projectContext, CancellationToken ct)
     {
         var history = CreateChatHistory();
-        history.AddSystemMessage(BuildSystemPrompt(
+        var issSys = _promptService is not null
+            ? await _promptService.RenderAsync("custom/issue-system",
+                new Dictionary<string, string> { ["display_name"] = Identity.DisplayName }, ct)
+            : null;
+        history.AddSystemMessage(BuildSystemPrompt(issSys ??
             $"You are {Identity.DisplayName}, a custom agent on a software development team. " +
             $"You produce high-quality work products for assigned issues. " +
             $"Your output should be complete, well-structured, and ready for implementation or review."));
 
-        history.AddUserMessage(
+        var issUser = _promptService is not null
+            ? await _promptService.RenderAsync("custom/issue-user",
+                new Dictionary<string, string>
+                {
+                    ["issue_number"] = issue.Number.ToString(),
+                    ["issue_title"] = issue.Title,
+                    ["issue_body"] = issue.Body ?? "",
+                    ["project_context"] = projectContext
+                }, ct)
+            : null;
+        history.AddUserMessage(issUser ??
             $"## Issue #{issue.Number}: {issue.Title}\n\n" +
             $"{issue.Body}\n\n" +
             $"## Project Context\n{projectContext}\n\n" +
