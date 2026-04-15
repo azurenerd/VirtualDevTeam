@@ -3067,6 +3067,15 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 "- Are there naming conflicts (e.g., a class named 'Task' that collides with System.Threading.Tasks.Task)?\n" +
                 "- Do all using/import statements reference namespaces that actually exist?\n" +
                 "If you detect duplication or namespace conflicts, mark as REQUEST_CHANGES with specific fix instructions.\n\n" +
+                "EXCESSIVE MODIFICATION CHECK (prevents UI/styling regressions):\n" +
+                "- If this PR modifies an existing file (especially .razor, .css, .html, .jsx), check " +
+                "whether the changes are SURGICAL (targeted additions/edits) or a FULL REWRITE.\n" +
+                "- A PR that renames existing CSS classes, reorganizes HTML structure, or removes existing " +
+                "styling/functionality that was NOT mentioned in the task scope is a REQUEST_CHANGES issue.\n" +
+                "- The diff should show mostly ADDITIONS for new features. Large-scale modifications to " +
+                "existing lines that aren't related to the task indicate an unnecessary rewrite.\n" +
+                "- Flag with: 'Excessive modification of existing code — rewrite detected. Only the " +
+                "[specific feature] should be added; existing [component] structure must be preserved.'\n\n" +
                 "CRITICAL RULE: NEVER mention truncated code, incomplete code display, or " +
                 "inability to see full implementations. If you cannot see a method body, " +
                 "ASSUME it is correctly implemented. Do NOT request changes based on code you " +

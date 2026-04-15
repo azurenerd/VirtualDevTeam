@@ -662,6 +662,12 @@ public abstract class EngineerAgentBase : AgentBase
                     contextBuilder.AppendLine($"## Files already in this PR\n{existingFiles}\n");
             }
 
+            // Tier 2: Load actual content of existing files mentioned in this step
+            // so the AI can make surgical modifications instead of rewriting from scratch
+            var existingFileContent = await GetExistingFileContentForStepAsync(step, pr.HeadBranch, ct);
+            if (!string.IsNullOrEmpty(existingFileContent))
+                contextBuilder.AppendLine(existingFileContent);
+
             contextBuilder.AppendLine($"## Current Step ({stepNumber}/{steps.Count})");
             contextBuilder.AppendLine(step);
             contextBuilder.AppendLine();
@@ -674,6 +680,14 @@ public abstract class EngineerAgentBase : AgentBase
                 "Do NOT use (APPEND) or similar suffixes — always output the complete file content.");
             if (completedSteps.Count > 0)
                 contextBuilder.AppendLine("If you need to update a file from a previous step, include the COMPLETE updated file content.");
+
+            contextBuilder.AppendLine("\nINCREMENTAL MODIFICATION RULE: When modifying an EXISTING file (one shown in " +
+                "'Existing File Contents' or 'Existing Repository Structure' above), you MUST preserve ALL existing " +
+                "code, CSS classes, HTML structure, and functionality that is not directly related to this step. " +
+                "Make SURGICAL additions and targeted edits — do NOT rewrite the entire file from scratch. " +
+                "Your diff should show mostly additions with minimal modifications to existing lines. " +
+                "If you are adding a new section (e.g., a heatmap component), insert it at the appropriate " +
+                "location within the existing file structure without altering surrounding code.");
 
             stepHistory.AddUserMessage(contextBuilder.ToString());
 
@@ -959,6 +973,12 @@ public abstract class EngineerAgentBase : AgentBase
             "Produce clean, production-quality code for this step only. " +
             "If files from previous steps need updating, include the COMPLETE updated file. " +
             "Be thorough for this step but do not implement future steps.\n\n" +
+            "INCREMENTAL MODIFICATION PRINCIPLE: When modifying an existing file (especially UI " +
+            "components like .razor, .html, .css, .jsx files), you MUST preserve all existing code " +
+            "that is not directly related to your current step. Do NOT rename existing CSS classes, " +
+            "reorganize HTML structure, or refactor working code. Insert your changes at the " +
+            "appropriate location and leave everything else unchanged. A good modification should " +
+            "produce a minimal diff — mostly additions with few changes to existing lines.\n\n" +
             (stepNumber == 1
                 ? "GITIGNORE RULE: If the project does not already have a .gitignore, create one as your FIRST file. " +
                   "Include ALL standard ignores for the project's technology stack (e.g., bin/obj for .NET, " +
@@ -1649,6 +1669,11 @@ public abstract class EngineerAgentBase : AgentBase
                             contextBuilder.AppendLine($"## Files already in this PR\n{existingFiles}\n");
                     }
 
+                    // Load actual content of existing files mentioned in this step
+                    var existingFileContent = await GetExistingFileContentForStepAsync(step, pr.HeadBranch, ct);
+                    if (!string.IsNullOrEmpty(existingFileContent))
+                        contextBuilder.AppendLine(existingFileContent);
+
                     contextBuilder.AppendLine($"## Current Step ({stepNumber}/{steps.Count})");
                     contextBuilder.AppendLine(step);
                     contextBuilder.AppendLine();
@@ -1659,6 +1684,10 @@ public abstract class EngineerAgentBase : AgentBase
                         "Do NOT put code, directives, brackets, or instructions in the file path.");
                     if (completedSteps.Count > 0)
                         contextBuilder.AppendLine("If you need to update a file from a previous step, include the COMPLETE updated file content.");
+
+                    contextBuilder.AppendLine("\nINCREMENTAL MODIFICATION RULE: When modifying an EXISTING file, " +
+                        "preserve ALL existing code, CSS classes, HTML structure, and functionality not directly " +
+                        "related to this step. Make SURGICAL additions — do NOT rewrite the file from scratch.");
 
                     stepHistory.AddUserMessage(contextBuilder.ToString());
 
@@ -1759,6 +1788,11 @@ public abstract class EngineerAgentBase : AgentBase
             "Carefully read the feedback, understand what needs to be fixed, and produce " +
             "an updated implementation that addresses ALL the feedback points. " +
             "Be thorough — every feedback item must be resolved.\n\n" +
+            "INCREMENTAL MODIFICATION RULE: When fixing existing files, make ONLY the changes " +
+            "required to address the feedback. Do NOT rewrite or reorganize code that is not " +
+            "mentioned in the feedback. Preserve existing CSS classes, variable names, HTML structure, " +
+            "and functionality that works correctly. Your changes should be surgical — " +
+            "a reviewer should see a minimal, focused diff.\n\n" +
             "DEPENDENCY RULE: Before using ANY external library/package/framework, check the project's " +
             "dependency manifest. If a dependency is not already listed, add it and include the updated manifest.\n\n" +
             "CRITICAL: Your response MUST start with a CHANGES SUMMARY that addresses EACH numbered " +
@@ -1884,6 +1918,91 @@ public abstract class EngineerAgentBase : AgentBase
         catch (Exception ex)
         {
             Logger.LogWarning(ex, "Failed to fetch repo tree for context");
+            return "";
+        }
+    }
+
+    /// <summary>
+    /// Reads the current content of existing files that a step description mentions.
+    /// Searches for file paths from the repo tree that appear in the step text (e.g., "modify Dashboard.razor").
+    /// This gives the AI the actual current code so it can make surgical changes instead of rewriting from scratch.
+    /// </summary>
+    protected async Task<string> GetExistingFileContentForStepAsync(
+        string stepDescription, string? prBranch, CancellationToken ct)
+    {
+        try
+        {
+            if (_repoTreeCache is null || _repoTreeCache.Count == 0)
+                return "";
+
+            // Find files mentioned in the step description (by filename or partial path)
+            var mentionedFiles = new List<string>();
+            foreach (var filePath in _repoTreeCache)
+            {
+                var fileName = Path.GetFileName(filePath);
+                if (string.IsNullOrEmpty(fileName)) continue;
+
+                // Check if the step mentions this file by name (case-insensitive)
+                if (stepDescription.Contains(fileName, StringComparison.OrdinalIgnoreCase) ||
+                    stepDescription.Contains(filePath, StringComparison.OrdinalIgnoreCase))
+                {
+                    mentionedFiles.Add(filePath);
+                }
+            }
+
+            if (mentionedFiles.Count == 0)
+                return "";
+
+            // Cap at 5 files to avoid token explosion
+            const int maxFiles = 5;
+            const int maxFileSize = 8000;
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine("## Existing File Contents (READ CAREFULLY before modifying)");
+            sb.AppendLine("The following files already exist in the repository. When modifying these files, " +
+                "make ONLY the changes required for this step. Preserve ALL existing code, structure, " +
+                "CSS classes, and functionality that is not directly related to your changes.\n");
+
+            var filesLoaded = 0;
+            foreach (var file in mentionedFiles.Take(maxFiles))
+            {
+                try
+                {
+                    // Try PR branch first, fall back to main
+                    var content = !string.IsNullOrEmpty(prBranch)
+                        ? await GitHub.GetFileContentAsync(file, prBranch, ct)
+                        : null;
+                    content ??= await GitHub.GetFileContentAsync(file, "main", ct);
+
+                    if (!string.IsNullOrWhiteSpace(content))
+                    {
+                        var truncated = content.Length > maxFileSize
+                            ? content[..maxFileSize] + "\n<!-- truncated -->"
+                            : content;
+
+                        sb.AppendLine($"### Current content of `{file}`");
+                        var ext = Path.GetExtension(file).TrimStart('.');
+                        sb.AppendLine($"```{ext}");
+                        sb.AppendLine(truncated);
+                        sb.AppendLine("```\n");
+                        filesLoaded++;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogDebug(ex, "Could not read existing file {File} for incremental context", file);
+                }
+            }
+
+            if (filesLoaded == 0)
+                return "";
+
+            Logger.LogInformation("{Role} {Name} loaded {Count} existing file(s) for incremental modification context",
+                Identity.Role, Identity.DisplayName, filesLoaded);
+            return sb.ToString();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex, "Failed to load existing files for step context");
             return "";
         }
     }
