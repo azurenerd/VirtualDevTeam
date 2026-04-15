@@ -64,6 +64,7 @@ public class PrincipalEngineerAgent : EngineerAgentBase
     /// </summary>
     private static readonly ConcurrentDictionary<int, (string AgentId, DateTime ClaimedAt)> s_activeReviews = new();
     private readonly Dictionary<int, int> _conflictRetryCount = new();
+    private string? _currentTaskName; // Human-readable name for dashboard display
     private DateTime _lastReviewDiscovery = DateTime.MinValue;
     private static readonly TimeSpan ReviewDiscoveryInterval = TimeSpan.FromMinutes(2);
 
@@ -244,16 +245,21 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                     // Preserve "Engineering complete" status once signaled so HealthMonitor can detect it
                     if (!_engineeringSignaled)
                     {
-                        // Workers with an active PR: show the PR they're working on
+                        // Workers with an active PR: show the PR and task name they're working on
                         if (!isLeader && CurrentPrNumber is not null)
                         {
+                            var taskDesc = _currentTaskName is not null
+                                ? $"PR #{CurrentPrNumber}: {_currentTaskName}"
+                                : $"PR #{CurrentPrNumber}";
                             UpdateStatus(AgentStatus.Working,
-                                $"[{leaderTag}] PR #{CurrentPrNumber} ({done}/{total} done, {pending} pending)");
+                                $"[{leaderTag}] {taskDesc}");
                         }
                         else
                         {
+                            var queuedDesc = _reviewQueue.Count > 0 ? $", {_reviewQueue.Count} PRs to review" : "";
+                            var pendingDesc = pending > 0 ? $"{pending} tasks remaining{queuedDesc}" : "All tasks assigned";
                             UpdateStatus(hasActionableWork ? AgentStatus.Working : AgentStatus.Idle,
-                                $"[{leaderTag}] {statusVerb} tasks ({done}/{total} done, {pending} pending, {_reviewQueue.Count} PRs queued)");
+                                $"[{leaderTag}] {statusVerb} — {pendingDesc}");
                         }
                     }
 
@@ -1239,6 +1245,7 @@ public class PrincipalEngineerAgent : EngineerAgentBase
 
             // Mark as assigned to self via the task manager
             await _taskManager.AssignTaskAsync(task.IssueNumber.Value, Identity.DisplayName, ct);
+            _currentTaskName = task.Name;
 
             UpdateStatus(AgentStatus.Working, $"Working on: {task.Name}");
             Logger.LogInformation("Principal Engineer working on task {TaskId}: {TaskName}",
@@ -1309,7 +1316,7 @@ public class PrincipalEngineerAgent : EngineerAgentBase
             if (!useSinglePass)
             {
                 // Multi-step path: generate steps then implement each one
-                UpdateStatus(AgentStatus.Working, $"PR #{pr.Number} generating implementation steps");
+                UpdateStatus(AgentStatus.Working, $"Generating implementation steps: {task.Name}");
                 var steps = await GenerateImplementationStepsAsync(
                     chat, pr, syntheticIssue, pmSpecDoc, architectureDoc, techStack, ct);
 
@@ -1327,7 +1334,7 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                         var stepNumber = i + 1;
 
                         UpdateStatus(AgentStatus.Working,
-                            $"PR #{pr.Number} step {stepNumber}/{steps.Count}: {Truncate(step, 60)}");
+                            $"Implementing step {stepNumber}/{steps.Count}: {Truncate(step, 60)}");
                         Logger.LogInformation(
                             "PE implementing step {Step}/{Total} for task {TaskId}: {Desc}",
                             stepNumber, steps.Count, task.Id, Truncate(step, 100));
@@ -1407,7 +1414,7 @@ public class PrincipalEngineerAgent : EngineerAgentBase
             if (useSinglePass)
             {
                 // Single-pass: complete implementation in one AI call
-                UpdateStatus(AgentStatus.Working, $"PR #{pr.Number} generating code (single-pass)");
+                UpdateStatus(AgentStatus.Working, $"Generating code: {task.Name}");
                 Logger.LogInformation("PE using single-pass implementation for task {TaskId}", task.Id);
 
                 var history = CreateChatHistory();
@@ -1481,7 +1488,7 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 ReviewType = "CodeReview"
             }, ct);
 
-            UpdateStatus(AgentStatus.Working, $"PR #{pr.Number} ready for review");
+            UpdateStatus(AgentStatus.Working, $"Ready for review: {task.Name}");
             Logger.LogInformation(
                 "Principal Engineer completed implementation for PR #{PrNumber} (task {TaskId})",
                 pr.Number, task.Id);
@@ -2031,6 +2038,7 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                         await _taskManager.MarkDoneAsync(task2.IssueNumber.Value, pr.Number, ct);
 
                     CurrentPrNumber = null;
+                    _currentTaskName = null;
                     Identity.AssignedPullRequest = null;
                     UpdateStatus(AgentStatus.Idle, "Ready for next task");
                     continue;
@@ -2092,7 +2100,7 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 Logger.LogInformation(
                     "PE recovered own in-progress PR #{PrNumber}: {Title} — will continue implementation",
                     pr.Number, pr.Title);
-                UpdateStatus(AgentStatus.Working, $"Resuming work on PR #{pr.Number}");
+                UpdateStatus(AgentStatus.Working, $"Resuming: {pr.Title}");
                 break; // Only recover one PR at a time
             }
         }
@@ -2174,7 +2182,7 @@ public class PrincipalEngineerAgent : EngineerAgentBase
             if (Config.CopilotCli.SinglePassMode)
             {
                 Logger.LogInformation("PE using single-pass for continued implementation on PR #{PrNumber}", pr.Number);
-                UpdateStatus(AgentStatus.Working, $"PR #{pr.Number} step 1/1: {Truncate(pr.Title, 60)}");
+                UpdateStatus(AgentStatus.Working, $"Implementing: {Truncate(pr.Title, 60)}");
 
                 var history = CreateChatHistory();
                 history.AddSystemMessage(GetImplementationSystemPrompt(techStack));
