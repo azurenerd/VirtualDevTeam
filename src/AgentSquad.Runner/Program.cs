@@ -92,6 +92,9 @@ builder.Services.AddSingleton<AgentSquad.Core.Services.SmeMetrics>();
 builder.Services.AddSingleton<AgentSquad.Core.AI.CopilotCliMcpConfigManager>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<AgentSquad.Core.AI.CopilotCliMcpConfigManager>());
 
+// Prompt template system
+builder.Services.AddSingleton<AgentSquad.Core.Prompts.IPromptTemplateService, AgentSquad.Core.Prompts.PromptTemplateService>();
+
 // Agentic loop: self-assessment and reasoning observability
 builder.Services.AddSingleton<AgentSquad.Core.Agents.Reasoning.IAgentReasoningLog, AgentSquad.Core.Agents.Reasoning.AgentReasoningLog>();
 builder.Services.AddSingleton<AgentSquad.Core.Agents.Reasoning.SelfAssessmentService>();

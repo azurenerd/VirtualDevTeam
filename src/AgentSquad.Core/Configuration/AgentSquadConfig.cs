@@ -16,6 +16,7 @@ public class AgentSquadConfig
     public AgenticLoopConfig AgenticLoop { get; set; } = new();
     public Dictionary<string, McpServerDefinition> McpServers { get; set; } = new();
     public SmeAgentsConfig SmeAgents { get; set; } = new();
+    public PromptsConfig Prompts { get; set; } = new();
 }
 
 public class ProjectConfig
