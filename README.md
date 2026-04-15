@@ -32,6 +32,7 @@ AgentSquad is a .NET 8 multi-agent AI system that manages a full software develo
 - **MCP Server Integration** — Agents can be equipped with Model Context Protocol tool servers (code search, documentation, issue tracking) that are automatically configured in the Copilot CLI's `mcp.json`
 - **Knowledge Pipeline** — Agents fetch, extract, and summarize external documentation (HTML/Markdown URLs) with per-tier budget limits, injecting domain knowledge directly into system prompts
 - **Custom Agent Definitions** — Define new agent roles via configuration (persona, tools, knowledge links) without writing code. The `CustomAgent` base class handles the rest
+- **Externalized Prompt Templates** — All ~95 agent prompts live in editable `.md` files under `prompts/`, with YAML frontmatter metadata and `{{variable}}` substitution. Change agent behavior without recompiling — templates are loaded at runtime with in-memory caching and hardcoded fallbacks for resilience
 - **Dynamic Team Scaling** — The PM analyzes project requirements and proposes an optimal team composition (agent counts, SME specialists), enforced through human gate approval
 - **Crash-Resilient Sessions** — CLI session IDs persist to SQLite so agents resume the same Copilot conversation after runner restarts, preserving full AI context for rework
 - **15-Page Real-Time Dashboard** — Blazor Server UI with agent overview, project timeline, metrics, health monitor, PR/issue browsers, engineering plan graph, team visualization, director CLI terminal, and approval management
@@ -348,6 +349,17 @@ AgentSquad/
 │   ├── start-dashboard.ps1             # Start standalone dashboard
 │   ├── fresh-reset.ps1                 # Full cleanup: close PRs/Issues, delete branches, reset DB
 │   └── reset-runner.ps1                # Reset Runner state
+│
+├── prompts/                            # Externalized AI prompt templates (.md)
+│   ├── researcher/                     # 10 templates (research phases, synthesis)
+│   ├── pm/                             # 21 templates (specs, stories, reviews)
+│   ├── architect/                      # 13 templates (architecture design, review)
+│   ├── engineer-base/                  # 13 shared templates (planning, build-fix, rework)
+│   ├── senior-engineer/                # 2 templates (implementation, self-review)
+│   ├── junior-engineer/                # 1 template (implementation)
+│   ├── principal-engineer/             # 14 templates (plan gen, code review, integration)
+│   ├── test-engineer/                  # 17 templates (test gen, tiers, failure mgmt)
+│   └── custom/                         # 4 templates (task/issue processing)
 │
 └── docs/
     ├── Requirements.md                 # 30-section requirements with workflow scenarios

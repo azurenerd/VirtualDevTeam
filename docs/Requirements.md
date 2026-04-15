@@ -39,7 +39,8 @@
 27. [MCP Server Infrastructure Requirements](#27-mcp-server-infrastructure-requirements)
 28. [SME Agent System Requirements](#28-sme-agent-system-requirements)
 29. [Knowledge Pipeline Requirements](#29-knowledge-pipeline-requirements)
-30. [Appendix: Known Bugs Fixed](#appendix-known-bugs-fixed)
+30. [Prompt Externalization Requirements](#30-prompt-externalization-requirements)
+31. [Appendix: Known Bugs Fixed](#appendix-known-bugs-fixed)
 
 ---
 
@@ -1791,6 +1792,30 @@ Each phase of the sequential pipeline has its **own independent retry limit**:
 3. 45 minutes later → cache still valid (TTL=1h) → cache hit
 4. 65 minutes later → cache expired → re-fetch → re-extract → re-summarize → update cache
 5. User changes PE model tier from standard to premium via dashboard → cache invalidated (budget changed from 4000 to 8000) → re-process with larger budget
+
+---
+
+## 30. Prompt Externalization Requirements
+
+### REQ-PROMPT-001: Template Service
+
+- **REQ-PROMPT-001a**: `IPromptTemplateService` provides `RenderAsync(templatePath, variables, ct)` that loads `.md` template files from `prompts/` directory, substitutes `{{variable_name}}` placeholders, and returns the rendered prompt string.
+- **REQ-PROMPT-001b**: Templates use YAML frontmatter for metadata (`version`, `description`, `variables`, `tags`). Frontmatter is parsed without external YAML library dependencies.
+- **REQ-PROMPT-001c**: Template rendering supports fragment includes via `{{> fragment-path}}` syntax for shared prompt sections.
+- **REQ-PROMPT-001d**: Templates are cached in-memory after first load. `InvalidateCache(path)` clears a single entry; `InvalidateCache(null)` clears all.
+- **REQ-PROMPT-001e**: Missing templates return `null`, enabling agents to fall back to hardcoded prompts using `?? "fallback"` pattern. This ensures backward compatibility during migration.
+
+### REQ-PROMPT-002: Template Organization
+
+- **REQ-PROMPT-002a**: Templates are organized by agent role: `prompts/researcher/`, `prompts/pm/`, `prompts/architect/`, `prompts/engineer-base/`, `prompts/senior-engineer/`, `prompts/junior-engineer/`, `prompts/principal-engineer/`, `prompts/test-engineer/`, `prompts/custom/`.
+- **REQ-PROMPT-002b**: Shared templates used by multiple engineer types live in `prompts/engineer-base/`. Role-specific overrides live in role-specific directories.
+- **REQ-PROMPT-002c**: Variable names use snake_case (e.g., `{{tech_stack}}`, `{{pm_spec}}`). Whitespace inside braces is trimmed.
+
+### REQ-PROMPT-003: Agent Integration
+
+- **REQ-PROMPT-003a**: All 8 agent types (Researcher, PM, Architect, PE, Senior/Junior Engineer, TE, Custom) inject `IPromptTemplateService` via constructor and use templates for prompt generation.
+- **REQ-PROMPT-003b**: Every template call preserves the original hardcoded prompt as a `??` null-coalescing fallback, ensuring agents function even if template files are missing or corrupted.
+- **REQ-PROMPT-003c**: Template variables include all dynamic values that were previously embedded via string interpolation (tech stack, document content, issue details, etc.).
 
 ---
 
