@@ -7,6 +7,7 @@ using AgentSquad.Core.GitHub;
 using AgentSquad.Core.GitHub.Models;
 using AgentSquad.Core.Messaging;
 using AgentSquad.Core.Persistence;
+using AgentSquad.Core.Prompts;
 using AgentSquad.Core.Services;
 using AgentSquad.Orchestrator;
 using Microsoft.Extensions.Logging;
@@ -30,6 +31,7 @@ public class ProgramManagerAgent : AgentBase
     private readonly IGateCheckService _gateCheck;
     private readonly SelfAssessmentService _selfAssessment;
     private readonly IAgentReasoningLog _reasoningLog;
+    private readonly IPromptTemplateService _promptService;
     private readonly AgentTeamComposer? _teamComposer;
     private readonly SMEAgentDefinitionService? _definitionService;
 
@@ -63,6 +65,7 @@ public class ProgramManagerAgent : AgentBase
         IGateCheckService gateCheck,
         SelfAssessmentService selfAssessment,
         IAgentReasoningLog reasoningLog,
+        IPromptTemplateService promptService,
         ILogger<ProgramManagerAgent> logger,
         RoleContextProvider? roleContextProvider = null,
         AgentTeamComposer? teamComposer = null,
@@ -81,6 +84,7 @@ public class ProgramManagerAgent : AgentBase
         _gateCheck = gateCheck ?? throw new ArgumentNullException(nameof(gateCheck));
         _selfAssessment = selfAssessment ?? throw new ArgumentNullException(nameof(selfAssessment));
         _reasoningLog = reasoningLog ?? throw new ArgumentNullException(nameof(reasoningLog));
+        _promptService = promptService ?? throw new ArgumentNullException(nameof(promptService));
         _teamComposer = teamComposer;
         _definitionService = definitionService;
     }
@@ -1072,17 +1076,25 @@ public class ProgramManagerAgent : AgentBase
                 var history = CreateChatHistory();
 
                 history.AddSystemMessage(
-                    "You are a Program Manager reviewing whether a user story has been fully delivered. " +
-                    "All engineering tasks have been completed and merged. Review the original acceptance " +
-                    "criteria and the completed tasks. If all criteria are met, respond with APPROVED and " +
-                    "a brief summary. If gaps remain, respond with NEEDS_MORE_WORK and describe what's missing.");
+                    await _promptService.RenderAsync("pm/story-review-system", new Dictionary<string, string>(), ct)
+                    ?? "You are a Program Manager reviewing whether a user story has been fully delivered. " +
+                       "All engineering tasks have been completed and merged. Review the original acceptance " +
+                       "criteria and the completed tasks. If all criteria are met, respond with APPROVED and " +
+                       "a brief summary. If gaps remain, respond with NEEDS_MORE_WORK and describe what's missing.");
 
                 history.AddUserMessage(
-                    $"## Enhancement Issue #{issue.Number}: {issue.Title}\n\n" +
-                    $"### Original Specification\n{issue.Body}\n\n" +
-                    $"### Completed Engineering Tasks\n{closedSummary}\n\n" +
-                    "Review the acceptance criteria above. Are all criteria addressed by the completed tasks? " +
-                    "Start your response with either APPROVED or NEEDS_MORE_WORK.");
+                    await _promptService.RenderAsync("pm/story-review-user", new Dictionary<string, string>
+                    {
+                        ["issue_number"] = issue.Number.ToString(),
+                        ["issue_title"] = issue.Title,
+                        ["issue_body"] = issue.Body ?? "",
+                        ["closed_summary"] = closedSummary
+                    }, ct)
+                    ?? $"## Enhancement Issue #{issue.Number}: {issue.Title}\n\n" +
+                       $"### Original Specification\n{issue.Body}\n\n" +
+                       $"### Completed Engineering Tasks\n{closedSummary}\n\n" +
+                       "Review the acceptance criteria above. Are all criteria addressed by the completed tasks? " +
+                       "Start your response with either APPROVED or NEEDS_MORE_WORK.");
 
                 var response = await chat.GetChatMessageContentAsync(history, cancellationToken: ct);
                 var responseText = response.Content ?? "";
@@ -1328,12 +1340,21 @@ public class ProgramManagerAgent : AgentBase
             var chat = kernel.GetRequiredService<IChatCompletionService>();
             var history = CreateChatHistory();
             history.AddSystemMessage(
-                $"You are a Program Manager revising {docName} based on human reviewer feedback. " +
-                "Make the specific changes requested while preserving the overall structure.");
+                await _promptService.RenderAsync("pm/revision-system",
+                    new Dictionary<string, string> { ["doc_name"] = docName }, ct)
+                ?? $"You are a Program Manager revising {docName} based on human reviewer feedback. " +
+                   "Make the specific changes requested while preserving the overall structure.");
             history.AddUserMessage(
-                $"## Current {docName}:\n\n{currentContent}\n\n" +
-                $"## Reviewer Feedback:\n\n{feedback}\n\n" +
-                $"Revise the {docName} to address the feedback. Return the COMPLETE revised document.");
+                await _promptService.RenderAsync("pm/revision-user",
+                    new Dictionary<string, string>
+                    {
+                        ["doc_name"] = docName,
+                        ["current_content"] = currentContent,
+                        ["feedback"] = feedback
+                    }, ct)
+                ?? $"## Current {docName}:\n\n{currentContent}\n\n" +
+                   $"## Reviewer Feedback:\n\n{feedback}\n\n" +
+                   $"Revise the {docName} to address the feedback. Return the COMPLETE revised document.");
 
             var response = await chat.GetChatMessageContentsAsync(history, cancellationToken: ct);
             var revised = string.Join("", response.Select(r => r.Content ?? ""));
@@ -1419,12 +1440,19 @@ public class ProgramManagerAgent : AgentBase
                     var qKernel = _modelRegistry.GetKernel(Identity.ModelTier, Identity.Id);
                     var qChat = qKernel.GetRequiredService<IChatCompletionService>();
                     var qHistory = CreateChatHistory();
-                    qHistory.AddSystemMessage("You are a Program Manager. Write a brief product specification.");
+                    qHistory.AddSystemMessage(
+                        await _promptService.RenderAsync("pm/quick-system", new Dictionary<string, string>(), ct)
+                        ?? "You are a Program Manager. Write a brief product specification.");
                     qHistory.AddUserMessage(
-                        $"Project: {_config.Project.Description}\nTech Stack: {_config.Project.TechStack}\n\n" +
-                        "Write a concise PMSpec with these sections (1-2 sentences each): " +
-                        "Executive Summary, Business Goals, User Stories (3-5 bullet points with acceptance criteria), " +
-                        "Scope, Non-Functional Requirements. Keep the entire document under 300 words.");
+                        await _promptService.RenderAsync("pm/quick-user", new Dictionary<string, string>
+                        {
+                            ["project_description"] = _config.Project.Description ?? "",
+                            ["tech_stack"] = _config.Project.TechStack
+                        }, ct)
+                        ?? $"Project: {_config.Project.Description}\nTech Stack: {_config.Project.TechStack}\n\n" +
+                           "Write a concise PMSpec with these sections (1-2 sentences each): " +
+                           "Executive Summary, Business Goals, User Stories (3-5 bullet points with acceptance criteria), " +
+                           "Scope, Non-Functional Requirements. Keep the entire document under 300 words.");
                     var qResp = await qChat.GetChatMessageContentAsync(qHistory, cancellationToken: ct);
                     qContent = $"# PM Specification: {projectName}\n\n{qResp.Content?.Trim() ?? ""}";
                 }
@@ -1537,25 +1565,28 @@ public class ProgramManagerAgent : AgentBase
             var chat = kernel.GetRequiredService<IChatCompletionService>();
             var memoryContext = await GetMemoryContextAsync(ct: ct);
 
-            var systemPrompt = "You are a Program Manager creating a formal product specification document. " +
-                "Your goal is to translate research findings and a project description into a " +
-                "clear, actionable specification that architects and engineers can use to design " +
-                "and build the system. Be thorough, specific, and business-focused." +
-                (string.IsNullOrEmpty(memoryContext) ? "" : $"\n\n{memoryContext}");
-
+            // Build design context if available
+            var designContextSection = "";
             if (!string.IsNullOrWhiteSpace(designContext))
             {
-                systemPrompt += "\n\n## CRITICAL: VISUAL DESIGN REFERENCE\n" +
-                    "The repository contains visual design reference files that define the EXACT UI to be built. " +
-                    "You MUST:\n" +
-                    "1. Include a '## Visual Design Specification' section in PMSpec describing every visual element\n" +
-                    "2. Include a '## UI Interaction Scenarios' section with numbered scenarios (e.g., " +
-                    "'Scenario 1: User hovers over a milestone diamond and sees a tooltip with date and status')\n" +
-                    "3. Describe the exact layout: sections, grid structure, color scheme, typography\n" +
-                    "4. Reference the design file by name so engineers can consult it\n" +
-                    "5. Each user story that involves UI MUST reference the specific visual section from the design\n\n" +
-                    designContext;
+                designContextSection = await _promptService.RenderAsync("pm/design-reference",
+                    new Dictionary<string, string> { ["design_context"] = designContext }, ct)
+                    ?? "\n\n## CRITICAL: VISUAL DESIGN REFERENCE\n" +
+                       "The repository contains visual design reference files that define the EXACT UI to be built.\n" +
+                       designContext;
             }
+
+            var systemPrompt = await _promptService.RenderAsync("pm/full-system", new Dictionary<string, string>
+            {
+                ["memory_context"] = string.IsNullOrEmpty(memoryContext) ? "" : $"\n\n{memoryContext}",
+                ["design_context"] = designContextSection
+            }, ct)
+            ?? "You are a Program Manager creating a formal product specification document. " +
+               "Your goal is to translate research findings and a project description into a " +
+               "clear, actionable specification that architects and engineers can use to design " +
+               "and build the system. Be thorough, specific, and business-focused." +
+               (string.IsNullOrEmpty(memoryContext) ? "" : $"\n\n{memoryContext}") +
+               designContextSection;
 
             var history = CreateChatHistory();
             history.AddSystemMessage(systemPrompt);
@@ -1563,49 +1594,50 @@ public class ProgramManagerAgent : AgentBase
             // Turn 1: Analyze and identify business goals, user stories, success criteria
             var useSinglePass = _config.CopilotCli.SinglePassMode;
 
+            // Build design sections content for templates
+            var designSections = "";
+            if (!string.IsNullOrWhiteSpace(designContext))
+            {
+                designSections = await _promptService.RenderAsync("pm/design-sections", new Dictionary<string, string>(), ct)
+                    ?? "## Visual Design Specification\n(Describe the design.)\n\n## UI Interaction Scenarios\n(Describe interactions.)\n\n";
+            }
+
+            var specVars = new Dictionary<string, string>
+            {
+                ["project_name"] = projectName,
+                ["project_description"] = projectDescription,
+                ["research_doc"] = researchDoc,
+                ["design_sections"] = designSections
+            };
+
             if (useSinglePass)
             {
                 // Single-pass: one comprehensive prompt instead of 2 turns
                 UpdateStatus(AgentStatus.Working, "Creating PMSpec (single-pass)");
-                history.AddUserMessage(
-                    $"I need you to create a PM Specification for our project.\n\n" +
-                    $"**Project Name:** {projectName}\n\n" +
-                    $"**Project Description:**\n{projectDescription}\n\n" +
-                    $"## Research Findings\n{researchDoc}\n\n" +
-                    "Produce a complete, structured PMSpec.md document with ALL of these sections:\n\n" +
-                    $"# PM Specification: {projectName}\n\n" +
-                    "## Executive Summary\n" +
-                    "(2-3 sentences describing what we're building and why)\n\n" +
-                    "## Business Goals\n" +
-                    "(Numbered list of concrete business objectives)\n\n" +
-                    "## User Stories & Acceptance Criteria\n" +
-                    "(Each story as: **As a [role]**, I want [capability], so that [benefit]. " +
-                    "Followed by acceptance criteria as a checklist. " +
-                    "For UI stories, reference the specific visual section from the design file.)\n\n" +
-                    (string.IsNullOrWhiteSpace(designContext) ? "" :
-                        "## Visual Design Specification\n" +
-                        "(Describe every visual section from the design reference file: layout structure, " +
-                        "color scheme with exact hex codes, typography, grid/flex layout patterns, " +
-                        "component hierarchy. Reference the design file by name. " +
-                        "Include enough detail that an engineer could recreate the design from this description alone.)\n\n" +
-                        "## UI Interaction Scenarios\n" +
-                        "(Numbered scenarios describing user interactions derived from the design, e.g.:\n" +
-                        "Scenario 1: User views the dashboard and sees the project header with status badge, lead name, and summary.\n" +
-                        "Scenario 2: User scrolls to the milestone timeline and sees horizontal bars with diamond markers at key dates.\n" +
-                        "Include scenarios for: initial page load, hover states, click behaviors, data-driven rendering, " +
-                        "empty states, error states, and responsive behavior.)\n\n") +
-                    "## Scope\n" +
-                    "### In Scope\n(Bullet list)\n" +
-                    "### Out of Scope\n(Bullet list — explicit exclusions to prevent scope creep)\n\n" +
-                    "## Non-Functional Requirements\n" +
-                    "(Performance targets, security requirements, scalability needs, reliability SLAs)\n\n" +
-                    "## Success Metrics\n" +
-                    "(Measurable criteria for project completion)\n\n" +
-                    "## Constraints & Assumptions\n" +
-                    "(Technical constraints, timeline assumptions, dependency assumptions)\n\n" +
-                    "Use these exact section headers. Be thorough, specific, and business-focused. " +
-                    "Each user story must have clear acceptance criteria. " +
-                    "This document will be the single source of truth for business requirements.");
+                var singlePassPrompt = await _promptService.RenderAsync("pm/single-pass-spec", specVars, ct);
+                if (singlePassPrompt is not null)
+                {
+                    history.AddUserMessage(singlePassPrompt);
+                }
+                else
+                {
+                    history.AddUserMessage(
+                        $"I need you to create a PM Specification for our project.\n\n" +
+                        $"**Project Name:** {projectName}\n\n" +
+                        $"**Project Description:**\n{projectDescription}\n\n" +
+                        $"## Research Findings\n{researchDoc}\n\n" +
+                        "Produce a complete, structured PMSpec.md document with ALL of these sections:\n\n" +
+                        $"# PM Specification: {projectName}\n\n" +
+                        "## Executive Summary\n(2-3 sentences describing what we're building and why)\n\n" +
+                        "## Business Goals\n(Numbered list of concrete business objectives)\n\n" +
+                        "## User Stories & Acceptance Criteria\n(Each story with acceptance criteria.)\n\n" +
+                        designSections +
+                        "## Scope\n### In Scope\n(Bullet list)\n### Out of Scope\n(Bullet list)\n\n" +
+                        "## Non-Functional Requirements\n(Performance, security, scalability, reliability)\n\n" +
+                        "## Success Metrics\n(Measurable criteria)\n\n" +
+                        "## Constraints & Assumptions\n(Constraints and assumptions)\n\n" +
+                        "Use these exact section headers. Be thorough, specific, and business-focused.");
+                }
 
                 var singleResponse = await chat.GetChatMessageContentAsync(
                     history, cancellationToken: ct);
@@ -1613,19 +1645,20 @@ public class ProgramManagerAgent : AgentBase
             }
             else
             {
-            history.AddUserMessage(
-                $"I need you to create a PM Specification for our project.\n\n" +
-                $"**Project Name:** {projectName}\n\n" +
-                $"**Project Description:**\n{projectDescription}\n\n" +
-                $"## Research Findings\n{researchDoc}\n\n" +
-                "Based on this information, identify:\n" +
-                "1. The core business goals and objectives\n" +
-                "2. Key user stories with acceptance criteria\n" +
-                "3. What's in scope and what's explicitly out of scope\n" +
-                "4. Non-functional requirements (performance, security, scalability, reliability)\n" +
-                "5. Success metrics — how we know the project is done\n" +
-                "6. Key constraints and assumptions\n\n" +
-                "Be specific and actionable. Each user story should have clear acceptance criteria.");
+            var turn1Prompt = await _promptService.RenderAsync("pm/multi-turn-analysis", specVars, ct)
+                ?? $"I need you to create a PM Specification for our project.\n\n" +
+                   $"**Project Name:** {projectName}\n\n" +
+                   $"**Project Description:**\n{projectDescription}\n\n" +
+                   $"## Research Findings\n{researchDoc}\n\n" +
+                   "Based on this information, identify:\n" +
+                   "1. The core business goals and objectives\n" +
+                   "2. Key user stories with acceptance criteria\n" +
+                   "3. What's in scope and what's explicitly out of scope\n" +
+                   "4. Non-functional requirements (performance, security, scalability, reliability)\n" +
+                   "5. Success metrics — how we know the project is done\n" +
+                   "6. Key constraints and assumptions\n\n" +
+                   "Be specific and actionable. Each user story should have clear acceptance criteria.";
+            history.AddUserMessage(turn1Prompt);
 
             var analysisResponse = await chat.GetChatMessageContentAsync(
                 history, cancellationToken: ct);
@@ -1635,35 +1668,24 @@ public class ProgramManagerAgent : AgentBase
 
             // Turn 2: Produce the structured PMSpec.md
             UpdateStatus(AgentStatus.Working, "Creating PMSpec (2/2): Drafting specification");
-            history.AddUserMessage(
-                "Now compile everything into a single, structured PMSpec.md document with these exact sections:\n\n" +
-                "# PM Specification: {ProjectName}\n\n" +
-                "## Executive Summary\n" +
-                "(2-3 sentences describing what we're building and why)\n\n" +
-                "## Business Goals\n" +
-                "(Numbered list of concrete business objectives)\n\n" +
-                "## User Stories & Acceptance Criteria\n" +
-                "(Each story as: **As a [role]**, I want [capability], so that [benefit]. " +
-                "Followed by acceptance criteria as a checklist. " +
-                "For UI stories, reference the specific visual section from the design file.)\n\n" +
-                (string.IsNullOrWhiteSpace(designContext) ? "" :
-                    "## Visual Design Specification\n" +
-                    "(Describe every visual section from the design: layout, colors with hex codes, " +
-                    "typography, grid patterns, component hierarchy. Enough detail to recreate the design.)\n\n" +
-                    "## UI Interaction Scenarios\n" +
-                    "(Numbered scenarios for user interactions: page load, hover, click, data rendering, " +
-                    "empty states, error states, responsive behavior.)\n\n") +
-                "## Scope\n" +
-                "### In Scope\n(Bullet list)\n" +
-                "### Out of Scope\n(Bullet list — explicit exclusions to prevent scope creep)\n\n" +
-                "## Non-Functional Requirements\n" +
-                "(Performance targets, security requirements, scalability needs, reliability SLAs)\n\n" +
-                "## Success Metrics\n" +
-                "(Measurable criteria for project completion)\n\n" +
-                "## Constraints & Assumptions\n" +
-                "(Technical constraints, timeline assumptions, dependency assumptions)\n\n" +
-                $"Replace {{ProjectName}} with '{projectName}'. Use these exact section headers. " +
-                "This document will be the single source of truth for business requirements.");
+            var turn2Prompt = await _promptService.RenderAsync("pm/multi-turn-compile",
+                new Dictionary<string, string>
+                {
+                    ["project_name"] = projectName,
+                    ["design_sections"] = designSections
+                }, ct)
+                ?? "Now compile everything into a single, structured PMSpec.md document with these exact sections:\n\n" +
+                   $"# PM Specification: {projectName}\n\n" +
+                   "## Executive Summary\n(2-3 sentences describing what we're building and why)\n\n" +
+                   "## Business Goals\n(Numbered list of concrete business objectives)\n\n" +
+                   "## User Stories & Acceptance Criteria\n(Each story with acceptance criteria.)\n\n" +
+                   designSections +
+                   "## Scope\n### In Scope\n(Bullet list)\n### Out of Scope\n(Bullet list)\n\n" +
+                   "## Non-Functional Requirements\n(Performance, security, scalability, reliability)\n\n" +
+                   "## Success Metrics\n(Measurable criteria)\n\n" +
+                   "## Constraints & Assumptions\n(Constraints and assumptions)\n\n" +
+                   $"Replace {{ProjectName}} with '{projectName}'. Use these exact section headers.";
+            history.AddUserMessage(turn2Prompt);
 
             var specResponse = await chat.GetChatMessageContentAsync(
                 history, cancellationToken: ct);
@@ -1969,29 +1991,20 @@ public class ProgramManagerAgent : AgentBase
 
             var history = CreateChatHistory();
             history.AddSystemMessage(
-                "You are a Program Manager extracting User Stories from a PM Specification document. " +
-                "For each User Story, produce a structured output that can be parsed into individual GitHub Issues.\n\n" +
-                "Output format — one block per User Story, separated by '---':\n" +
-                "TITLE: [concise story title]\n" +
-                "DESCRIPTION:\n[Full user story in 'As a [role], I want [capability], so that [benefit]' format]\n\n" +
-                "[Detailed description of what needs to be built, including technical context]\n\n" +
-                "DESIGN_REFERENCE:\n[If this story involves UI, describe the specific visual section from the design file " +
-                "that applies. Include: layout type (grid/flex), colors (hex codes), component structure, " +
-                "key CSS patterns. If no design applies, write 'N/A']\n\n" +
-                "ACCEPTANCE_CRITERIA:\n- [ ] [criterion 1]\n- [ ] [criterion 2]\n...\n---\n\n" +
-                "IMPORTANT — OUTPUT ORDER MATTERS: You are deciding the order these GitHub Issues will be created. " +
-                "Issues will be assigned to engineers in this order, so list them by development dependency:\n" +
-                "1. Foundational items FIRST — project scaffolding, hosting setup, data configuration, shared infrastructure\n" +
-                "2. Then features that build on the foundation — UI components, business logic, integrations\n" +
-                "3. Polish/refinement items LAST — responsive layout, error states, visual polish\n" +
-                "Think: what would an engineer need to build first so everything else can depend on it?\n\n" +
-                "Be thorough — each Issue should have enough detail for an engineer to implement it " +
-                "without needing the full PMSpec. Include all relevant acceptance criteria from the spec. " +
-                "For UI stories, include visual design details and interaction scenarios in the description.");
+                await _promptService.RenderAsync("pm/story-extraction-system", new Dictionary<string, string>(), ct)
+                ?? "You are a Program Manager extracting User Stories from a PM Specification document. " +
+                   "For each User Story, produce a structured output that can be parsed into individual GitHub Issues.\n\n" +
+                   "Output format — one block per User Story, separated by '---':\n" +
+                   "TITLE: [concise story title]\nDESCRIPTION:\n[Full user story]\n\n" +
+                   "DESIGN_REFERENCE:\n[Visual section or 'N/A']\n\n" +
+                   "ACCEPTANCE_CRITERIA:\n- [ ] [criterion]\n...\n---\n\n" +
+                   "List them by development dependency. Be thorough.");
 
             history.AddUserMessage(
-                $"Extract all User Stories from this PM Specification and format them as described.\n\n" +
-                $"## PM Specification\n{pmSpec}");
+                await _promptService.RenderAsync("pm/story-extraction-user",
+                    new Dictionary<string, string> { ["pm_spec"] = pmSpec }, ct)
+                ?? $"Extract all User Stories from this PM Specification and format them as described.\n\n" +
+                   $"## PM Specification\n{pmSpec}");
 
             var response = await chat.GetChatMessageContentAsync(history, cancellationToken: ct);
             var content = response.Content?.Trim() ?? "";
@@ -2099,12 +2112,13 @@ public class ProgramManagerAgent : AgentBase
 
                 var history = CreateChatHistory();
                 history.AddSystemMessage(
-                    "You are a Program Manager answering a clarification question from an engineer " +
-                    "about a GitHub Issue (User Story). Use the PM Specification as your primary " +
-                    "reference to provide clear, actionable answers.\n\n" +
-                    "If you genuinely cannot answer the question based on the PM Spec and your " +
-                    "knowledge, respond with exactly 'ESCALATE' and nothing else. Otherwise, " +
-                    "provide a clear, detailed answer.");
+                    await _promptService.RenderAsync("pm/clarification-system", new Dictionary<string, string>(), ct)
+                    ?? "You are a Program Manager answering a clarification question from an engineer " +
+                       "about a GitHub Issue (User Story). Use the PM Specification as your primary " +
+                       "reference to provide clear, actionable answers.\n\n" +
+                       "If you genuinely cannot answer the question based on the PM Spec and your " +
+                       "knowledge, respond with exactly 'ESCALATE' and nothing else. Otherwise, " +
+                       "provide a clear, detailed answer.");
 
                 var commentsContext = issue.Comments.Count > 0
                     ? "\n\n## Previous Comments\n" + string.Join("\n\n",
@@ -2112,10 +2126,19 @@ public class ProgramManagerAgent : AgentBase
                     : "";
 
                 history.AddUserMessage(
-                    $"## PM Specification\n{pmSpec}\n\n" +
-                    $"## Issue #{issue.Number}: {issue.Title}\n{issue.Body}" +
-                    commentsContext +
-                    $"\n\n## Engineer's Question\n{request.Question}");
+                    await _promptService.RenderAsync("pm/clarification-user", new Dictionary<string, string>
+                    {
+                        ["pm_spec"] = pmSpec ?? "",
+                        ["issue_number"] = issue.Number.ToString(),
+                        ["issue_title"] = issue.Title,
+                        ["issue_body"] = issue.Body ?? "",
+                        ["comments_context"] = commentsContext,
+                        ["question"] = request.Question
+                    }, ct)
+                    ?? $"## PM Specification\n{pmSpec}\n\n" +
+                       $"## Issue #{issue.Number}: {issue.Title}\n{issue.Body}" +
+                       commentsContext +
+                       $"\n\n## Engineer's Question\n{request.Question}");
 
                 var response = await chat.GetChatMessageContentAsync(history, cancellationToken: ct);
                 var answer = response.Content?.Trim() ?? "";
@@ -2182,12 +2205,19 @@ public class ProgramManagerAgent : AgentBase
 
             var history = CreateChatHistory();
             history.AddSystemMessage(
-                "You are a Program Manager triaging a blocker issue in a software project. " +
-                "Analyze the blocker and provide actionable guidance. " +
-                "If you cannot help, respond with exactly 'ESCALATE'.");
+                await _promptService.RenderAsync("pm/blocker-triage-system", new Dictionary<string, string>(), ct)
+                ?? "You are a Program Manager triaging a blocker issue in a software project. " +
+                   "Analyze the blocker and provide actionable guidance. " +
+                   "If you cannot help, respond with exactly 'ESCALATE'.");
 
             history.AddUserMessage(
-                $"Blocker Issue #{blocker.Number}: {blocker.Title}\n\n{blocker.Body}");
+                await _promptService.RenderAsync("pm/blocker-triage-user", new Dictionary<string, string>
+                {
+                    ["blocker_number"] = blocker.Number.ToString(),
+                    ["blocker_title"] = blocker.Title,
+                    ["blocker_body"] = blocker.Body ?? ""
+                }, ct)
+                ?? $"Blocker Issue #{blocker.Number}: {blocker.Title}\n\n{blocker.Body}");
 
             var response = await chat.GetChatMessageContentAsync(
                 history, cancellationToken: ct);
@@ -2255,51 +2285,32 @@ public class ProgramManagerAgent : AgentBase
             var hasScreenshots = screenshotImages.Count > 0 || !string.IsNullOrEmpty(screenshotContext);
 
             var history = CreateChatHistory();
-            var systemPrompt =
-                "You are a PM performing the FINAL review of a PR (Phase 3: after Architect approval and Test Engineer testing).\n\n" +
-                "SCOPE: This PR is ONE task. Check it against its linked user story/issue and " +
-                "the PM Spec context for that feature.\n\n" +
-                "CHECK:\n" +
-                "1. Are the acceptance criteria from the user story met?\n" +
-                "2. Does the feature align with the PM Spec vision for this area of the product?\n";
 
+            // Build screenshot section for system prompt
+            var screenshotSection = "";
             if (hasScreenshots)
             {
-                systemPrompt +=
-                    "3. VISUAL VALIDATION: Screenshots have been posted on this PR (by engineers and/or Test Engineer). " +
-                    "You can SEE these screenshots embedded in this message. " +
-                    "Review them carefully to verify the app renders correctly:\n" +
-                    "   - Does the screenshot show a working app (no error pages, no unhandled exceptions, no blank screens)?\n" +
-                    "   - Does the visual output match what the PR description and acceptance criteria say it should do?\n" +
-                    "   - If the screenshot shows an error page, a white/blank screen with errors, or broken UI, this is a REQUEST_CHANGES issue.\n" +
-                    "   - Look for error messages, stack traces, JSON errors, or 'data.json' failures — these indicate a broken build.\n";
+                screenshotSection = await _promptService.RenderAsync("pm/pr-review-screenshots", new Dictionary<string, string>(), ct)
+                    ?? "3. VISUAL VALIDATION: Screenshots have been posted on this PR. " +
+                       "Review them carefully to verify the app renders correctly.\n";
             }
 
-            systemPrompt +=
-                "\nIGNORE: code quality, null checks, error handling, naming, tests, architecture, " +
-                "specific method/class implementations, PR metadata/checkboxes. " +
-                "Do NOT reference specific code files, methods, or classes — you review REQUIREMENTS, " +
-                "not code. The Architect and Principal Engineer review code quality.\n\n" +
-                "FILE COMPLETENESS CHECK (critical): While you don't review code quality, you MUST verify " +
-                "that the acceptance criteria's expected deliverables are actually present in the PR. " +
-                "If the acceptance criteria say 'Create Models/ReportData.cs, Interfaces/IReportService.cs, " +
-                "Layouts/MainLayout.razor' etc., check that those files EXIST in the PR's file list. " +
-                "A PR that delivers 3 files when 15 were specified in acceptance criteria is INCOMPLETE — " +
-                "this is a requirements gap, not a code quality issue.\n\n" +
-                "IMPORTANT: Code may appear truncated in your review context due to length limits — " +
-                "this is a tooling limitation, NOT a code defect. Do NOT request changes for " +
-                "truncated code or incomplete-looking files.\n\n" +
-                "Only request changes when a user story acceptance criterion is clearly unmet, " +
-                "the feature contradicts the PM Spec, expected files/components are missing, " +
-                "or visual evidence shows the UI doesn't match expectations.\n\n" +
-                "RESPONSE FORMAT — your ENTIRE response must be ONLY:\n" +
-                "- If requesting changes: a **numbered list** (1. 2. 3.) starting on the FIRST line. " +
-                "Each item references an acceptance criterion by name. Nothing before the list. " +
-                "No preamble, no thinking, no analysis narration.\n" +
-                "- If approving: one sentence only.\n" +
-                "- Last line: VERDICT: APPROVE or VERDICT: REQUEST_CHANGES\n\n" +
-                "WRONG: 'Let me review... Based on the PMSpec... 1. Missing feature'\n" +
-                "RIGHT: '1. Acceptance criterion \"PDF export\" is not implemented'";
+            var systemPrompt = await _promptService.RenderAsync("pm/pr-review-system",
+                new Dictionary<string, string> { ["screenshot_section"] = screenshotSection }, ct);
+
+            if (systemPrompt is null)
+            {
+                // Hardcoded fallback
+                systemPrompt =
+                    "You are a PM performing the FINAL review of a PR (Phase 3: after Architect approval and Test Engineer testing).\n\n" +
+                    "SCOPE: This PR is ONE task. Check it against its linked user story/issue and " +
+                    "the PM Spec context for that feature.\n\n" +
+                    "CHECK:\n1. Are the acceptance criteria from the user story met?\n" +
+                    "2. Does the feature align with the PM Spec vision for this area of the product?\n" +
+                    screenshotSection +
+                    "\nIGNORE: code quality, null checks, error handling, naming, tests, architecture.\n\n" +
+                    "RESPONSE FORMAT — VERDICT: APPROVE or VERDICT: REQUEST_CHANGES";
+            }
 
             history.AddSystemMessage(systemPrompt);
 
@@ -2349,9 +2360,10 @@ public class ProgramManagerAgent : AgentBase
 
                 history.AddAssistantMessage(result);
                 history.AddUserMessage(
-                    "That response was not a requirements review. Check the PR against the acceptance criteria.\n" +
-                    "Output ONLY a numbered list of unmet requirements, or 'Requirements met' if acceptable.\n" +
-                    "End with VERDICT: APPROVE or VERDICT: REQUEST_CHANGES");
+                    await _promptService.RenderAsync("pm/pr-review-retry", new Dictionary<string, string>(), ct)
+                    ?? "That response was not a requirements review. Check the PR against the acceptance criteria.\n" +
+                       "Output ONLY a numbered list of unmet requirements, or 'Requirements met' if acceptable.\n" +
+                       "End with VERDICT: APPROVE or VERDICT: REQUEST_CHANGES");
 
                 response = await chat.GetChatMessageContentAsync(history, cancellationToken: ct);
                 result = response.Content?.Trim() ?? "";
