@@ -476,7 +476,11 @@ public class PrincipalEngineerAgent : EngineerAgentBase
         var chat = kernel.GetRequiredService<IChatCompletionService>();
 
         var history = CreateChatHistory();
-        history.AddSystemMessage(
+        var planSys = PromptService is not null
+            ? await PromptService.RenderAsync("principal-engineer/plan-generation-system",
+                new Dictionary<string, string>(), ct)
+            : null;
+        history.AddSystemMessage(planSys ??
             "You are a Principal Engineer creating an engineering plan from GitHub Issues (User Stories), " +
             "an architecture document, and a PM specification. " +
             "Each GitHub Issue represents a User Story or Feature from the PM Spec.\n\n" +
@@ -556,7 +560,11 @@ public class PrincipalEngineerAgent : EngineerAgentBase
         }
 
         userPromptBuilder.AppendLine($"## GitHub Issues (User Stories)\n{issuesSummary}\n");
-        userPromptBuilder.AppendLine(
+        var planUserSuffix = PromptService is not null
+            ? await PromptService.RenderAsync("principal-engineer/plan-generation-user-suffix",
+                new Dictionary<string, string>(), ct)
+            : null;
+        userPromptBuilder.AppendLine(planUserSuffix ??
             "Create an engineering plan mapping these Issues to tasks. " +
             "REMEMBER:\n" +
             "- T1 MUST be the Project Foundation & Scaffolding task (High complexity, no dependencies). " +
@@ -806,14 +814,28 @@ public class PrincipalEngineerAgent : EngineerAgentBase
             foreach (var enhancement in uncoveredEnhancements)
             {
                 var history = CreateChatHistory();
-                history.AddSystemMessage(
+                var enhSys = PromptService is not null
+                    ? await PromptService.RenderAsync("principal-engineer/enhancement-coverage-system",
+                        new Dictionary<string, string>(), ct)
+                    : null;
+                history.AddSystemMessage(enhSys ??
                     "You are a Principal Engineer validating engineering plan coverage. " +
                     "An enhancement (user story) has no dedicated engineering task. " +
                     "Determine if this enhancement is COVERED by existing tasks or was MISSED.\n\n" +
                     "If COVERED: respond with COVERED followed by which specific tasks address it and how.\n" +
                     "If MISSED: respond with MISSED followed by what engineering task should be created.");
 
-                history.AddUserMessage(
+                var enhUser = PromptService is not null
+                    ? await PromptService.RenderAsync("principal-engineer/enhancement-coverage-user",
+                        new Dictionary<string, string>
+                        {
+                            ["enhancement_number"] = enhancement.Number.ToString(),
+                            ["enhancement_title"] = enhancement.Title,
+                            ["enhancement_body"] = enhancement.Body ?? "",
+                            ["existing_tasks_summary"] = existingTasksSummary
+                        }, ct)
+                    : null;
+                history.AddUserMessage(enhUser ??
                     $"## Uncovered Enhancement #{enhancement.Number}: {enhancement.Title}\n{enhancement.Body}\n\n" +
                     $"## Existing Engineering Tasks\n{existingTasksSummary}\n\n" +
                     "Is this enhancement covered by the existing tasks, or was it missed?");
@@ -1386,7 +1408,19 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                     ? $"\n\n## GitHub Issue #{sourceIssue.Number}: {sourceIssue.Title}\n{sourceIssue.Body}"
                     : "";
 
-                history.AddUserMessage(
+                var singlePassUser = PromptService is not null
+                    ? await PromptService.RenderAsync("principal-engineer/single-pass-implementation",
+                        new Dictionary<string, string>
+                        {
+                            ["pm_spec"] = pmSpecDoc,
+                            ["architecture"] = architectureDoc,
+                            ["issue_context"] = issueContext,
+                            ["task_name"] = task.Name,
+                            ["task_description"] = task.Description,
+                            ["tech_stack"] = techStack
+                        }, ct)
+                    : null;
+                history.AddUserMessage(singlePassUser ??
                     $"## PM Specification\n{pmSpecDoc}\n\n" +
                     $"## Architecture\n{architectureDoc}" +
                     issueContext +
@@ -2734,7 +2768,11 @@ public class PrincipalEngineerAgent : EngineerAgentBase
             var chat = kernel.GetRequiredService<IChatCompletionService>();
 
             var history = CreateChatHistory();
-            history.AddSystemMessage(
+            var intSys = PromptService is not null
+                ? await PromptService.RenderAsync("principal-engineer/integration-review-system",
+                    new Dictionary<string, string> { ["tech_stack"] = techStack }, ct)
+                : null;
+            history.AddSystemMessage(intSys ??
                 "You are a Principal Engineer performing final integration review. " +
                 $"The project uses {techStack}. " +
                 "All individual task PRs have been merged to main. Your job is to:\n" +
@@ -2744,7 +2782,16 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 "Output each file using: FILE: path/to/file.ext\n```language\n<content>\n```\n\n" +
                 "If no integration fixes are needed, output ONLY the text: NO_INTEGRATION_FIXES_NEEDED");
 
-            history.AddUserMessage(
+            var intUser = PromptService is not null
+                ? await PromptService.RenderAsync("principal-engineer/integration-review-user",
+                    new Dictionary<string, string>
+                    {
+                        ["pm_spec"] = pmSpecDoc,
+                        ["architecture"] = architectureDoc,
+                        ["task_summary"] = taskSummary
+                    }, ct)
+                : null;
+            history.AddUserMessage(intUser ??
                 $"## PM Specification\n{pmSpecDoc}\n\n" +
                 $"## Architecture\n{architectureDoc}\n\n" +
                 $"## Completed Tasks\n{taskSummary}\n\n" +
@@ -3073,7 +3120,11 @@ public class PrincipalEngineerAgent : EngineerAgentBase
             var repoStructure = await GetRepoStructureForContextAsync(ct);
 
             var history = CreateChatHistory();
-            history.AddSystemMessage(
+            var reviewSys = PromptService is not null
+                ? await PromptService.RenderAsync("principal-engineer/code-review-system",
+                    new Dictionary<string, string>(), ct)
+                : null;
+            history.AddSystemMessage(reviewSys ??
                 "You are a Principal Engineer doing a technical code review.\n\n" +
                 "SCOPE: This PR is ONE task. Review the ACTUAL CODE against its stated scope.\n\n" +
                 "CHECK: architecture compliance, implementation completeness, code quality, " +
@@ -3156,7 +3207,11 @@ public class PrincipalEngineerAgent : EngineerAgentBase
             // Update system prompt if screenshots available
             if (screenshotImages.Count > 0)
             {
-                history.AddSystemMessage(
+                var visSys = PromptService is not null
+                    ? await PromptService.RenderAsync("principal-engineer/visual-validation-supplement",
+                        new Dictionary<string, string>(), ct)
+                    : null;
+                history.AddSystemMessage(visSys ??
                     "VISUAL VALIDATION: Screenshots of the running application are included. " +
                     "LOOK at each screenshot carefully:\n" +
                     "- If the screenshot shows an error page, blank screen, JSON error, or unhandled exception, " +
@@ -3466,7 +3521,11 @@ public class PrincipalEngineerAgent : EngineerAgentBase
             }
 
             var history = CreateChatHistory();
-            history.AddSystemMessage(
+            var descSys = PromptService is not null
+                ? await PromptService.RenderAsync("principal-engineer/pr-description-system",
+                    new Dictionary<string, string>(), ct)
+                : null;
+            history.AddSystemMessage(descSys ??
                 "You are a Principal Engineer writing a detailed PR description for an engineering task. " +
                 "The description should be clear enough for another engineer to implement the task. " +
                 "Include:\n" +
@@ -3480,7 +3539,18 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 "3-6 steps total. Be specific about what each step produces.\n" +
                 "4. **Testing**: What tests should cover");
 
-            history.AddUserMessage(
+            var descUser = PromptService is not null
+                ? await PromptService.RenderAsync("principal-engineer/pr-description-user",
+                    new Dictionary<string, string>
+                    {
+                        ["pm_spec"] = pmSpec,
+                        ["architecture"] = architectureDoc,
+                        ["issue_context"] = issueContext,
+                        ["task_name"] = task.Name,
+                        ["task_description"] = task.Description
+                    }, ct)
+                : null;
+            history.AddUserMessage(descUser ??
                 $"## PM Specification\n{pmSpec}\n\n" +
                 $"## Architecture\n{architectureDoc}" +
                 issueContext +
@@ -3717,7 +3787,11 @@ public class PrincipalEngineerAgent : EngineerAgentBase
             var kernel = Models.GetKernel(Identity.ModelTier);
             var chatService = kernel.GetRequiredService<IChatCompletionService>();
 
-            var assessPrompt = $"""
+            var assessPrompt = PromptService is not null
+                ? await PromptService.RenderAsync("principal-engineer/sme-assessment",
+                    new Dictionary<string, string> { ["task_description"] = taskDescription }, ct)
+                : null;
+            assessPrompt ??= $"""
                 Evaluate whether this engineering task requires specialist expertise beyond
                 what a general Principal/Senior Engineer can handle. Consider: security, databases,
                 ML/AI, compliance, specific cloud services, accessibility, etc.

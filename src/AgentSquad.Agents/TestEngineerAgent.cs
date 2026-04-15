@@ -6,6 +6,7 @@ using AgentSquad.Core.GitHub;
 using AgentSquad.Core.GitHub.Models;
 using AgentSquad.Core.Messaging;
 using AgentSquad.Core.Persistence;
+using AgentSquad.Core.Prompts;
 using AgentSquad.Core.Workspace;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -59,6 +60,7 @@ public class TestEngineerAgent : AgentBase
     private readonly TestStrategyAnalyzer? _testStrategyAnalyzer;
     private readonly Core.Metrics.BuildTestMetrics? _metrics;
     private readonly IGateCheckService _gateCheck;
+    private readonly IPromptTemplateService? _promptService;
 
     private LocalWorkspace? _workspace;
     private bool _pendingWorkspaceCleanup;
@@ -102,7 +104,8 @@ public class TestEngineerAgent : AgentBase
         PlaywrightRunner? playwrightRunner = null,
         TestStrategyAnalyzer? testStrategyAnalyzer = null,
         Core.Metrics.BuildTestMetrics? metrics = null,
-        AgentStateStore? stateStore = null)
+        AgentStateStore? stateStore = null,
+        IPromptTemplateService? promptService = null)
         : base(identity, logger, memoryStore, roleContextProvider)
     {
         _messageBus = messageBus ?? throw new ArgumentNullException(nameof(messageBus));
@@ -118,6 +121,7 @@ public class TestEngineerAgent : AgentBase
         _testStrategyAnalyzer = testStrategyAnalyzer;
         _metrics = metrics;
         _stateStore = stateStore;
+        _promptService = promptService;
     }
 
     protected override async Task OnInitializeAsync(CancellationToken ct)
@@ -579,7 +583,18 @@ public class TestEngineerAgent : AgentBase
             fileList.AppendLine($"- {f} (ext: {Path.GetExtension(f)})");
         }
 
-        var prompt = $"""
+        var prompt = _promptService is not null
+            ? await _promptService.RenderAsync("test-engineer/testability-assessment", new Dictionary<string, string>
+            {
+                ["pr_title"] = pr.Title,
+                ["pr_description"] = pr.Body ?? "(no description)",
+                ["file_list"] = fileList.ToString(),
+                ["issue_body"] = issueBody ?? "(no linked issue)",
+                ["tech_stack"] = _config.Project.TechStack
+            }, ct)
+            : null;
+
+        prompt ??= $"""
             You are a Test Engineer assessing whether a pull request needs automated tests.
             
             ## PR Information
@@ -1164,7 +1179,17 @@ public class TestEngineerAgent : AgentBase
             catch { /* non-critical */ }
 
             var fixHistory = CreateChatHistory();
-            fixHistory.AddSystemMessage(
+
+            var testFilesContext = string.Join("\n", testFiles.Select(f =>
+                $"### {f.Path}\n```\n{(f.Content.Length > 1500 ? f.Content[..1500] + "\n// ... truncated" : f.Content)}\n```"));
+
+            var fixSysMsg = _promptService is not null
+                ? await _promptService.RenderAsync("test-engineer/build-fix-inline-system", new Dictionary<string, string>
+                {
+                    ["project_context"] = projectCtx
+                }, ct)
+                : null;
+            fixSysMsg ??=
                 "You are a test engineer fixing build errors in test files. " +
                 "The test files were added to an existing PR branch and won't compile. " +
                 "Fix ONLY the test code — do NOT modify the source code under test.\n" +
@@ -1176,15 +1201,27 @@ public class TestEngineerAgent : AgentBase
                 "you are creating duplicate types or entry points. REMOVE the duplicate files entirely — " +
                 "use project references to access types from the source project instead of redefining them.\n" +
                 "Also ensure the dependency manifest includes all required packages. Output the corrected manifest too.\n\n" +
-                "Output ONLY corrected files using:\nFILE: path/to/file.ext\n```language\n<content>\n```");
-            fixHistory.AddUserMessage(
+                "Output ONLY corrected files using:\nFILE: path/to/file.ext\n```language\n<content>\n```";
+            fixHistory.AddSystemMessage(fixSysMsg);
+
+            var fixUserMsg = _promptService is not null
+                ? await _promptService.RenderAsync("test-engineer/build-fix-inline-user", new Dictionary<string, string>
+                {
+                    ["attempt_number"] = (attempt + 1).ToString(),
+                    ["max_retries"] = wsConfig.MaxBuildRetries.ToString(),
+                    ["error_summary"] = errorSummary,
+                    ["project_context"] = projectCtx,
+                    ["test_files_context"] = testFilesContext
+                }, ct)
+                : null;
+            fixUserMsg ??=
                 $"Build attempt {attempt + 1}/{wsConfig.MaxBuildRetries} failed.\n\n" +
                 $"## Build Errors\n\n{errorSummary}\n\n" +
                 projectCtx +
                 $"\n## Test Files\n\n" +
-                string.Join("\n", testFiles.Select(f =>
-                    $"### {f.Path}\n```\n{(f.Content.Length > 1500 ? f.Content[..1500] + "\n// ... truncated" : f.Content)}\n```")) +
-                "\n\nFix ALL build errors. Only modify test files.");
+                testFilesContext +
+                "\n\nFix ALL build errors. Only modify test files.";
+            fixHistory.AddUserMessage(fixUserMsg);
 
             var fixResponse = await chat.GetChatMessageContentAsync(fixHistory, cancellationToken: ct);
             var fixedFiles = FilterToTestFilesOnly(CodeFileParser.ParseFiles(fixResponse.Content ?? ""));
@@ -1952,71 +1989,94 @@ public class TestEngineerAgent : AgentBase
 
             var history = CreateChatHistory();
 
-            // Combined system prompt with all tier guidance
-            var combinedSystem = new System.Text.StringBuilder();
-            combinedSystem.AppendLine($"You are an expert test engineer writing tests for a {techStack} project.");
-            combinedSystem.AppendLine("Your job is to generate REAL, RUNNABLE test code — not documentation or test plans.");
-            combinedSystem.AppendLine("Write actual test files that can be compiled and executed.\n");
-            combinedSystem.AppendLine("CRITICAL RULE — DEPENDENCY MANAGEMENT:");
-            combinedSystem.AppendLine("Before using ANY library, package, framework, or external dependency in your code, you MUST:");
-            combinedSystem.AppendLine("1. Check the project's existing dependency manifest to see what is already installed");
-            combinedSystem.AppendLine("2. If a dependency is NOT already listed, add it to the manifest file");
-            combinedSystem.AppendLine("3. ALWAYS output the complete dependency manifest with ALL needed dependencies");
-            combinedSystem.AppendLine("Missing dependencies are the #1 cause of build failures. Prevent this by always including the manifest.\n");
-            combinedSystem.AppendLine("CRITICAL RULE — DO NOT CREATE DUPLICATE FILES:");
-            combinedSystem.AppendLine("- NEVER create model classes, entity classes, DTOs, or data types that already exist in the source project.");
-            combinedSystem.AppendLine("- NEVER create a Program.cs, Startup.cs, or application entry point in your test project.");
-            combinedSystem.AppendLine("- Use project references or import/using statements to reference types from the source project.");
-            combinedSystem.AppendLine("- If you need types from the source project, reference them — do NOT redefine them.\n");
-            combinedSystem.AppendLine("CRITICAL RULE — ASSERTIONS MUST MATCH ACTUAL CODE:");
-            combinedSystem.AppendLine("- Derive ALL expected values (text, counts, sizes, CSS classes) from the SOURCE CODE provided below.");
-            combinedSystem.AppendLine("- Do NOT derive expected values from spec documents, architecture docs, or design references.");
-            combinedSystem.AppendLine("- The spec describes intent; the source code is what actually runs. Test what the code DOES, not what the spec SAYS.\n");
-            combinedSystem.AppendLine("Output each test file using this exact format:\n");
-            combinedSystem.AppendLine("FILE: tests/path/to/TestFile.ext\n```language\n<complete file content>\n```\n");
-            combinedSystem.AppendLine("Every file MUST use the FILE: marker format so it can be parsed and committed.\n");
-
-            if (IsBlazorProject())
-                combinedSystem.AppendLine(GetBlazorTestGuidance());
-
-            combinedSystem.AppendLine($"Generate ALL of the following test tiers in a single response:\n");
+            // Build tier guidance for template or fallback
+            var tierGuidanceBuilder = new System.Text.StringBuilder();
+            tierGuidanceBuilder.AppendLine($"Generate ALL of the following test tiers in a single response:\n");
             if (strategy.NeedsUnitTests)
             {
-                combinedSystem.AppendLine("## Tier 1: UNIT TESTS");
-                combinedSystem.AppendLine("- Mock ALL external dependencies. Test one behavior per test method.");
-                combinedSystem.AppendLine("- Add [Trait(\"Category\", \"Unit\")] attribute. Place in tests/{ProjectName}.Tests/Unit/");
-                combinedSystem.AppendLine("- Cover happy paths, edge cases, null/empty inputs, boundary values, error conditions.\n");
+                tierGuidanceBuilder.AppendLine("## Tier 1: UNIT TESTS");
+                tierGuidanceBuilder.AppendLine("- Mock ALL external dependencies. Test one behavior per test method.");
+                tierGuidanceBuilder.AppendLine("- Add [Trait(\"Category\", \"Unit\")] attribute. Place in tests/{ProjectName}.Tests/Unit/");
+                tierGuidanceBuilder.AppendLine("- Cover happy paths, edge cases, null/empty inputs, boundary values, error conditions.\n");
             }
             if (strategy.NeedsIntegrationTests)
             {
-                combinedSystem.AppendLine("## Tier 2: INTEGRATION TESTS");
-                combinedSystem.AppendLine("- Test DI wiring, API endpoints, middleware. Use WebApplicationFactory.");
-                combinedSystem.AppendLine("- Add [Trait(\"Category\", \"Integration\")] attribute. Place in tests/{ProjectName}.Tests/Integration/");
-                combinedSystem.AppendLine("- Test error handling and validation at API boundaries.\n");
+                tierGuidanceBuilder.AppendLine("## Tier 2: INTEGRATION TESTS");
+                tierGuidanceBuilder.AppendLine("- Test DI wiring, API endpoints, middleware. Use WebApplicationFactory.");
+                tierGuidanceBuilder.AppendLine("- Add [Trait(\"Category\", \"Integration\")] attribute. Place in tests/{ProjectName}.Tests/Integration/");
+                tierGuidanceBuilder.AppendLine("- Test error handling and validation at API boundaries.\n");
             }
             if (strategy.NeedsUITests && _config.Workspace.EnableUITests)
             {
-                combinedSystem.AppendLine("## Tier 3: UI/E2E TESTS (Playwright)");
-                combinedSystem.AppendLine("- Use Microsoft.Playwright for browser automation with Page Object Model.");
-                combinedSystem.AppendLine("- Base URL from env var BASE_URL (default: http://localhost:5000).");
-                combinedSystem.AppendLine("- IMPORTANT: Use xUnit ([Fact], [Collection], [Trait]) — do NOT use NUnit.");
-                combinedSystem.AppendLine("- PlaywrightFixture base class must use IAsyncLifetime, NOT [SetUpFixture].");
-                combinedSystem.AppendLine("- Add [Trait(\"Category\", \"UI\")] and [Collection(\"Playwright\")] attributes.");
-                combinedSystem.AppendLine("- Place in tests/{ProjectName}.UITests/. Include PlaywrightFixture class.");
-                combinedSystem.AppendLine("- CRITICAL SELECTOR RULES:");
-                combinedSystem.AppendLine("  * ONLY use CSS selectors/classes that appear in the Source Files provided below.");
-                combinedSystem.AppendLine("  * If you cannot find a selector in the source code, DO NOT USE IT.");
-                combinedSystem.AppendLine("  * Prefer content-based selectors: page.GetByText(), page.GetByRole(), page.Locator(\"h1\").");
-                combinedSystem.AppendLine("  * Use page.WaitForLoadStateAsync(LoadState.NetworkIdle) before asserting on elements.");
-                combinedSystem.AppendLine("  * NEVER invent CSS class names from spec/architecture documents.");
-                combinedSystem.AppendLine("- Set DefaultTimeout to 60000ms in PlaywrightFixture — apps need time for initial load.\n");
+                tierGuidanceBuilder.AppendLine("## Tier 3: UI/E2E TESTS (Playwright)");
+                tierGuidanceBuilder.AppendLine("- Use Microsoft.Playwright for browser automation with Page Object Model.");
+                tierGuidanceBuilder.AppendLine("- Base URL from env var BASE_URL (default: http://localhost:5000).");
+                tierGuidanceBuilder.AppendLine("- IMPORTANT: Use xUnit ([Fact], [Collection], [Trait]) — do NOT use NUnit.");
+                tierGuidanceBuilder.AppendLine("- PlaywrightFixture base class must use IAsyncLifetime, NOT [SetUpFixture].");
+                tierGuidanceBuilder.AppendLine("- Add [Trait(\"Category\", \"UI\")] and [Collection(\"Playwright\")] attributes.");
+                tierGuidanceBuilder.AppendLine("- Place in tests/{ProjectName}.UITests/. Include PlaywrightFixture class.");
+                tierGuidanceBuilder.AppendLine("- CRITICAL SELECTOR RULES:");
+                tierGuidanceBuilder.AppendLine("  * ONLY use CSS selectors/classes that appear in the Source Files provided below.");
+                tierGuidanceBuilder.AppendLine("  * If you cannot find a selector in the source code, DO NOT USE IT.");
+                tierGuidanceBuilder.AppendLine("  * Prefer content-based selectors: page.GetByText(), page.GetByRole(), page.Locator(\"h1\").");
+                tierGuidanceBuilder.AppendLine("  * Use page.WaitForLoadStateAsync(LoadState.NetworkIdle) before asserting on elements.");
+                tierGuidanceBuilder.AppendLine("  * NEVER invent CSS class names from spec/architecture documents.");
+                tierGuidanceBuilder.AppendLine("- Set DefaultTimeout to 60000ms in PlaywrightFixture — apps need time for initial load.\n");
             }
-            combinedSystem.AppendLine("YOU MUST output .csproj files with all required package references.");
 
-            if (!string.IsNullOrEmpty(memoryContext))
-                combinedSystem.AppendLine($"\n{memoryContext}");
+            var blazorGuidanceForSinglePass = IsBlazorProject() ? GetBlazorTestGuidance() : "";
 
-            history.AddSystemMessage(combinedSystem.ToString());
+            var singlePassSysMsg = _promptService is not null
+                ? await _promptService.RenderAsync("test-engineer/single-pass-system", new Dictionary<string, string>
+                {
+                    ["tech_stack"] = techStack,
+                    ["tier_guidance"] = tierGuidanceBuilder.ToString(),
+                    ["blazor_guidance"] = blazorGuidanceForSinglePass,
+                    ["memory_context"] = memoryContext ?? ""
+                }, ct)
+                : null;
+
+            if (singlePassSysMsg is not null)
+            {
+                history.AddSystemMessage(singlePassSysMsg);
+            }
+            else
+            {
+                // Fallback: build combined system prompt inline
+                var combinedSystem = new System.Text.StringBuilder();
+                combinedSystem.AppendLine($"You are an expert test engineer writing tests for a {techStack} project.");
+                combinedSystem.AppendLine("Your job is to generate REAL, RUNNABLE test code — not documentation or test plans.");
+                combinedSystem.AppendLine("Write actual test files that can be compiled and executed.\n");
+                combinedSystem.AppendLine("CRITICAL RULE — DEPENDENCY MANAGEMENT:");
+                combinedSystem.AppendLine("Before using ANY library, package, framework, or external dependency in your code, you MUST:");
+                combinedSystem.AppendLine("1. Check the project's existing dependency manifest to see what is already installed");
+                combinedSystem.AppendLine("2. If a dependency is NOT already listed, add it to the manifest file");
+                combinedSystem.AppendLine("3. ALWAYS output the complete dependency manifest with ALL needed dependencies");
+                combinedSystem.AppendLine("Missing dependencies are the #1 cause of build failures. Prevent this by always including the manifest.\n");
+                combinedSystem.AppendLine("CRITICAL RULE — DO NOT CREATE DUPLICATE FILES:");
+                combinedSystem.AppendLine("- NEVER create model classes, entity classes, DTOs, or data types that already exist in the source project.");
+                combinedSystem.AppendLine("- NEVER create a Program.cs, Startup.cs, or application entry point in your test project.");
+                combinedSystem.AppendLine("- Use project references or import/using statements to reference types from the source project.");
+                combinedSystem.AppendLine("- If you need types from the source project, reference them — do NOT redefine them.\n");
+                combinedSystem.AppendLine("CRITICAL RULE — ASSERTIONS MUST MATCH ACTUAL CODE:");
+                combinedSystem.AppendLine("- Derive ALL expected values (text, counts, sizes, CSS classes) from the SOURCE CODE provided below.");
+                combinedSystem.AppendLine("- Do NOT derive expected values from spec documents, architecture docs, or design references.");
+                combinedSystem.AppendLine("- The spec describes intent; the source code is what actually runs. Test what the code DOES, not what the spec SAYS.\n");
+                combinedSystem.AppendLine("Output each test file using this exact format:\n");
+                combinedSystem.AppendLine("FILE: tests/path/to/TestFile.ext\n```language\n<complete file content>\n```\n");
+                combinedSystem.AppendLine("Every file MUST use the FILE: marker format so it can be parsed and committed.\n");
+
+                if (IsBlazorProject())
+                    combinedSystem.AppendLine(GetBlazorTestGuidance());
+
+                combinedSystem.AppendLine(tierGuidanceBuilder.ToString());
+                combinedSystem.AppendLine("YOU MUST output .csproj files with all required package references.");
+
+                if (!string.IsNullOrEmpty(memoryContext))
+                    combinedSystem.AppendLine($"\n{memoryContext}");
+
+                history.AddSystemMessage(combinedSystem.ToString());
+            }
 
             var userPrompt = new System.Text.StringBuilder();
             userPrompt.AppendLine($"## Merged PR #{pr.Number}: {pr.Title}\n");
@@ -2166,39 +2226,22 @@ public class TestEngineerAgent : AgentBase
     /// </summary>
     private string GetTierSystemPrompt(TestTier tier, string techStack, string memoryContext)
     {
-        var basePrompt = $"You are an expert test engineer writing tests for a {techStack} project.\n" +
-            "Your job is to generate REAL, RUNNABLE test code — not documentation or test plans.\n" +
-            "Write actual test files that can be compiled and executed.\n\n" +
-            "CRITICAL RULE — DEPENDENCY MANAGEMENT:\n" +
-            "Before using ANY library, package, framework, or external dependency in your code, you MUST:\n" +
-            "1. Check the project's existing dependency manifest (e.g., .csproj, package.json, requirements.txt,\n" +
-            "   Cargo.toml, go.mod, build.gradle, pom.xml, Gemfile, etc.) to see what is already installed\n" +
-            "2. If a dependency you want to use is NOT already listed, you MUST add it to the manifest file\n" +
-            "3. ALWAYS output the complete dependency manifest with ALL needed dependencies — never assume one exists\n" +
-            "4. This applies to test frameworks, assertion libraries, mocking libraries, browser automation tools,\n" +
-            "   and ANY other third-party code. If you import/using/require it, it must be in the manifest.\n" +
-            "Missing dependencies are the #1 cause of build failures. Prevent this by always including the manifest.\n\n" +
-            "CRITICAL RULE — DO NOT CREATE DUPLICATE FILES:\n" +
-            "- NEVER create model classes, entity classes, DTOs, or data types that already exist in the source project.\n" +
-            "- NEVER create a Program.cs, Startup.cs, main.py, index.ts, or any application entry point in your test project.\n" +
-            "- Use project references or import statements to reference types from the source project.\n" +
-            "- If you need types from the source project, reference them — do NOT redefine them.\n\n" +
-            "CRITICAL RULE — ASSERTIONS MUST MATCH ACTUAL CODE:\n" +
-            "- Derive ALL expected values (text content, counts, sizes, CSS classes, element names) from the SOURCE CODE provided.\n" +
-            "- Do NOT derive expected values from spec documents, architecture docs, or design references.\n" +
-            "- The spec describes intent; the source code is what actually runs. Test what the code DOES.\n\n" +
-            "Output each test file using this exact format:\n\n" +
-            "FILE: tests/path/to/TestFile.ext\n```language\n<complete file content>\n```\n\n" +
-            "Every file MUST use the FILE: marker format so it can be parsed and committed.\n\n";
-
         // Detect Blazor project and add specific guidance
-        var blazorGuidance = "";
-        if (IsBlazorProject())
-        {
-            blazorGuidance = GetBlazorTestGuidance();
-        }
+        var blazorGuidance = IsBlazorProject() ? GetBlazorTestGuidance() : "";
 
-        var tierGuidance = tier switch
+        // Resolve tier-specific guidance from template or hardcoded fallback
+        var tierTemplateName = tier switch
+        {
+            TestTier.Unit => "test-engineer/tier-unit-guidance",
+            TestTier.Integration => "test-engineer/tier-integration-guidance",
+            TestTier.UI => "test-engineer/tier-ui-guidance",
+            _ => null
+        };
+        var tierGuidance = tierTemplateName is not null && _promptService is not null
+            ? _promptService.RenderAsync(tierTemplateName, new Dictionary<string, string>(), default).GetAwaiter().GetResult()
+            : null;
+
+        tierGuidance ??= tier switch
         {
             TestTier.Unit =>
                 "## Test Tier: UNIT TESTS\n" +
@@ -2284,6 +2327,47 @@ public class TestEngineerAgent : AgentBase
             _ => ""
         };
 
+        // Try rendering the full tier-system-base template
+        if (_promptService is not null)
+        {
+            var rendered = _promptService.RenderAsync("test-engineer/tier-system-base", new Dictionary<string, string>
+            {
+                ["tech_stack"] = techStack,
+                ["blazor_guidance"] = blazorGuidance,
+                ["tier_guidance"] = tierGuidance,
+                ["memory_context"] = string.IsNullOrEmpty(memoryContext) ? "" : memoryContext
+            }, default).GetAwaiter().GetResult();
+
+            if (rendered is not null)
+                return rendered;
+        }
+
+        // Fallback: build inline
+        var basePrompt = $"You are an expert test engineer writing tests for a {techStack} project.\n" +
+            "Your job is to generate REAL, RUNNABLE test code — not documentation or test plans.\n" +
+            "Write actual test files that can be compiled and executed.\n\n" +
+            "CRITICAL RULE — DEPENDENCY MANAGEMENT:\n" +
+            "Before using ANY library, package, framework, or external dependency in your code, you MUST:\n" +
+            "1. Check the project's existing dependency manifest (e.g., .csproj, package.json, requirements.txt,\n" +
+            "   Cargo.toml, go.mod, build.gradle, pom.xml, Gemfile, etc.) to see what is already installed\n" +
+            "2. If a dependency you want to use is NOT already listed, you MUST add it to the manifest file\n" +
+            "3. ALWAYS output the complete dependency manifest with ALL needed dependencies — never assume one exists\n" +
+            "4. This applies to test frameworks, assertion libraries, mocking libraries, browser automation tools,\n" +
+            "   and ANY other third-party code. If you import/using/require it, it must be in the manifest.\n" +
+            "Missing dependencies are the #1 cause of build failures. Prevent this by always including the manifest.\n\n" +
+            "CRITICAL RULE — DO NOT CREATE DUPLICATE FILES:\n" +
+            "- NEVER create model classes, entity classes, DTOs, or data types that already exist in the source project.\n" +
+            "- NEVER create a Program.cs, Startup.cs, main.py, index.ts, or any application entry point in your test project.\n" +
+            "- Use project references or import statements to reference types from the source project.\n" +
+            "- If you need types from the source project, reference them — do NOT redefine them.\n\n" +
+            "CRITICAL RULE — ASSERTIONS MUST MATCH ACTUAL CODE:\n" +
+            "- Derive ALL expected values (text content, counts, sizes, CSS classes, element names) from the SOURCE CODE provided.\n" +
+            "- Do NOT derive expected values from spec documents, architecture docs, or design references.\n" +
+            "- The spec describes intent; the source code is what actually runs. Test what the code DOES.\n\n" +
+            "Output each test file using this exact format:\n\n" +
+            "FILE: tests/path/to/TestFile.ext\n```language\n<complete file content>\n```\n\n" +
+            "Every file MUST use the FILE: marker format so it can be parsed and committed.\n\n";
+
         return basePrompt + blazorGuidance + tierGuidance +
             (string.IsNullOrEmpty(memoryContext) ? "" : $"\n{memoryContext}");
     }
@@ -2313,6 +2397,17 @@ public class TestEngineerAgent : AgentBase
             var csproj = Directory.EnumerateFiles(_workspace.RepoPath, "*.csproj", SearchOption.TopDirectoryOnly).FirstOrDefault();
             if (csproj is not null)
                 projectName = Path.GetFileNameWithoutExtension(csproj);
+        }
+
+        if (_promptService is not null)
+        {
+            var rendered = _promptService.RenderAsync("test-engineer/blazor-test-guidance", new Dictionary<string, string>
+            {
+                ["project_name"] = projectName
+            }, default).GetAwaiter().GetResult();
+
+            if (rendered is not null)
+                return rendered;
         }
 
         return $@"## BLAZOR PROJECT — SPECIAL INSTRUCTIONS
@@ -3029,7 +3124,14 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
 
                 // Include project context so AI can properly fix structural issues
                 var fixHistory = CreateChatHistory();
-                fixHistory.AddSystemMessage(
+
+                var wsBuildFixSys = _promptService is not null
+                    ? await _promptService.RenderAsync("test-engineer/workspace-build-fix-system", new Dictionary<string, string>
+                    {
+                        ["blazor_guidance"] = IsBlazorProject() ? GetBlazorTestGuidance() : ""
+                    }, ct)
+                    : null;
+                wsBuildFixSys ??=
                     "You are a test engineer fixing build errors in test files. " +
                     "You have full context about the project structure.\n" +
                     "COMMON FIX: If errors are 'type or namespace not found', the dependency manifest is likely missing a " +
@@ -3039,14 +3141,27 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
                     "DELETE those duplicate files — use project references and import statements instead of redefining types.\n" +
                     (IsBlazorProject() ? GetBlazorTestGuidance() : "") +
                     "Output ONLY corrected files using:\nFILE: path/to/file.ext\n```language\n<content>\n```\n" +
-                    "If a dependency manifest is missing or has wrong references, include the corrected one in your output.");
-                fixHistory.AddUserMessage(
+                    "If a dependency manifest is missing or has wrong references, include the corrected one in your output.";
+                fixHistory.AddSystemMessage(wsBuildFixSys);
+
+                var testFileList = string.Join("\n", testFiles.Select(f => $"- {f.Path}"));
+                var wsBuildFixUser = _promptService is not null
+                    ? await _promptService.RenderAsync("test-engineer/workspace-build-fix-user", new Dictionary<string, string>
+                    {
+                        ["attempt_number"] = (attempt + 1).ToString(),
+                        ["max_retries"] = wsConfig.MaxBuildRetries.ToString(),
+                        ["error_summary"] = errorSummary,
+                        ["test_file_list"] = testFileList
+                    }, ct)
+                    : null;
+                wsBuildFixUser ??=
                     $"Build attempt {attempt + 1}/{wsConfig.MaxBuildRetries} failed.\n\n" +
                     $"## Build Errors\n\n{errorSummary}\n\n" +
                     $"## Test files currently written\n\n" +
-                    string.Join("\n", testFiles.Select(f => $"- {f.Path}")) + "\n\n" +
+                    testFileList + "\n\n" +
                     "Fix ALL errors. If duplicate type definitions exist, remove those files entirely and use project references. " +
-                    "If namespace errors occur, check the actual project namespace and fix the import statements.");
+                    "If namespace errors occur, check the actual project namespace and fix the import statements.";
+                fixHistory.AddUserMessage(wsBuildFixUser);
 
                 var fixResponse = await chat.GetChatMessageContentAsync(fixHistory, cancellationToken: ct);
                 var fixedFiles = FilterToTestFilesOnly(CodeFileParser.ParseFiles(fixResponse.Content ?? ""));
@@ -3200,11 +3315,22 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
                     : testResult.Output.Length > 2000 ? testResult.Output[^2000..] : testResult.Output;
 
                 var fixHistory = CreateChatHistory();
-                fixHistory.AddUserMessage(
+
+                var testFixMsg = _promptService is not null
+                    ? await _promptService.RenderAsync("test-engineer/test-fix-user", new Dictionary<string, string>
+                    {
+                        ["tier"] = tier.ToString(),
+                        ["failed_count"] = testResult.Failed.ToString(),
+                        ["total_count"] = testResult.Total.ToString(),
+                        ["failure_summary"] = failureSummary
+                    }, ct)
+                    : null;
+                testFixMsg ??=
                     $"{tier} tests failed ({testResult.Failed} of {testResult.Total}):\n\n{failureSummary}\n\n" +
                     "Fix the test code. Output ONLY corrected files using:\n" +
                     "FILE: path/to/file.ext\n```language\n<content>\n```\n\n" +
-                    "Only fix test bugs — don't mask real code bugs.");
+                    "Only fix test bugs — don't mask real code bugs.";
+                fixHistory.AddUserMessage(testFixMsg);
 
                 var fixResponse = await chat.GetChatMessageContentAsync(fixHistory, cancellationToken: ct);
                 var fixedFiles = FilterToTestFilesOnly(CodeFileParser.ParseFiles(fixResponse.Content ?? ""));
@@ -3297,7 +3423,11 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
             $"### {kv.Key}\n```\n{(kv.Value.Length > 2000 ? kv.Value[..2000] : kv.Value)}\n```"));
 
         var history = CreateChatHistory();
-        history.AddSystemMessage(
+
+        var classifySys = _promptService is not null
+            ? await _promptService.RenderAsync("test-engineer/classify-failures-system", new Dictionary<string, string>(), ct)
+            : null;
+        classifySys ??=
             "You are an expert test engineer classifying test failures. " +
             "For each failing test, determine if the failure is caused by:\n" +
             "- TEST_BUG: The test itself is wrong (bad assertion, missing mock, wrong setup)\n" +
@@ -3308,9 +3438,18 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
             "\"sourceFile\": \"path/to/file.cs\", \"sourceMethod\": \"MethodName\", " +
             "\"issue\": \"Brief description of the bug\", \"output\": \"Key error line\"}]\n\n" +
             "Be conservative — only classify as SOURCE_BUG when the test logic is clearly correct " +
-            "and the source code clearly has a defect.");
-        history.AddUserMessage(
-            $"## Failing Tests\n{failureSummary}\n\n## Source Code Under Test\n{sourceContext}");
+            "and the source code clearly has a defect.";
+        history.AddSystemMessage(classifySys);
+
+        var classifyUser = _promptService is not null
+            ? await _promptService.RenderAsync("test-engineer/classify-failures-user", new Dictionary<string, string>
+            {
+                ["failure_summary"] = failureSummary,
+                ["source_context"] = sourceContext
+            }, ct)
+            : null;
+        classifyUser ??= $"## Failing Tests\n{failureSummary}\n\n## Source Code Under Test\n{sourceContext}";
+        history.AddUserMessage(classifyUser);
 
         try
         {
@@ -3411,7 +3550,16 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
             ? string.Join("\n", failingResult.FailureDetails.Take(20))
             : failingResult.Output.Length > 3000 ? failingResult.Output[^3000..] : failingResult.Output;
 
-        var removePrompt = $"""
+        var removePrompt = _promptService is not null
+            ? await _promptService.RenderAsync("test-engineer/remove-failing-tests", new Dictionary<string, string>
+            {
+                ["tier"] = tier.ToString(),
+                ["max_retries"] = wsConfig.MaxTestRetries.ToString(),
+                ["failure_summary"] = failureSummary
+            }, ct)
+            : null;
+
+        removePrompt ??= $"""
             The following {tier} tests have been failing despite {wsConfig.MaxTestRetries} attempts to fix them.
             These tests MUST be removed because they cannot be made to pass.
 
@@ -3619,7 +3767,14 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
                     rework.PrNumber, pr.HeadBranch, ct: ct);
 
                 var history = CreateChatHistory();
-                history.AddSystemMessage(
+
+                var reworkSysMsg = _promptService is not null
+                    ? await _promptService.RenderAsync("test-engineer/rework-system", new Dictionary<string, string>
+                    {
+                        ["tech_stack"] = techStack
+                    }, ct)
+                    : null;
+                reworkSysMsg ??=
                     $"You are an expert test engineer maintaining tests for a {techStack} project.\n" +
                     "A reviewer requested changes on your test PR. Update the test files to address all feedback.\n\n" +
                     "CRITICAL: Your response MUST start with a CHANGES SUMMARY that addresses EACH numbered " +
@@ -3628,21 +3783,35 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
                     "After the CHANGES SUMMARY, output each corrected file using this exact format:\n" +
                     "FILE: tests/path/to/TestFile.ext\n```language\n<complete file content>\n```\n\n" +
                     "Include the COMPLETE content of each changed file. " +
-                    "You MUST include at least one FILE: block — a summary alone is not sufficient.");
+                    "You MUST include at least one FILE: block — a summary alone is not sufficient.";
+                history.AddSystemMessage(reworkSysMsg);
 
-                history.AddUserMessage(
+                var currentFilesBlock = string.IsNullOrEmpty(currentFilesContext) ? "" :
+                    $"## Current Files on PR Branch\nThese are the files you already wrote. " +
+                    "Modify them to address the feedback below:\n" + currentFilesContext + "\n\n";
+                var reworkUserMsg = _promptService is not null
+                    ? await _promptService.RenderAsync("test-engineer/rework-user", new Dictionary<string, string>
+                    {
+                        ["pr_number"] = rework.PrNumber.ToString(),
+                        ["pr_title"] = rework.PrTitle,
+                        ["pr_description"] = pr.Body ?? "",
+                        ["current_files_context"] = currentFilesBlock,
+                        ["reviewer"] = rework.Reviewer,
+                        ["feedback"] = rework.Feedback
+                    }, ct)
+                    : null;
+                reworkUserMsg ??=
                     $"## Test PR #{rework.PrNumber}: {rework.PrTitle}\n\n" +
                     $"## Original PR Description\n{pr.Body}\n\n" +
-                    (string.IsNullOrEmpty(currentFilesContext) ? "" :
-                        $"## Current Files on PR Branch\nThese are the files you already wrote. " +
-                        "Modify them to address the feedback below:\n{currentFilesContext}\n\n") +
+                    currentFilesBlock +
                     $"## Review Feedback from {rework.Reviewer}\n{rework.Feedback}\n\n" +
                     "REQUIRED: Start your response with CHANGES SUMMARY that addresses each numbered " +
                     "feedback item using the SAME numbers. Example:\n" +
                     "CHANGES SUMMARY\n" +
                     "1. Added missing error handling test as requested\n" +
                     "2. Fixed assertion to check return type\n\n" +
-                    "Then output the corrected test files.");
+                    "Then output the corrected test files.";
+                history.AddUserMessage(reworkUserMsg);
 
                 var response = await chat.GetChatMessageContentAsync(history, cancellationToken: ct);
                 var updatedContent = response.Content?.Trim() ?? "";
