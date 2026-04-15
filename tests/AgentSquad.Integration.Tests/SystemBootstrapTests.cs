@@ -4,6 +4,7 @@ using AgentSquad.Core.Configuration;
 using AgentSquad.Core.GitHub;
 using AgentSquad.Core.Messaging;
 using AgentSquad.Core.Persistence;
+using AgentSquad.Core.Prompts;
 using AgentSquad.Agents;
 using AgentSquad.Orchestrator;
 using Microsoft.Extensions.DependencyInjection;
@@ -89,6 +90,9 @@ public class SystemBootstrapTests : IDisposable
         // Reasoning services (needed by PM, Architect, PE, Researcher)
         services.AddSingleton<AgentSquad.Core.Agents.Reasoning.IAgentReasoningLog, AgentSquad.Core.Agents.Reasoning.AgentReasoningLog>();
         services.AddSingleton<AgentSquad.Core.Agents.Reasoning.SelfAssessmentService>();
+
+        // Prompt template service (needed by all agents)
+        services.AddSingleton<IPromptTemplateService, PromptTemplateService>();
 
         // Orchestrator
         services.AddOrchestrator();
