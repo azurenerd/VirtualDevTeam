@@ -479,10 +479,11 @@ public class TestEngineerAgent : AgentBase
             {
                 Logger.LogInformation("AI assessment: PR #{Number} does not need tests — {Rationale}", pr.Number, assessment.Rationale);
                 _testedPRs.Add(pr.Number);
-                await ApplyTestsAddedLabelAsync(pr, ct);
+                // Post comment BEFORE label so PM sees test results when it sees the label
                 await _github.AddPullRequestCommentAsync(pr.Number,
                     $"✅ **[TestEngineer] No Tests Needed** — {assessment.Rationale}\n\n" +
                     "Marking as tested to proceed with PM review.", ct);
+                await ApplyTestsAddedLabelAsync(pr, ct);
                 continue;
             }
 
@@ -1071,9 +1072,10 @@ public class TestEngineerAgent : AgentBase
             }
         }
 
-        // --- Phase 10: Update PR labels and post results ---
-        await ApplyTestsAddedLabelAsync(pr, ct);
+        // --- Phase 10: Post results FIRST, then apply label ---
+        // Post comment before label so PM sees test results when it detects the label
         await PostInlineTestResultsCommentAsync(pr, testFiles, tierResults, ct);
+        await ApplyTestsAddedLabelAsync(pr, ct);
 
         Logger.LogInformation(
             "Successfully added {Count} test files to PR #{Number}: {Title}",
@@ -1131,8 +1133,9 @@ public class TestEngineerAgent : AgentBase
             $"test: add {testFiles.Count} test files for PR #{pr.Number}",
             pr.HeadBranch, ct);
 
-        await ApplyTestsAddedLabelAsync(pr, ct);
+        // Post comment before label so PM sees test results when it detects the label
         await PostInlineTestResultsCommentAsync(pr, testFiles, tierResults: null, ct);
+        await ApplyTestsAddedLabelAsync(pr, ct);
 
         Logger.LogInformation("Added {Count} test files via API to PR #{Number}", testFiles.Count, pr.Number);
     }

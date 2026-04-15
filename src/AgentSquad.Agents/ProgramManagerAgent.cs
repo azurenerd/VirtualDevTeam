@@ -914,6 +914,27 @@ public class ProgramManagerAgent : AgentBase
                     continue; // Don't mark as reviewed — we'll check again next cycle
                 }
 
+                // Defense-in-depth: even if tests-added label is present, verify TE posted a
+                // completion comment. This prevents the PM from reviewing before TE finishes
+                // posting results (label and comment are separate API calls).
+                if (_config.Workspace.IsInlineTestWorkflow &&
+                    !_forceApprovalPrs.Contains(prNumber))
+                {
+                    var comments = await _github.GetPullRequestCommentsAsync(prNumber, ct);
+                    var hasTeCompletionComment = comments.Any(c =>
+                        (c.Body.Contains("Test Engineer", StringComparison.OrdinalIgnoreCase) &&
+                         (c.Body.Contains("Test Results", StringComparison.OrdinalIgnoreCase) ||
+                          c.Body.Contains("tests passed", StringComparison.OrdinalIgnoreCase) ||
+                          c.Body.Contains("UI Test", StringComparison.OrdinalIgnoreCase))) ||
+                        c.Body.Contains("[TestEngineer] No Tests Needed", StringComparison.OrdinalIgnoreCase) ||
+                        c.Body.Contains("Test Engineer:", StringComparison.OrdinalIgnoreCase));
+                    if (!hasTeCompletionComment)
+                    {
+                        Logger.LogDebug("PM skipping PR #{Number} — tests-added label present but no TE results comment yet", prNumber);
+                        continue;
+                    }
+                }
+
                 // Skip PRs already PM-approved
                 if (pr.Labels.Contains(PullRequestWorkflow.Labels.PmApproved, StringComparer.OrdinalIgnoreCase))
                 {

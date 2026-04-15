@@ -409,18 +409,62 @@ public class PlaywrightRunner
                             exitInfo = " Process is still running but not responding on expected port.";
                     }
 
-                    _logger.LogWarning("App under test did not become ready at {Url} within {Timeout}s.{ExitInfo}",
+                    _logger.LogWarning("App under test did not become ready at {Url} within {Timeout}s.{ExitInfo} — attempting build first",
                         baseUrl, config.AppStartupTimeoutSeconds, exitInfo);
 
-                    return new TestResult
+                    // Kill the failed process and try building before re-starting
+                    try { if (appProcess is not null && !appProcess.HasExited) appProcess.Kill(entireProcessTree: true); } catch { }
+                    appProcess?.Dispose();
+                    appProcess = null;
+
+                    // Build first, then retry app start
+                    var buildCommand = config.BuildCommand ?? "dotnet build --verbosity quiet";
+                    var (buildExe, buildArgs) = BuildRunner.ParseCommand(buildCommand);
+                    var buildPsi = new ProcessStartInfo(buildExe, buildArgs)
                     {
-                        Success = false,
-                        Output = $"App under test failed to start at {baseUrl}.{exitInfo}",
-                        Passed = 0, Failed = 0, Skipped = 0,
-                        Duration = TimeSpan.Zero,
-                        Tier = TestTier.UI,
-                        FailureDetails = [$"App did not respond at {baseUrl} within {config.AppStartupTimeoutSeconds}s.{exitInfo}"]
+                        WorkingDirectory = workspacePath,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        UseShellExecute = false,
+                        CreateNoWindow = true
                     };
+                    var buildProc = Process.Start(buildPsi);
+                    if (buildProc is not null)
+                    {
+                        await buildProc.WaitForExitAsync(ct);
+                        if (buildProc.ExitCode == 0)
+                        {
+                            _logger.LogInformation("Build succeeded, retrying app start for UI tests");
+                            var (proc2, detectedUrl2) = await StartAppUnderTestAsync(workspacePath, config, envVars, ct);
+                            appProcess = proc2;
+                            var retryUrl = detectedUrl2 ?? baseUrl;
+                            if (detectedUrl2 is not null) { baseUrl = detectedUrl2; envVars["BASE_URL"] = baseUrl; }
+                            ready = await WaitForAppReadyAsync(retryUrl, config.AppStartupTimeoutSeconds, ct);
+                        }
+                        else
+                        {
+                            var buildStderr = await buildProc.StandardError.ReadToEndAsync(ct);
+                            _logger.LogWarning("Build failed with code {Code} before UI test retry: {Stderr}",
+                                buildProc.ExitCode, buildStderr.Length > 1000 ? buildStderr[..1000] : buildStderr);
+                        }
+                    }
+
+                    if (!ready)
+                    {
+                        var finalExitInfo = "";
+                        if (appProcess is not null && appProcess.HasExited)
+                            finalExitInfo = $" Process exited with code {appProcess.ExitCode}.";
+
+                        return new TestResult
+                        {
+                            Success = false,
+                            Output = $"App under test failed to start at {baseUrl}.{finalExitInfo}",
+                            Passed = 0, Failed = 0, Skipped = 0,
+                            Duration = TimeSpan.Zero,
+                            Tier = TestTier.UI,
+                            FailureDetails = [$"App did not respond at {baseUrl} within {config.AppStartupTimeoutSeconds}s.{finalExitInfo}"]
+                        };
+                    }
                 }
 
                 _logger.LogInformation("App under test is ready at {Url}", baseUrl);
@@ -546,46 +590,53 @@ public class PlaywrightRunner
 
         // Capture output to detect the actual listening URL
         // AI-generated apps often hardcode UseUrls() which overrides our --urls/env var
-        var outputBuffer = new System.Text.StringBuilder();
+        var stdoutBuffer = new System.Text.StringBuilder();
+        var stderrBuffer = new System.Text.StringBuilder();
         string? detectedUrl = null;
+        var urlLock = new object();
         var listeningPattern = new System.Text.RegularExpressions.Regex(
             @"Now listening on:\s*(https?://[^\s]+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
-        _ = Task.Run(async () =>
+        var stdoutTask = Task.Run(async () =>
         {
             try
             {
                 string? line;
                 while ((line = await process.StandardOutput.ReadLineAsync(ct)) is not null)
                 {
-                    outputBuffer.AppendLine(line);
+                    lock (stdoutBuffer) stdoutBuffer.AppendLine(line);
                     var match = listeningPattern.Match(line);
-                    if (match.Success && detectedUrl is null)
+                    if (match.Success)
                     {
-                        // Prefer http over https for local testing
                         var url = match.Groups[1].Value;
-                        if (url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || detectedUrl is null)
-                            detectedUrl = url;
+                        lock (urlLock)
+                        {
+                            if (detectedUrl is null || url.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
+                                detectedUrl = url;
+                        }
                     }
                 }
             }
             catch { /* process exited */ }
         }, ct);
 
-        _ = Task.Run(async () =>
+        var stderrTask = Task.Run(async () =>
         {
             try
             {
                 string? line;
                 while ((line = await process.StandardError.ReadLineAsync(ct)) is not null)
                 {
-                    outputBuffer.AppendLine(line);
+                    lock (stderrBuffer) stderrBuffer.AppendLine(line);
                     var match = listeningPattern.Match(line);
-                    if (match.Success && detectedUrl is null)
+                    if (match.Success)
                     {
                         var url = match.Groups[1].Value;
-                        if (url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || detectedUrl is null)
-                            detectedUrl = url;
+                        lock (urlLock)
+                        {
+                            if (detectedUrl is null || url.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
+                                detectedUrl = url;
+                        }
                     }
                 }
             }
@@ -605,8 +656,16 @@ public class PlaywrightRunner
         {
             if (process.HasExited)
             {
+                // Wait for reader tasks to finish flushing before reading buffers
+                try { await Task.WhenAll(stdoutTask, stderrTask).WaitAsync(TimeSpan.FromSeconds(3), ct); }
+                catch { /* timeout is fine, best-effort */ }
+
+                string stdout, stderr;
+                lock (stdoutBuffer) { stdout = stdoutBuffer.ToString().Trim(); }
+                lock (stderrBuffer) { stderr = stderrBuffer.ToString().Trim(); }
+                var combinedOutput = string.Join("\n", new[] { stdout, stderr }.Where(s => !string.IsNullOrEmpty(s)));
                 _logger.LogWarning("App process exited with code {Code} before becoming ready. Output:\n{Output}",
-                    process.ExitCode, outputBuffer.ToString().Trim());
+                    process.ExitCode, combinedOutput);
             }
             else
             {
