@@ -642,33 +642,29 @@ public class PlaywrightRunner
 
                 var patched = content;
 
-                // Replace app.Urls.Clear() — just comment it out
+                // Comment out app.Urls.Clear() entirely
                 patched = System.Text.RegularExpressions.Regex.Replace(
                     patched,
-                    @"^\s*app\.Urls\.Clear\(\);\s*$",
-                    "// [PlaywrightRunner] Removed hardcoded Urls.Clear() — using ASPNETCORE_URLS",
+                    @"^(\s*)app\.Urls\.Clear\(\);",
+                    "$1// [PlaywrightRunner] app.Urls.Clear(); — removed so ASPNETCORE_URLS env var controls the port",
                     System.Text.RegularExpressions.RegexOptions.Multiline);
 
-                // Replace app.Urls.Add("http://...") with env-var-aware version
-                // Captures the original URL as fallback
+                // Comment out app.Urls.Add("http://...") entirely — let ASPNETCORE_URLS env var control the port.
+                // Previous approach of replacing with env var read didn't work reliably
+                // because dotnet run may skip recompilation. By commenting out the line,
+                // the app has NO programmatic URL override, so ASPNETCORE_URLS takes full effect.
                 patched = System.Text.RegularExpressions.Regex.Replace(
                     patched,
-                    @"app\.Urls\.Add\(""(https?://[^""]+)""\);",
-                    match =>
-                    {
-                        var originalUrl = match.Groups[1].Value;
-                        return $"app.Urls.Add(Environment.GetEnvironmentVariable(\"ASPNETCORE_URLS\") ?? \"{originalUrl}\");";
-                    });
+                    @"^(\s*)app\.Urls\.Add\(""(https?://[^""]+)""\);",
+                    "$1// [PlaywrightRunner] app.Urls.Add(\"$2\"); — removed so ASPNETCORE_URLS env var controls the port",
+                    System.Text.RegularExpressions.RegexOptions.Multiline);
 
                 // Also handle builder.WebHost.UseUrls("...") pattern
                 patched = System.Text.RegularExpressions.Regex.Replace(
                     patched,
-                    @"\.UseUrls\(""(https?://[^""]+)""\)",
-                    match =>
-                    {
-                        var originalUrl = match.Groups[1].Value;
-                        return $".UseUrls(Environment.GetEnvironmentVariable(\"ASPNETCORE_URLS\") ?? \"{originalUrl}\")";
-                    });
+                    @"^(\s*)(.+)\.UseUrls\(""(https?://[^""]+)""\)",
+                    "$1// [PlaywrightRunner] $2.UseUrls(\"$3\") — removed so ASPNETCORE_URLS env var controls the port",
+                    System.Text.RegularExpressions.RegexOptions.Multiline);
 
                 if (patched != content)
                 {
@@ -677,21 +673,24 @@ public class PlaywrightRunner
                         "Patched hardcoded port bindings in {File} to respect ASPNETCORE_URLS",
                         relPath);
 
-                    // Force rebuild: delete bin/ directory so dotnet run doesn't use
-                    // the stale pre-patch build output. Without this, dotnet run may
-                    // skip recompilation and run the old DLL with hardcoded ports.
+                    // Force rebuild: delete bin/ and obj/ directories so dotnet run
+                    // cannot skip recompilation. Without this, dotnet run may use the
+                    // stale pre-patch build output with hardcoded ports.
                     var projectDir = Path.GetDirectoryName(programFile)!;
-                    var binDir = Path.Combine(projectDir, "bin");
-                    if (Directory.Exists(binDir))
+                    foreach (var dir in new[] { "bin", "obj" })
                     {
-                        try
+                        var targetDir = Path.Combine(projectDir, dir);
+                        if (Directory.Exists(targetDir))
                         {
-                            Directory.Delete(binDir, true);
-                            _logger.LogInformation("Deleted {BinDir} to force rebuild with patched port bindings", binDir);
-                        }
-                        catch (Exception binEx)
-                        {
-                            _logger.LogDebug(binEx, "Could not delete bin/ directory, rebuild may use stale output");
+                            try
+                            {
+                                Directory.Delete(targetDir, true);
+                                _logger.LogInformation("Deleted {Dir} to force rebuild with patched port bindings", targetDir);
+                            }
+                            catch (Exception dirEx)
+                            {
+                                _logger.LogDebug(dirEx, "Could not delete {Dir}, rebuild may use stale output", targetDir);
+                            }
                         }
                     }
                 }
