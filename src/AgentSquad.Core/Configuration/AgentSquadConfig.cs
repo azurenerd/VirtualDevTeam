@@ -235,7 +235,10 @@ public class EngineerPoolConfig
 
 public class DashboardConfig
 {
+    /// <summary>Runner port — hosts the API and embedded dashboard.</summary>
     public int Port { get; set; } = 5050;
+    /// <summary>Standalone dashboard port — the separate Dashboard.Host process.</summary>
+    public int StandalonePort { get; set; } = 5051;
     public bool EnableSignalR { get; set; } = true;
 }
 

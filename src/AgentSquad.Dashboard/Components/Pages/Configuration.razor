@@ -623,9 +623,14 @@ else if (_config is not null)
                 <div class="config-card-body">
                     <div class="config-field-row">
                         <div class="config-field">
-                            <label title="The port the Blazor dashboard UI listens on. Must not conflict with other services. Requires restart to take effect.">Port</label>
+                            <label title="The port the Runner process listens on (hosts API + embedded dashboard). Requires restart.">Runner Port</label>
                             <input type="number" @bind="_config.Dashboard.Port" class="config-input config-input-number" min="1024" max="65535"
-                                title="Dashboard HTTP port. Default: 5050. Change if another service is using this port. Requires app restart." />
+                                title="Runner HTTP port (API + embedded dashboard). Default: 5050. Requires app restart." />
+                        </div>
+                        <div class="config-field">
+                            <label title="The port the standalone Dashboard.Host process listens on. Requires restart.">Dashboard Port</label>
+                            <input type="number" @bind="_config.Dashboard.StandalonePort" class="config-input config-input-number" min="1024" max="65535"
+                                title="Standalone dashboard HTTP port. Default: 5051. Requires app restart." />
                         </div>
                         <div class="config-field" title="Enables real-time push updates to the dashboard via SignalR WebSockets. When off, the dashboard uses polling instead.">
                             <label>Enable SignalR</label>

@@ -11,8 +11,9 @@ var builder = WebApplication.CreateBuilder(args);
 var runnerUrl = builder.Configuration.GetValue("RunnerUrl", "http://localhost:5050")!;
 Console.WriteLine($"🔗 Connecting to Runner API at {runnerUrl}");
 
-// Dashboard port — use a different port than the Runner
-var dashboardPort = builder.Configuration.GetValue("DashboardPort", 5051);
+// Dashboard port — check AgentSquad config first, then standalone override, then default
+var dashboardPort = builder.Configuration.GetValue("AgentSquad:Dashboard:StandalonePort",
+    builder.Configuration.GetValue("DashboardPort", 5051));
 builder.WebHost.UseUrls($"http://localhost:{dashboardPort}");
 
 // Always resolve RCL static web assets — needed for _content/ paths on all machines
