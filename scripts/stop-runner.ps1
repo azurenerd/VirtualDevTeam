@@ -16,33 +16,33 @@ param(
 $ErrorActionPreference = "Stop"
 
 function Stop-RunnerByPid {
-    param([int]$Pid, [bool]$ForceKill)
+    param([int]$ProcessId, [bool]$ForceKill)
 
-    $proc = Get-Process -Id $Pid -ErrorAction SilentlyContinue
+    $proc = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
     if (-not $proc) {
-        Write-Host "Process $Pid is not running." -ForegroundColor Yellow
+        Write-Host "Process $ProcessId is not running." -ForegroundColor Yellow
         return $false
     }
 
     if ($ForceKill) {
-        Write-Host "Force-killing runner (PID: $Pid)..." -ForegroundColor Red
-        Stop-Process -Id $Pid -Force
+        Write-Host "Force-killing runner (PID: $ProcessId)..." -ForegroundColor Red
+        Stop-Process -Id $ProcessId -Force
     } else {
-        Write-Host "Stopping runner (PID: $Pid)..." -ForegroundColor Cyan
-        Stop-Process -Id $Pid
+        Write-Host "Stopping runner (PID: $ProcessId)..." -ForegroundColor Cyan
+        Stop-Process -Id $ProcessId
         # Wait up to 30 seconds for graceful shutdown
         $timeout = 30
         $elapsed = 0
-        while ((Get-Process -Id $Pid -ErrorAction SilentlyContinue) -and $elapsed -lt $timeout) {
+        while ((Get-Process -Id $ProcessId -ErrorAction SilentlyContinue) -and $elapsed -lt $timeout) {
             Start-Sleep -Seconds 1
             $elapsed++
             Write-Host "." -NoNewline
         }
         Write-Host ""
 
-        if (Get-Process -Id $Pid -ErrorAction SilentlyContinue) {
+        if (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue) {
             Write-Host "Process didn't stop gracefully, force-killing..." -ForegroundColor Yellow
-            Stop-Process -Id $Pid -Force
+            Stop-Process -Id $ProcessId -Force
         }
     }
     return $true
@@ -51,7 +51,7 @@ function Stop-RunnerByPid {
 # Try PID file first
 if (Test-Path $PidFile) {
     $runnerPid = [int](Get-Content $PidFile -Raw).Trim()
-    $stopped = Stop-RunnerByPid -Pid $runnerPid -ForceKill $Force.IsPresent
+    $stopped = Stop-RunnerByPid -ProcessId $runnerPid -ForceKill $Force.IsPresent
 
     if ($stopped) {
         Remove-Item $PidFile -Force
@@ -75,7 +75,7 @@ if (Test-Path $PidFile) {
 
     foreach ($p in $procs) {
         Write-Host "Found AgentSquad runner (PID: $($p.ProcessId))" -ForegroundColor Cyan
-        Stop-RunnerByPid -Pid $p.ProcessId -ForceKill $Force.IsPresent
+        Stop-RunnerByPid -ProcessId $p.ProcessId -ForceKill $Force.IsPresent
     }
     Write-Host "Done." -ForegroundColor Green
 }

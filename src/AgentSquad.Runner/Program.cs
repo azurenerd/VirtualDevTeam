@@ -11,6 +11,7 @@ using AgentSquad.Dashboard.Components;
 using AgentSquad.Dashboard.Hubs;
 using AgentSquad.Dashboard.Services;
 using AgentSquad.Runner;
+using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -292,9 +293,10 @@ promptApi.MapGet("/metadata/{**templatePath}", async (string templatePath, IProm
     return metadata is not null ? Results.Ok(metadata) : Results.NotFound();
 });
 
-promptApi.MapPost("/reset/{**templatePath}", async (string templatePath, IPromptTemplateService svc, CancellationToken ct) =>
+promptApi.MapPost("/reset/{**templatePath}", async (string templatePath, IPromptTemplateService svc, IOptions<AgentSquadConfig> config, CancellationToken ct) =>
 {
-    var defaultsPath = Path.GetFullPath("prompts-defaults");
+    var promptsBase = Path.GetFullPath(config.Value.Prompts.BasePath);
+    var defaultsPath = Path.Combine(Path.GetDirectoryName(promptsBase)!, "prompts-defaults");
     var defaultFile = Path.Combine(defaultsPath, templatePath + ".md");
     if (!File.Exists(defaultFile)) return Results.NotFound();
     var defaultContent = await File.ReadAllTextAsync(defaultFile, ct);

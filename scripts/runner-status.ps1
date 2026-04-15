@@ -39,11 +39,11 @@ if (-not (Test-Path $PidFile)) {
     exit 1
 }
 
-$pid = [int](Get-Content $PidFile -Raw).Trim()
-$proc = Get-Process -Id $pid -ErrorAction SilentlyContinue
+$runnerPid = [int](Get-Content $PidFile -Raw).Trim()
+$proc = Get-Process -Id $runnerPid -ErrorAction SilentlyContinue
 
 if (-not $proc) {
-    Write-Host "Status: CRASHED (PID $pid is not running)" -ForegroundColor Red
+    Write-Host "Status: CRASHED (PID $runnerPid is not running)" -ForegroundColor Red
     Write-Host "  The runner was started but is no longer running."
     Write-Host "  Use '.\scripts\start-runner.ps1' to restart."
     Remove-Item $PidFile -Force -ErrorAction SilentlyContinue
@@ -56,7 +56,7 @@ $uptimeStr = "{0}d {1}h {2}m {3}s" -f $uptime.Days, $uptime.Hours, $uptime.Minut
 $memMB = [math]::Round($proc.WorkingSet64 / 1MB, 1)
 
 Write-Host "Status: RUNNING" -ForegroundColor Green
-Write-Host "  PID:      $pid"
+Write-Host "  PID:      $runnerPid"
 Write-Host "  Uptime:   $uptimeStr"
 Write-Host "  Memory:   ${memMB} MB"
 Write-Host "  Started:  $($proc.StartTime.ToString('yyyy-MM-dd HH:mm:ss'))"

@@ -23,6 +23,8 @@ Also read the `.github/copilot-instructions.md` (auto-loaded) for architecture, 
 
 Before starting a new agent workflow run, fully reset the target GitHub repo:
 
+> ⚠️ **ALWAYS use a reset script (Option A or B).** Never do manual resets — the scripts handle DB cleanup, workspace deletion, process stops, file cleanup, AND verify everything. Manual resets miss steps (e.g., stale SQLite DB causes ghost notifications).
+
 ### Option A: Use the fresh-reset script (recommended)
 ```powershell
 # No PAT argument needed — reads from dotnet user-secrets automatically
@@ -73,6 +75,14 @@ Write-Host "Branches: $($branches.Count) ($($branches.name -join ', '))"  # MUST
 # Files: must only be preserved files (.gitignore, OriginalDesignConcept.html)
 $contents = Invoke-RestMethod "https://api.github.com/repos/$repo/contents?ref=main" -Headers $headers
 Write-Host "Repo files: $($contents.name -join ', ')"  # MUST only show preserved files
+
+# DB: must have no stale checkpoint databases
+$dbs = Get-ChildItem src\AgentSquad.Runner -Filter "agentsquad_*.db*" -ErrorAction SilentlyContinue
+Write-Host "Stale DBs: $($dbs.Count)"  # MUST be 0 — stale DBs cause ghost notifications
+
+# Workspaces: must be empty
+$ws = Get-ChildItem C:\Agents -Directory -ErrorAction SilentlyContinue
+Write-Host "Agent workspaces: $($ws.Count)"  # MUST be 0
 ```
 
 > ⚠️ **CRITICAL: Always paginate GitHub API calls during reset.** A typical agent run creates 200+ issues. The API returns max 100 per page. A single non-paginated fetch will miss items and leave the repo dirty. When closing items, re-fetch page 1 each iteration (closing shifts items between pages).

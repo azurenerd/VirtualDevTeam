@@ -2,10 +2,12 @@
 @using AgentSquad.Core.Configuration
 @using AgentSquad.Core.Workspace
 @using AgentSquad.Dashboard.Services
+@using Microsoft.Extensions.Options
 @using AgentSquad.Core.Prompts
 @inject IConfigurationService ConfigService
 @inject IDashboardDataService DataService
 @inject IPromptTemplateService PromptService
+@inject IOptions<AgentSquadConfig> SquadConfig
 @inject ILogger<Configuration> Logger
 @rendermode InteractiveServer
 
@@ -1718,11 +1720,12 @@ else if (_config is not null)
     {
         try
         {
-            // Read from prompts-defaults/ and write back to prompts/
-            var defaultPath = Path.Combine("prompts-defaults", key + ".md");
-            if (File.Exists(defaultPath))
+            var promptsBase = Path.GetFullPath(SquadConfig.Value.Prompts.BasePath);
+            var defaultsPath = Path.Combine(Path.GetDirectoryName(promptsBase)!, "prompts-defaults");
+            var defaultFile = Path.Combine(defaultsPath, key + ".md");
+            if (File.Exists(defaultFile))
             {
-                var defaultContent = await File.ReadAllTextAsync(defaultPath);
+                var defaultContent = await File.ReadAllTextAsync(defaultFile);
                 await PromptService.SaveRawContentAsync(key, defaultContent);
                 _promptContents[key] = defaultContent;
                 _modifiedPrompts.Remove(key);
