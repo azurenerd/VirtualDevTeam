@@ -862,6 +862,150 @@ else if (_config is not null)
         </div>
 
         @* ═══════════════════════════════════════════════════════════════════
+           SME AGENTS — dynamic specialist agents
+           ═══════════════════════════════════════════════════════════════════ *@
+        <div class="config-divider"></div>
+
+        <div class="config-section-header">
+            <span class="config-section-icon">🧠</span>
+            <div>
+                <h2 class="config-section-title">SME Agent System</h2>
+                <p class="config-section-desc">
+                    Configure dynamic specialist (SME) agents that can be created by the PM or PE during workflow.
+                    MCP servers provide tool capabilities; templates define reusable specialist roles.
+                </p>
+            </div>
+        </div>
+
+        <div class="config-card">
+            <div class="config-row">
+                <label class="config-label">
+                    SME System Enabled
+                    <span class="config-hint">When enabled, PM can propose team composition and PE can request specialist agents</span>
+                </label>
+                <label class="toggle-switch">
+                    <input type="checkbox" @bind="_config.SmeAgents.Enabled" />
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+
+            <div class="config-row">
+                <label class="config-label">
+                    Max Total SME Agents
+                    <span class="config-hint">Maximum number of SME agents that can run simultaneously</span>
+                </label>
+                <input type="number" class="config-input config-input-small"
+                       @bind="_config.SmeAgents.MaxTotalSmeAgents" min="1" max="20" />
+            </div>
+
+            <div class="config-row">
+                <label class="config-label">
+                    Allow Agent-Created Definitions
+                    <span class="config-hint">Allow PM/PE to create new SME definitions at runtime (still human-gated)</span>
+                </label>
+                <label class="toggle-switch">
+                    <input type="checkbox" @bind="_config.SmeAgents.AllowAgentCreatedDefinitions" />
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+
+            <div class="config-row">
+                <label class="config-label">
+                    Persist Definitions
+                    <span class="config-hint">Save agent-created definitions to JSON for reuse across runs</span>
+                </label>
+                <label class="toggle-switch">
+                    <input type="checkbox" @bind="_config.SmeAgents.PersistDefinitions" />
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+
+            @* MCP Servers *@
+            <div class="config-subsection">
+                <h3 class="config-subsection-title">🔌 Registered MCP Servers</h3>
+                <p class="config-hint" style="margin-bottom: 0.5rem">
+                    MCP servers provide tools (GitHub, fetch, filesystem, etc.) that agents can use.
+                    Configure in appsettings.json McpServers section.
+                </p>
+                @if (_config.McpServers.Count == 0)
+                {
+                    <p class="config-hint"><em>No MCP servers configured. Add to appsettings.json → McpServers section.</em></p>
+                }
+                else
+                {
+                    <div class="mcp-server-list">
+                        @foreach (var (name, server) in _config.McpServers)
+                        {
+                            <div class="mcp-server-card">
+                                <div class="mcp-server-name">
+                                    <span class="mcp-transport-badge">@server.Transport</span>
+                                    @name
+                                </div>
+                                <div class="mcp-server-desc">@server.Description</div>
+                                @if (server.ProvidedCapabilities.Count > 0)
+                                {
+                                    <div class="mcp-capabilities">
+                                        @foreach (var cap in server.ProvidedCapabilities)
+                                        {
+                                            <span class="mcp-cap-tag">@cap</span>
+                                        }
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+
+            @* SME Templates *@
+            <div class="config-subsection">
+                <h3 class="config-subsection-title">📋 SME Templates</h3>
+                <p class="config-hint" style="margin-bottom: 0.5rem">
+                    Pre-configured specialist roles. The PM can activate these during team composition.
+                    Configure in appsettings.json → SmeAgents → Templates section.
+                </p>
+                @if (_config.SmeAgents.Templates.Count == 0)
+                {
+                    <p class="config-hint"><em>No SME templates configured.</em></p>
+                }
+                else
+                {
+                    <div class="sme-template-list">
+                        @foreach (var (id, template) in _config.SmeAgents.Templates)
+                        {
+                            <div class="sme-template-card">
+                                <div class="sme-template-header">
+                                    <span class="sme-template-name">@template.RoleName</span>
+                                    <span class="sme-template-id">@id</span>
+                                </div>
+                                <div class="sme-template-details">
+                                    <span>Tier: @template.ModelTier</span>
+                                    <span>Mode: @template.WorkflowMode</span>
+                                    <span>Max: @template.MaxInstances</span>
+                                </div>
+                                @if (template.Capabilities.Count > 0)
+                                {
+                                    <div class="mcp-capabilities">
+                                        @foreach (var cap in template.Capabilities)
+                                        {
+                                            <span class="mcp-cap-tag">@cap</span>
+                                        }
+                                    </div>
+                                }
+                                @if (template.McpServers.Count > 0)
+                                {
+                                    <div class="sme-template-servers">
+                                        MCP: @string.Join(", ", template.McpServers)
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+        </div>
+
+        @* ═══════════════════════════════════════════════════════════════════
            GITHUB REPO CLEANUP — separated from config
            ═══════════════════════════════════════════════════════════════════ *@
         <div class="config-divider"></div>
