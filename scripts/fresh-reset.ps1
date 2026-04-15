@@ -20,7 +20,8 @@
     The GitHub repo in owner/repo format. Default: azurenerd/ReportingDashboard
 
 .PARAMETER GitHubToken
-    GitHub PAT for API access. Required for issue/PR cleanup.
+    GitHub PAT for API access. If not provided, reads from dotnet user-secrets
+    then falls back to appsettings.json.
 
 .PARAMETER PreserveFiles
     Comma-separated list of files to keep in the repo. Default: OriginalDesignConcept.html,.gitignore
@@ -101,8 +102,32 @@ if ($SkipGitHub) {
 }
 else {
     if (-not $GitHubToken) {
-        Write-Host "`n[5-8] No GitHubToken provided — skipping GitHub operations" -ForegroundColor DarkGray
-        Write-Host "      Pass -GitHubToken to enable repo/issue/PR cleanup" -ForegroundColor DarkGray
+        # Try user-secrets first, then appsettings.json
+        $runnerProject = Join-Path $PSScriptRoot ".." "src" "AgentSquad.Runner"
+        try {
+            $secretsOutput = dotnet user-secrets list --project $runnerProject 2>&1
+            $patLine = $secretsOutput | Where-Object { $_ -match 'GitHubToken' }
+            if ($patLine) {
+                $GitHubToken = ($patLine -split '= ', 2)[1].Trim()
+                Write-Host "  Using PAT from dotnet user-secrets" -ForegroundColor Gray
+            }
+        } catch { }
+
+        if (-not $GitHubToken) {
+            $settingsPath = Join-Path $runnerProject "appsettings.json"
+            if (Test-Path $settingsPath) {
+                $settings = Get-Content $settingsPath -Raw | ConvertFrom-Json
+                $GitHubToken = $settings.AgentSquad.Project.GitHubToken
+                if ($GitHubToken) {
+                    Write-Host "  Using PAT from appsettings.json" -ForegroundColor Gray
+                }
+            }
+        }
+    }
+
+    if (-not $GitHubToken) {
+        Write-Host "`n[5-8] No PAT found — skipping GitHub operations" -ForegroundColor DarkGray
+        Write-Host "      Set PAT via: dotnet user-secrets set 'AgentSquad:Project:GitHubToken' '<your-pat>' --project src\AgentSquad.Runner" -ForegroundColor DarkGray
     }
     else {
         $owner, $repo = $GitHubRepo -split "/"
@@ -320,6 +345,16 @@ if (-not $SkipGitHub -and $GitHubToken) {
         $allGood = $false
     } else {
         Write-Host "      OK: No agent branches" -ForegroundColor Green
+    }
+
+    # Verify repo files — only preserved files should remain
+    $repoContents = Invoke-RestMethod -Uri "$baseUrl2/contents?ref=main" -Headers $headers2 -ErrorAction SilentlyContinue
+    $extraFiles = @($repoContents | Where-Object { $_.name -notin $preserveList })
+    if ($extraFiles.Count -gt 0) {
+        Write-Host "      FAIL: Extra files remain: $($extraFiles.name -join ', ')" -ForegroundColor Red
+        $allGood = $false
+    } else {
+        Write-Host "      OK: Only preserved files remain ($($preserveList -join ', '))" -ForegroundColor Green
     }
 }
 

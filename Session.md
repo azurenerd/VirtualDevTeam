@@ -25,20 +25,19 @@ Before starting a new agent workflow run, fully reset the target GitHub repo:
 
 ### Option A: Use the fresh-reset script (recommended)
 ```powershell
-# Read PAT from appsettings.json
-$settings = Get-Content src\AgentSquad.Runner\appsettings.json | ConvertFrom-Json
-$pat = $settings.AgentSquad.Project.GitHubToken
+# No PAT argument needed — reads from dotnet user-secrets automatically
+.\scripts\fresh-reset.ps1
 
-# Full reset — stops runner, closes issues/PRs, deletes branches, resets repo files
+# Or with explicit PAT
 .\scripts\fresh-reset.ps1 -GitHubToken $pat
 
 # Preserve the HTML design reference (default preserves .gitignore + OriginalDesignConcept.html)
-.\scripts\fresh-reset.ps1 -GitHubToken $pat -PreserveFiles "OriginalDesignConcept.html,.gitignore"
+.\scripts\fresh-reset.ps1 -PreserveFiles "OriginalDesignConcept.html,.gitignore"
 ```
 
-### Option B: Use reset-runner script (reads PAT from appsettings.json automatically)
+### Option B: Use reset-runner script (reads PAT from user-secrets automatically)
 ```powershell
-# Full reset — reads PAT from appsettings.json, stops runner, cleans GitHub + local state
+# Full reset — reads PAT from user-secrets (falls back to appsettings.json), stops runner, cleans GitHub + local state
 .\scripts\reset-runner.ps1
 ```
 
@@ -49,12 +48,17 @@ This is only available in embedded mode (Runner-hosted dashboard on port 5050).
 
 ### Verify reset before proceeding
 ```powershell
+# Get PAT from user-secrets
+$patLine = dotnet user-secrets list --project src\AgentSquad.Runner 2>&1 | Where-Object { $_ -match 'GitHubToken' }
+$pat = ($patLine -split '= ', 2)[1].Trim()
+$settings = Get-Content src\AgentSquad.Runner\appsettings.json | ConvertFrom-Json
+$repo = $settings.AgentSquad.Project.GitHubRepo
+
 # Check GitHub API rate limit (must have remaining > 100)
 $headers = @{ Authorization = "token $pat"; Accept = "application/vnd.github+json" }
 Invoke-RestMethod "https://api.github.com/rate_limit" -Headers $headers | Select-Object -ExpandProperty rate
 
 # Must all return 0 — MUST PAGINATE (GitHub returns max 100/page, runs often create 200+ issues)
-$repo = $settings.AgentSquad.Project.GitHubRepo
 $page = 1; $total = 0
 do {
     $batch = Invoke-RestMethod "https://api.github.com/repos/$repo/issues?state=open&per_page=100&page=$page" -Headers $headers
@@ -65,11 +69,19 @@ Write-Host "Open issues+PRs: $total"  # MUST be 0
 # Branches: must only be 'main'
 $branches = Invoke-RestMethod "https://api.github.com/repos/$repo/branches?per_page=100" -Headers $headers
 Write-Host "Branches: $($branches.Count) ($($branches.name -join ', '))"  # MUST be 1 (main)
+
+# Files: must only be preserved files (.gitignore, OriginalDesignConcept.html)
+$contents = Invoke-RestMethod "https://api.github.com/repos/$repo/contents?ref=main" -Headers $headers
+Write-Host "Repo files: $($contents.name -join ', ')"  # MUST only show preserved files
 ```
 
 > ⚠️ **CRITICAL: Always paginate GitHub API calls during reset.** A typical agent run creates 200+ issues. The API returns max 100 per page. A single non-paginated fetch will miss items and leave the repo dirty. When closing items, re-fetch page 1 each iteration (closing shifts items between pages).
 
-**Important:** The PAT is in `src/AgentSquad.Runner/appsettings.json` under `AgentSquad.Project.GitHubToken`. Note: this user is an Enterprise Managed User (EMU) — `gh issue create` may fail with 403. Use the runner's Octokit integration or direct REST API with the PAT instead.
+**Important:** The PAT is stored in `dotnet user-secrets` for the Runner project. To set or update it:
+```powershell
+dotnet user-secrets set "AgentSquad:Project:GitHubToken" "<your-pat>" --project src\AgentSquad.Runner
+```
+The repo name is read from `src/AgentSquad.Runner/appsettings.json` under `AgentSquad.Project.GitHubRepo`. Note: this user is an Enterprise Managed User (EMU) — `gh issue create` may fail with 403. Use the runner's Octokit integration or direct REST API with the PAT instead.
 
 ---
 
@@ -211,11 +223,11 @@ Optional independent process. Connects to Runner REST API at `/api/dashboard/*`.
 
 ## 6. Key Configuration
 
-Config is in `src/AgentSquad.Runner/appsettings.json` (gitignored). Template: `appsettings.template.json`.
+Config is in `src/AgentSquad.Runner/appsettings.json`. Sensitive values (PAT) are in `dotnet user-secrets`.
 
 Key settings:
 - `AgentSquad.Project.GitHubRepo`: `"azurenerd/ReportingDashboard"`
-- `AgentSquad.Project.GitHubToken`: PAT for GitHub API
+- `AgentSquad.Project.GitHubToken`: Stored in **dotnet user-secrets** (not in appsettings.json)
 - `AgentSquad.CopilotCli.Enabled`: `true` (routes all AI through `copilot` CLI)
 - `AgentSquad.CopilotCli.SinglePassMode`: `true` (single AI call per doc, not multi-turn)
 - `AgentSquad.CopilotCli.MaxConcurrentRequests`: `5`

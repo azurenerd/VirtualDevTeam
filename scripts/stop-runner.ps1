@@ -50,8 +50,8 @@ function Stop-RunnerByPid {
 
 # Try PID file first
 if (Test-Path $PidFile) {
-    $pid = [int](Get-Content $PidFile -Raw).Trim()
-    $stopped = Stop-RunnerByPid -Pid $pid -ForceKill $Force.IsPresent
+    $runnerPid = [int](Get-Content $PidFile -Raw).Trim()
+    $stopped = Stop-RunnerByPid -Pid $runnerPid -ForceKill $Force.IsPresent
 
     if ($stopped) {
         Remove-Item $PidFile -Force

@@ -6,9 +6,10 @@
     1. Stops any running AgentSquad runner process
     2. Closes all open issues and PRs on the target GitHub repo
     3. Deletes all agent branches (keeps main/master only)
-    4. Deletes agent-generated markdown docs from the repo (Research.md, PMSpec.md, etc.)
+    4. Deletes agent-generated files from the repo (keeps only preserved files)
     5. Deletes local agent workspace directories (C:\Agents by default)
     6. Deletes the SQLite checkpoint/state DB
+    7. Verifies the repo is fully clean before reporting success
 .EXAMPLE
     .\scripts\reset-runner.ps1
     .\scripts\reset-runner.ps1 -WorkspaceRoot "D:\AgentWorkspaces" -SkipGitHub
@@ -16,102 +17,157 @@
 param(
     [string]$WorkspaceRoot = "C:\Agents",
     [string]$SettingsPath = (Join-Path $PSScriptRoot ".." "src" "AgentSquad.Runner" "appsettings.json"),
+    [string]$RunnerProjectDir = (Join-Path $PSScriptRoot ".." "src" "AgentSquad.Runner"),
+    [string]$PreserveFiles = "OriginalDesignConcept.html,.gitignore",
     [switch]$SkipGitHub,
     [switch]$SkipLocal
 )
 
 $ErrorActionPreference = "Continue"
+$preserveList = $PreserveFiles -split "," | ForEach-Object { $_.Trim() }
 
 Write-Host "═══════════════════════════════════════════" -ForegroundColor Cyan
 Write-Host "  AgentSquad Full Reset" -ForegroundColor Cyan
 Write-Host "═══════════════════════════════════════════" -ForegroundColor Cyan
 
 # ── Phase 1: Stop runner ────────────────────────────
-Write-Host "`n▶ Phase 1/4: Stopping runner..." -ForegroundColor Yellow
+Write-Host "`n▶ Phase 1/5: Stopping runner..." -ForegroundColor Yellow
 & (Join-Path $PSScriptRoot "stop-runner.ps1") -ErrorAction SilentlyContinue
 
 # ── Phase 2: Clean GitHub ───────────────────────────
 if (-not $SkipGitHub) {
-    Write-Host "`n▶ Phase 2/4: Cleaning GitHub repository..." -ForegroundColor Yellow
+    Write-Host "`n▶ Phase 2/5: Cleaning GitHub repository..." -ForegroundColor Yellow
 
-    # Read PAT and repo from appsettings.json
+    # Read repo name from appsettings.json
     if (-not (Test-Path $SettingsPath)) {
         Write-Host "  ⚠ appsettings.json not found at $SettingsPath — skipping GitHub cleanup" -ForegroundColor Red
     } else {
         $settings = Get-Content $SettingsPath -Raw | ConvertFrom-Json
-        $pat = $settings.AgentSquad.Project.GitHubToken
         $repo = $settings.AgentSquad.Project.GitHubRepo
-        $headers = @{ Authorization = "token $pat"; Accept = "application/vnd.github+json" }
 
-        Write-Host "  Repo: $repo" -ForegroundColor Gray
-
-        # Close all open issues
-        $page = 1
-        $closedIssues = 0
-        do {
-            $issues = Invoke-RestMethod "https://api.github.com/repos/$repo/issues?state=open&per_page=100&page=$page" -Headers $headers -ErrorAction SilentlyContinue
-            foreach ($i in $issues) {
-                if ($i.pull_request) { continue }
-                Invoke-RestMethod "https://api.github.com/repos/$repo/issues/$($i.number)" -Method Patch -Headers $headers -Body '{"state":"closed"}' -ContentType 'application/json' -ErrorAction SilentlyContinue | Out-Null
-                $closedIssues++
+        # Get PAT: try user-secrets first, fall back to appsettings.json
+        $pat = $null
+        try {
+            $secretsOutput = dotnet user-secrets list --project $RunnerProjectDir 2>&1
+            $patLine = $secretsOutput | Where-Object { $_ -match 'GitHubToken' }
+            if ($patLine) {
+                $pat = ($patLine -split '= ', 2)[1].Trim()
             }
-            $page++
-        } while ($issues.Count -eq 100)
-        Write-Host "  Closed $closedIssues issues" -ForegroundColor Green
+        } catch { }
 
-        # Close all open PRs
-        $closedPrs = 0
-        $prs = Invoke-RestMethod "https://api.github.com/repos/$repo/pulls?state=open&per_page=100" -Headers $headers -ErrorAction SilentlyContinue
-        foreach ($pr in $prs) {
-            Invoke-RestMethod "https://api.github.com/repos/$repo/pulls/$($pr.number)" -Method Patch -Headers $headers -Body '{"state":"closed"}' -ContentType 'application/json' -ErrorAction SilentlyContinue | Out-Null
-            $closedPrs++
+        if (-not $pat) {
+            $pat = $settings.AgentSquad.Project.GitHubToken
         }
-        Write-Host "  Closed $closedPrs PRs" -ForegroundColor Green
 
-        # Delete all non-main branches
-        $deletedBranches = 0
-        $branches = Invoke-RestMethod "https://api.github.com/repos/$repo/branches?per_page=100" -Headers $headers -ErrorAction SilentlyContinue
-        foreach ($b in $branches) {
-            if ($b.name -eq "main" -or $b.name -eq "master") { continue }
-            Invoke-RestMethod "https://api.github.com/repos/$repo/git/refs/heads/$($b.name)" -Method Delete -Headers $headers -ErrorAction SilentlyContinue | Out-Null
-            $deletedBranches++
-        }
-        Write-Host "  Deleted $deletedBranches branches" -ForegroundColor Green
-
-        # Reset repo to baseline if BaselineCommitSha is configured
-        $baselineCommit = $settings.AgentSquad.Project.BaselineCommitSha
-        if ($baselineCommit) {
-            Write-Host "  Resetting repo to baseline commit $($baselineCommit.Substring(0,8))..." -ForegroundColor Cyan
-            try {
-                $baseline = Invoke-RestMethod "https://api.github.com/repos/$repo/commits/$baselineCommit" -Headers $headers
-                $baseTreeSha = $baseline.commit.tree.sha
-
-                $mainRef = Invoke-RestMethod "https://api.github.com/repos/$repo/git/ref/heads/main" -Headers $headers
-                $newCommit = @{
-                    message = "Reset repo to baseline for fresh agent run"
-                    tree = $baseTreeSha
-                    parents = @($mainRef.object.sha)
-                } | ConvertTo-Json -Depth 5
-                $commit = Invoke-RestMethod "https://api.github.com/repos/$repo/git/commits" -Method Post -Headers $headers -Body $newCommit -ContentType 'application/json'
-
-                $updateRef = @{ sha = $commit.sha; force = $false } | ConvertTo-Json
-                Invoke-RestMethod "https://api.github.com/repos/$repo/git/refs/heads/main" -Method Patch -Headers $headers -Body $updateRef -ContentType 'application/json' | Out-Null
-                Write-Host "  Repo reset to baseline $($commit.sha.Substring(0,8))" -ForegroundColor Green
-            } catch {
-                Write-Host "  ⚠ Baseline reset failed: $_" -ForegroundColor Red
-            }
+        if (-not $pat) {
+            Write-Host "  ⚠ No PAT found in user-secrets or appsettings.json — skipping GitHub cleanup" -ForegroundColor Red
+            Write-Host "    Set PAT via: dotnet user-secrets set 'AgentSquad:Project:GitHubToken' '<your-pat>' --project src\AgentSquad.Runner" -ForegroundColor Gray
         } else {
-            Write-Host "  ⚠ No BaselineCommitSha configured — skipping repo file reset" -ForegroundColor Yellow
-            Write-Host "    Set AgentSquad.Project.BaselineCommitSha in appsettings.json to enable" -ForegroundColor Gray
+            $headers = @{ Authorization = "token $pat"; Accept = "application/vnd.github+json" }
+            Write-Host "  Repo: $repo" -ForegroundColor Gray
+
+            # Close all open issues (paginated, re-fetch page 1 each pass)
+            $closedIssues = 0
+            do {
+                $issues = Invoke-RestMethod "https://api.github.com/repos/$repo/issues?state=open&per_page=100&page=1" -Headers $headers -ErrorAction SilentlyContinue
+                $issueOnly = @($issues | Where-Object { -not $_.pull_request })
+                foreach ($i in $issueOnly) {
+                    Invoke-RestMethod "https://api.github.com/repos/$repo/issues/$($i.number)" -Method Patch -Headers $headers -Body '{"state":"closed"}' -ContentType 'application/json' -ErrorAction SilentlyContinue | Out-Null
+                    $closedIssues++
+                }
+            } while ($issueOnly.Count -gt 0)
+            Write-Host "  Closed $closedIssues issues" -ForegroundColor Green
+
+            # Close all open PRs (paginated, re-fetch page 1 each pass)
+            $closedPrs = 0
+            do {
+                $prs = Invoke-RestMethod "https://api.github.com/repos/$repo/pulls?state=open&per_page=100&page=1" -Headers $headers -ErrorAction SilentlyContinue
+                foreach ($pr in $prs) {
+                    Invoke-RestMethod "https://api.github.com/repos/$repo/pulls/$($pr.number)" -Method Patch -Headers $headers -Body '{"state":"closed"}' -ContentType 'application/json' -ErrorAction SilentlyContinue | Out-Null
+                    $closedPrs++
+                }
+            } while ($prs.Count -gt 0)
+            Write-Host "  Closed $closedPrs PRs" -ForegroundColor Green
+
+            # Delete all non-main branches
+            $deletedBranches = 0
+            $branches = Invoke-RestMethod "https://api.github.com/repos/$repo/branches?per_page=100" -Headers $headers -ErrorAction SilentlyContinue
+            foreach ($b in $branches) {
+                if ($b.name -eq "main" -or $b.name -eq "master") { continue }
+                Invoke-RestMethod "https://api.github.com/repos/$repo/git/refs/heads/$($b.name)" -Method Delete -Headers $headers -ErrorAction SilentlyContinue | Out-Null
+                $deletedBranches++
+            }
+            Write-Host "  Deleted $deletedBranches branches" -ForegroundColor Green
+
+            # Delete repo files not in preserve list
+            Write-Host "  Cleaning repo files (preserving: $($preserveList -join ', '))..." -ForegroundColor Cyan
+            $branchInfo = Invoke-RestMethod "https://api.github.com/repos/$repo/branches/main" -Headers $headers
+            $treeSha = $branchInfo.commit.commit.tree.sha
+            $tree = Invoke-RestMethod "https://api.github.com/repos/$repo/git/trees/$($treeSha)?recursive=1" -Headers $headers
+            $filesToDelete = $tree.tree | Where-Object { $_.type -eq 'blob' -and $_.path -notin $preserveList }
+            $deletedFiles = 0
+            foreach ($f in $filesToDelete) {
+                try {
+                    $fileInfo = Invoke-RestMethod "https://api.github.com/repos/$repo/contents/$($f.path)" -Headers $headers
+                    $body = @{ message = "Reset: delete $($f.path)"; sha = $fileInfo.sha } | ConvertTo-Json
+                    Invoke-RestMethod "https://api.github.com/repos/$repo/contents/$($f.path)" -Headers $headers -Method Delete -Body $body -ContentType "application/json" | Out-Null
+                    $deletedFiles++
+                } catch {
+                    Write-Host "    WARN: Failed to delete $($f.path): $($_.Exception.Message)" -ForegroundColor DarkYellow
+                }
+            }
+            Write-Host "  Deleted $deletedFiles files from repo" -ForegroundColor Green
+
+            # ── Verify GitHub is clean ──
+            Write-Host "`n  Verifying GitHub cleanup..." -ForegroundColor Cyan
+            $allClean = $true
+            Start-Sleep -Seconds 2
+
+            # Verify issues/PRs
+            $verifyPage = 1; $verifyTotal = 0
+            do {
+                $batch = Invoke-RestMethod "https://api.github.com/repos/$repo/issues?state=open&per_page=100&page=$verifyPage" -Headers $headers
+                $verifyTotal += $batch.Count; $verifyPage++
+            } while ($batch.Count -eq 100)
+            if ($verifyTotal -gt 0) {
+                Write-Host "  ✗ FAIL: $verifyTotal open issues/PRs remain!" -ForegroundColor Red
+                $allClean = $false
+            } else {
+                Write-Host "  ✓ No open issues/PRs" -ForegroundColor Green
+            }
+
+            # Verify branches
+            $verifyBranches = Invoke-RestMethod "https://api.github.com/repos/$repo/branches?per_page=100" -Headers $headers
+            $nonMain = @($verifyBranches | Where-Object { $_.name -ne 'main' -and $_.name -ne 'master' })
+            if ($nonMain.Count -gt 0) {
+                Write-Host "  ✗ FAIL: $($nonMain.Count) non-main branches remain: $($nonMain.name -join ', ')" -ForegroundColor Red
+                $allClean = $false
+            } else {
+                Write-Host "  ✓ Only main branch" -ForegroundColor Green
+            }
+
+            # Verify repo files
+            $verifyContents = Invoke-RestMethod "https://api.github.com/repos/$repo/contents?ref=main" -Headers $headers
+            $extraFiles = @($verifyContents | Where-Object { $_.name -notin $preserveList })
+            if ($extraFiles.Count -gt 0) {
+                Write-Host "  ✗ FAIL: Extra files remain: $($extraFiles.name -join ', ')" -ForegroundColor Red
+                $allClean = $false
+            } else {
+                Write-Host "  ✓ Only preserved files remain: $($verifyContents.name -join ', ')" -ForegroundColor Green
+            }
+
+            if (-not $allClean) {
+                Write-Host "  ⚠ GitHub cleanup incomplete — review failures above" -ForegroundColor Yellow
+            }
         }
     }
 } else {
-    Write-Host "`n▶ Phase 2/4: Skipping GitHub cleanup (--SkipGitHub)" -ForegroundColor Gray
+    Write-Host "`n▶ Phase 2/5: Skipping GitHub cleanup (--SkipGitHub)" -ForegroundColor Gray
 }
 
 # ── Phase 3: Clean local workspaces ─────────────────
 if (-not $SkipLocal) {
-    Write-Host "`n▶ Phase 3/4: Cleaning local agent workspaces..." -ForegroundColor Yellow
+    Write-Host "`n▶ Phase 3/5: Cleaning local agent workspaces..." -ForegroundColor Yellow
 
     if (Test-Path $WorkspaceRoot) {
         $dirs = Get-ChildItem -Path $WorkspaceRoot -Directory -ErrorAction SilentlyContinue
@@ -123,11 +179,11 @@ if (-not $SkipLocal) {
         Write-Host "  No workspace directory at $WorkspaceRoot" -ForegroundColor Gray
     }
 } else {
-    Write-Host "`n▶ Phase 3/4: Skipping local cleanup (--SkipLocal)" -ForegroundColor Gray
+    Write-Host "`n▶ Phase 3/5: Skipping local cleanup (--SkipLocal)" -ForegroundColor Gray
 }
 
 # ── Phase 4: Delete checkpoint DB ────────────────────
-Write-Host "`n▶ Phase 4/4: Deleting checkpoint database..." -ForegroundColor Yellow
+Write-Host "`n▶ Phase 4/5: Deleting checkpoint database..." -ForegroundColor Yellow
 $runnerDir = Join-Path $PSScriptRoot ".." "src" "AgentSquad.Runner"
 $dbFiles = Get-ChildItem -Path $runnerDir -Filter "agentsquad_*.db*" -ErrorAction SilentlyContinue
 if ($dbFiles) {
@@ -139,6 +195,7 @@ if ($dbFiles) {
     Write-Host "  No DB files found" -ForegroundColor Gray
 }
 
+# ── Phase 5: Final summary ──────────────────────────
 Write-Host "`n═══════════════════════════════════════════" -ForegroundColor Green
 Write-Host "  ✅ Reset complete. Run start-runner.ps1 to begin fresh." -ForegroundColor Green
 Write-Host "═══════════════════════════════════════════" -ForegroundColor Green
