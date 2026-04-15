@@ -15,11 +15,8 @@ Console.WriteLine($"🔗 Connecting to Runner API at {runnerUrl}");
 var dashboardPort = builder.Configuration.GetValue("DashboardPort", 5051);
 builder.WebHost.UseUrls($"http://localhost:{dashboardPort}");
 
-// Ensure RCL static web assets are served
-if (!builder.Environment.IsDevelopment())
-{
-    builder.WebHost.UseStaticWebAssets();
-}
+// Always resolve RCL static web assets — needed for _content/ paths on all machines
+builder.WebHost.UseStaticWebAssets();
 
 // Blazor Server + SignalR
 builder.Services.AddRazorComponents()
