@@ -8,6 +8,7 @@ using AgentSquad.Core.GitHub;
 using AgentSquad.Core.GitHub.Models;
 using AgentSquad.Core.Messaging;
 using AgentSquad.Core.Persistence;
+using AgentSquad.Core.Prompts;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Microsoft.SemanticKernel;
@@ -27,8 +28,9 @@ public class ArchitectAgent : AgentBase
     private readonly IGateCheckService _gateCheck;
     private readonly SelfAssessmentService _selfAssessment;
     private readonly IAgentReasoningLog _reasoningLog;
+    private readonly IPromptTemplateService _promptService;
 
-    private readonly Queue<ArchitectureDirective> _taskQueue = new();
+    private readonly Queue<ArchitectureDirective>_taskQueue = new();
     private readonly HashSet<int> _reviewedPrNumbers = new();
     private readonly ConcurrentQueue<int> _reviewQueue = new();
     private readonly HashSet<int> _forceApprovalPrs = new();
@@ -49,6 +51,7 @@ public class ArchitectAgent : AgentBase
         IGateCheckService gateCheck,
         SelfAssessmentService selfAssessment,
         IAgentReasoningLog reasoningLog,
+        IPromptTemplateService promptService,
         ILogger<ArchitectAgent> logger,
         RoleContextProvider? roleContextProvider = null)
         : base(identity, logger, memoryStore, roleContextProvider)
@@ -63,6 +66,7 @@ public class ArchitectAgent : AgentBase
         _gateCheck = gateCheck ?? throw new ArgumentNullException(nameof(gateCheck));
         _selfAssessment = selfAssessment ?? throw new ArgumentNullException(nameof(selfAssessment));
         _reasoningLog = reasoningLog ?? throw new ArgumentNullException(nameof(reasoningLog));
+        _promptService = promptService ?? throw new ArgumentNullException(nameof(promptService));
     }
 
     protected override async Task OnInitializeAsync(CancellationToken ct)
@@ -217,13 +221,23 @@ public class ArchitectAgent : AgentBase
             var kernel = _modelRegistry.GetKernel(Identity.ModelTier, Identity.Id);
             var chat = kernel.GetRequiredService<IChatCompletionService>();
             var history = CreateChatHistory();
-            history.AddSystemMessage(
-                "You are a senior software architect revising Architecture.md based on human reviewer feedback. " +
-                "Make the specific changes requested while preserving the overall structure.");
-            history.AddUserMessage(
-                $"## Current Architecture.md:\n\n{currentContent}\n\n" +
-                $"## Reviewer Feedback:\n\n{feedback}\n\n" +
-                "Revise the Architecture.md to address the feedback. Return the COMPLETE revised document.");
+
+            var revSys = await _promptService.RenderAsync("architect/revision-system",
+                new Dictionary<string, string>(), ct)
+                ?? "You are a senior software architect revising Architecture.md based on human reviewer feedback. " +
+                   "Make the specific changes requested while preserving the overall structure.";
+            history.AddSystemMessage(revSys);
+
+            var revUser = await _promptService.RenderAsync("architect/revision-user",
+                new Dictionary<string, string>
+                {
+                    ["current_content"] = currentContent,
+                    ["feedback"] = feedback
+                }, ct)
+                ?? $"## Current Architecture.md:\n\n{currentContent}\n\n" +
+                   $"## Reviewer Feedback:\n\n{feedback}\n\n" +
+                   "Revise the Architecture.md to address the feedback. Return the COMPLETE revised document.";
+            history.AddUserMessage(revUser);
 
             var response = await chat.GetChatMessageContentsAsync(history, cancellationToken: ct);
             var revised = string.Join("", response.Select(r => r.Content ?? ""));
@@ -304,15 +318,26 @@ public class ArchitectAgent : AgentBase
             var qKernel = _modelRegistry.GetKernel(Identity.ModelTier, Identity.Id);
             var qChat = qKernel.GetRequiredService<IChatCompletionService>();
             var qHistory = CreateChatHistory();
-            qHistory.AddSystemMessage("You are a software architect. Write a brief architecture document.");
-            qHistory.AddUserMessage(
-                $"Project: {_config.Project.Description}\nTech Stack: {_config.Project.TechStack}\n\n" +
-                "Write a concise architecture document with these sections (1-2 sentences each): " +
-                "## System Components (list main components), ## Data Model (key entities), " +
-                "## Project Structure (folder layout — the repo root IS the solution root; " +
-                "place .sln at root, project files under ProjectName/ subfolder; " +
-                "NEVER create multiple levels of same-named folders), ## Technology Choices. " +
-                "Keep the entire document under 300 words. Be specific about file paths and component names.");
+
+            var qSys = await _promptService.RenderAsync("architect/quick-system",
+                new Dictionary<string, string>(), ct)
+                ?? "You are a software architect. Write a brief architecture document.";
+            qHistory.AddSystemMessage(qSys);
+
+            var qUser = await _promptService.RenderAsync("architect/quick-user",
+                new Dictionary<string, string>
+                {
+                    ["project_description"] = _config.Project.Description,
+                    ["tech_stack"] = _config.Project.TechStack
+                }, ct)
+                ?? $"Project: {_config.Project.Description}\nTech Stack: {_config.Project.TechStack}\n\n" +
+                   "Write a concise architecture document with these sections (1-2 sentences each): " +
+                   "## System Components (list main components), ## Data Model (key entities), " +
+                   "## Project Structure (folder layout — the repo root IS the solution root; " +
+                   "place .sln at root, project files under ProjectName/ subfolder; " +
+                   "NEVER create multiple levels of same-named folders), ## Technology Choices. " +
+                   "Keep the entire document under 300 words. Be specific about file paths and component names.";
+            qHistory.AddUserMessage(qUser);
             var qResp = await qChat.GetChatMessageContentAsync(qHistory, cancellationToken: ct);
             var qContent = $"# System Architecture: {directive.Title}\n\n{qResp.Content?.Trim() ?? ""}";
 
@@ -388,26 +413,45 @@ public class ArchitectAgent : AgentBase
         var history = CreateChatHistory();
         var memoryContext = await GetMemoryContextAsync(ct: ct);
 
-        var systemPrompt = "You are a senior software architect on a development team. " +
-            "Your job is to design a complete, well-structured system architecture based on " +
-            "the PM specification (business requirements) and research findings. " +
-            "Ensure the architecture supports all business goals, user stories, and " +
-            "non-functional requirements from the PM spec. Be thorough, specific, and practical. " +
-            "Focus on producing actionable architecture that engineers can implement directly.\n\n" +
-            $"IMPORTANT: The project's technology stack has already been decided: **{_config.Project.TechStack}**. " +
-            "Your architecture MUST use this stack. Design all components, patterns, and " +
-            "infrastructure around this technology. Do NOT recommend or use alternative stacks." +
-            (string.IsNullOrEmpty(memoryContext) ? "" : $"\n\n{memoryContext}");
+        var sysVars = new Dictionary<string, string>
+        {
+            ["tech_stack"] = _config.Project.TechStack,
+            ["memory_context"] = string.IsNullOrEmpty(memoryContext) ? "" : $"\n\n{memoryContext}",
+            ["design_context"] = ""
+        };
 
         if (!string.IsNullOrWhiteSpace(designContext))
         {
-            systemPrompt += "\n\n## VISUAL DESIGN REFERENCE\n" +
+            var designPrompt = await _promptService.RenderAsync("architect/design-reference",
+                new Dictionary<string, string> { ["design_context"] = designContext }, ct);
+            sysVars["design_context"] = designPrompt ??
+                "\n\n## VISUAL DESIGN REFERENCE\n" +
                 "The repository contains visual design reference files that define the exact UI layout. " +
                 "Your architecture MUST define components that map directly to the visual sections in this design. " +
                 "Include a '## UI Component Architecture' section in your output that maps each visual section " +
                 "from the design to a specific component, its CSS layout strategy, data bindings, and interactions.\n\n" +
                 designContext;
         }
+
+        var systemPrompt = await _promptService.RenderAsync("architect/full-system", sysVars, ct)
+            ?? "You are a senior software architect on a development team. " +
+               "Your job is to design a complete, well-structured system architecture based on " +
+               "the PM specification (business requirements) and research findings. " +
+               "Ensure the architecture supports all business goals, user stories, and " +
+               "non-functional requirements from the PM spec. Be thorough, specific, and practical. " +
+               "Focus on producing actionable architecture that engineers can implement directly.\n\n" +
+               $"IMPORTANT: The project's technology stack has already been decided: **{_config.Project.TechStack}**. " +
+               "Your architecture MUST use this stack. Design all components, patterns, and " +
+               "infrastructure around this technology. Do NOT recommend or use alternative stacks." +
+               (string.IsNullOrEmpty(memoryContext) ? "" : $"\n\n{memoryContext}") +
+               (string.IsNullOrWhiteSpace(designContext)
+                   ? ""
+                   : "\n\n## VISUAL DESIGN REFERENCE\n" +
+                     "The repository contains visual design reference files that define the exact UI layout. " +
+                     "Your architecture MUST define components that map directly to the visual sections in this design. " +
+                     "Include a '## UI Component Architecture' section in your output that maps each visual section " +
+                     "from the design to a specific component, its CSS layout strategy, data bindings, and interactions.\n\n" +
+                     designContext);
 
         history.AddSystemMessage(systemPrompt);
 
@@ -417,28 +461,38 @@ public class ArchitectAgent : AgentBase
         {
             // Single-pass mode: one comprehensive prompt instead of 5 conversational turns
             UpdateStatus(AgentStatus.Working, "Designing architecture (single-pass)");
-            history.AddUserMessage(
-                $"I need you to design the complete system architecture for our project.\n\n" +
-                $"**Task:** {directive.Title}\n\n" +
-                $"**Description:** {directive.Description}\n\n" +
-                $"**Technology Stack (mandatory):** {_config.Project.TechStack}\n\n" +
-                $"## PM Specification (Business Requirements)\n{pmSpec}\n\n" +
-                $"## Research Findings\n{research}\n\n" +
-                "Produce a complete, structured Architecture.md document with ALL of these sections:\n\n" +
-                "# Architecture\n\n" +
-                "## Overview & Goals\n(High-level summary)\n\n" +
-                "## System Components\n(Each component with responsibilities, interfaces, dependencies, data)\n\n" +
-                "## Component Interactions\n(Data flow and communication patterns)\n\n" +
-                "## Data Model\n(Entities, relationships, storage)\n\n" +
-                "## API Contracts\n(Endpoints, request/response shapes, error handling)\n\n" +
-                "## Infrastructure Requirements\n(Hosting, networking, storage, CI/CD)\n\n" +
-                "## Technology Stack Decisions\n(Chosen technologies with justification)\n\n" +
-                "## Security Considerations\n(Auth, data protection, validation)\n\n" +
-                "## Scaling Strategy\n(How the system scales)\n\n" +
-                "## Risks & Mitigations\n(Key risks and how to address them)\n\n" +
-                "Use these exact section headers. Be thorough and specific. " +
-                "All decisions must use the mandatory technology stack. " +
-                "This document will be the single source of truth for the engineering team.");
+
+            var singlePassVars = new Dictionary<string, string>
+            {
+                ["task_title"] = directive.Title,
+                ["task_description"] = directive.Description,
+                ["tech_stack"] = _config.Project.TechStack,
+                ["pm_spec"] = pmSpec ?? "",
+                ["research"] = research ?? ""
+            };
+            var singlePassUser = await _promptService.RenderAsync("architect/single-pass-user", singlePassVars, ct)
+                ?? $"I need you to design the complete system architecture for our project.\n\n" +
+                   $"**Task:** {directive.Title}\n\n" +
+                   $"**Description:** {directive.Description}\n\n" +
+                   $"**Technology Stack (mandatory):** {_config.Project.TechStack}\n\n" +
+                   $"## PM Specification (Business Requirements)\n{pmSpec}\n\n" +
+                   $"## Research Findings\n{research}\n\n" +
+                   "Produce a complete, structured Architecture.md document with ALL of these sections:\n\n" +
+                   "# Architecture\n\n" +
+                   "## Overview & Goals\n(High-level summary)\n\n" +
+                   "## System Components\n(Each component with responsibilities, interfaces, dependencies, data)\n\n" +
+                   "## Component Interactions\n(Data flow and communication patterns)\n\n" +
+                   "## Data Model\n(Entities, relationships, storage)\n\n" +
+                   "## API Contracts\n(Endpoints, request/response shapes, error handling)\n\n" +
+                   "## Infrastructure Requirements\n(Hosting, networking, storage, CI/CD)\n\n" +
+                   "## Technology Stack Decisions\n(Chosen technologies with justification)\n\n" +
+                   "## Security Considerations\n(Auth, data protection, validation)\n\n" +
+                   "## Scaling Strategy\n(How the system scales)\n\n" +
+                   "## Risks & Mitigations\n(Key risks and how to address them)\n\n" +
+                   "Use these exact section headers. Be thorough and specific. " +
+                   "All decisions must use the mandatory technology stack. " +
+                   "This document will be the single source of truth for the engineering team.";
+            history.AddUserMessage(singlePassUser);
 
             var singleResponse = await chat.GetChatMessageContentAsync(
                 history, cancellationToken: ct);
@@ -447,18 +501,27 @@ public class ArchitectAgent : AgentBase
         else
         {
         // Turn 1: Identify key architectural decisions
-        history.AddUserMessage(
-            $"I need you to design the system architecture for our project.\n\n" +
-            $"**Task:** {directive.Title}\n\n" +
-            $"**Description:** {directive.Description}\n\n" +
-            $"**Technology Stack (mandatory):** {_config.Project.TechStack}\n\n" +
-            $"## PM Specification (Business Requirements)\n{pmSpec}\n\n" +
-            $"## Research Findings\n{research}\n\n" +
-            "First, identify the key architectural decisions we need to make. " +
-            "For each decision, explain the options, trade-offs, and your recommendation. " +
-            "Ensure the architecture supports all business goals and user stories from the PM Spec. " +
-            "All decisions must use the mandatory technology stack specified above. " +
-            "List them clearly.");
+        var turnVars = new Dictionary<string, string>
+        {
+            ["task_title"] = directive.Title,
+            ["task_description"] = directive.Description,
+            ["tech_stack"] = _config.Project.TechStack,
+            ["pm_spec"] = pmSpec ?? "",
+            ["research"] = research ?? ""
+        };
+        var turn1Prompt = await _promptService.RenderAsync("architect/multi-turn-decisions", turnVars, ct)
+            ?? $"I need you to design the system architecture for our project.\n\n" +
+               $"**Task:** {directive.Title}\n\n" +
+               $"**Description:** {directive.Description}\n\n" +
+               $"**Technology Stack (mandatory):** {_config.Project.TechStack}\n\n" +
+               $"## PM Specification (Business Requirements)\n{pmSpec}\n\n" +
+               $"## Research Findings\n{research}\n\n" +
+               "First, identify the key architectural decisions we need to make. " +
+               "For each decision, explain the options, trade-offs, and your recommendation. " +
+               "Ensure the architecture supports all business goals and user stories from the PM Spec. " +
+               "All decisions must use the mandatory technology stack specified above. " +
+               "List them clearly.";
+        history.AddUserMessage(turn1Prompt);
 
         var decisionsResponse = await chat.GetChatMessageContentAsync(
             history, cancellationToken: ct);
@@ -471,13 +534,15 @@ public class ArchitectAgent : AgentBase
 
         // Turn 2: Design system components and interactions
         UpdateStatus(AgentStatus.Working, "Designing (2/5): Components & interactions");
-        history.AddUserMessage(
-            "Now design the system components based on those decisions. For each component, cover:\n" +
-            "- Name and responsibility (single responsibility principle)\n" +
-            "- Public interfaces / API surface\n" +
-            "- Dependencies on other components\n" +
-            "- Data it owns or manages\n\n" +
-            "Also describe the data flow between components for the primary use cases.");
+        var turn2Prompt = await _promptService.RenderAsync("architect/multi-turn-components",
+            new Dictionary<string, string>(), ct)
+            ?? "Now design the system components based on those decisions. For each component, cover:\n" +
+               "- Name and responsibility (single responsibility principle)\n" +
+               "- Public interfaces / API surface\n" +
+               "- Dependencies on other components\n" +
+               "- Data it owns or manages\n\n" +
+               "Also describe the data flow between components for the primary use cases.";
+        history.AddUserMessage(turn2Prompt);
 
         var componentsResponse = await chat.GetChatMessageContentAsync(
             history, cancellationToken: ct);
@@ -487,12 +552,14 @@ public class ArchitectAgent : AgentBase
 
         // Turn 3: Data model, API contracts, and infrastructure
         UpdateStatus(AgentStatus.Working, "Designing (3/5): Data model & APIs");
-        history.AddUserMessage(
-            "Now define:\n" +
-            "1. **Data Model** — key entities, their relationships, and storage strategy.\n" +
-            "2. **API Contracts** — endpoints/interfaces, request/response shapes, and error handling.\n" +
-            "3. **Infrastructure Requirements** — hosting, networking, storage, CI/CD, and monitoring needs.\n\n" +
-            "Be specific with types, field names, and configurations where applicable.");
+        var turn3Prompt = await _promptService.RenderAsync("architect/multi-turn-data-model",
+            new Dictionary<string, string>(), ct)
+            ?? "Now define:\n" +
+               "1. **Data Model** — key entities, their relationships, and storage strategy.\n" +
+               "2. **API Contracts** — endpoints/interfaces, request/response shapes, and error handling.\n" +
+               "3. **Infrastructure Requirements** — hosting, networking, storage, CI/CD, and monitoring needs.\n\n" +
+               "Be specific with types, field names, and configurations where applicable.";
+        history.AddUserMessage(turn3Prompt);
 
         var contractsResponse = await chat.GetChatMessageContentAsync(
             history, cancellationToken: ct);
@@ -502,12 +569,14 @@ public class ArchitectAgent : AgentBase
 
         // Turn 4: Security, scaling, and risk mitigation
         UpdateStatus(AgentStatus.Working, "Designing (4/5): Security & scaling");
-        history.AddUserMessage(
-            "Now address cross-cutting concerns:\n" +
-            "1. **Security Considerations** — authentication, authorization, data protection, input validation.\n" +
-            "2. **Scaling Strategy** — horizontal/vertical scaling, caching, load balancing, bottleneck mitigation.\n" +
-            "3. **Risks & Mitigations** — technical risks, dependency risks, and concrete mitigation strategies.\n\n" +
-            "Be practical and prioritize the highest-impact concerns.");
+        var turn4Prompt = await _promptService.RenderAsync("architect/multi-turn-cross-cutting",
+            new Dictionary<string, string>(), ct)
+            ?? "Now address cross-cutting concerns:\n" +
+               "1. **Security Considerations** — authentication, authorization, data protection, input validation.\n" +
+               "2. **Scaling Strategy** — horizontal/vertical scaling, caching, load balancing, bottleneck mitigation.\n" +
+               "3. **Risks & Mitigations** — technical risks, dependency risks, and concrete mitigation strategies.\n\n" +
+               "Be practical and prioritize the highest-impact concerns.";
+        history.AddUserMessage(turn4Prompt);
 
         var risksResponse = await chat.GetChatMessageContentAsync(
             history, cancellationToken: ct);
@@ -517,31 +586,33 @@ public class ArchitectAgent : AgentBase
 
         // Turn 5: Compile into structured Architecture.md
         UpdateStatus(AgentStatus.Working, "Designing (5/5): Compiling Architecture.md");
-        history.AddUserMessage(
-            "Now compile everything into a single, structured Architecture.md document with these exact sections:\n\n" +
-            "# Architecture\n\n" +
-            "## Overview & Goals\n" +
-            "(High-level summary of the architecture and what it aims to achieve)\n\n" +
-            "## System Components\n" +
-            "(Each component with its responsibilities)\n\n" +
-            "## Component Interactions\n" +
-            "(Data flow and communication patterns between components)\n\n" +
-            "## Data Model\n" +
-            "(Entities, relationships, storage)\n\n" +
-            "## API Contracts\n" +
-            "(Endpoints, interfaces, request/response shapes)\n\n" +
-            "## Infrastructure Requirements\n" +
-            "(Hosting, networking, storage, CI/CD)\n\n" +
-            "## Technology Stack Decisions\n" +
-            "(Chosen technologies with justification)\n\n" +
-            "## Security Considerations\n" +
-            "(Auth, data protection, validation)\n\n" +
-            "## Scaling Strategy\n" +
-            "(How the system scales)\n\n" +
-            "## Risks & Mitigations\n" +
-            "(Key risks and how to address them)\n\n" +
-            "Use these exact section headers. Be thorough and specific. " +
-            "This document will be the single source of truth for the engineering team.");
+        var turn5Prompt = await _promptService.RenderAsync("architect/multi-turn-compile",
+            new Dictionary<string, string>(), ct)
+            ?? "Now compile everything into a single, structured Architecture.md document with these exact sections:\n\n" +
+               "# Architecture\n\n" +
+               "## Overview & Goals\n" +
+               "(High-level summary of the architecture and what it aims to achieve)\n\n" +
+               "## System Components\n" +
+               "(Each component with its responsibilities)\n\n" +
+               "## Component Interactions\n" +
+               "(Data flow and communication patterns between components)\n\n" +
+               "## Data Model\n" +
+               "(Entities, relationships, storage)\n\n" +
+               "## API Contracts\n" +
+               "(Endpoints, interfaces, request/response shapes)\n\n" +
+               "## Infrastructure Requirements\n" +
+               "(Hosting, networking, storage, CI/CD)\n\n" +
+               "## Technology Stack Decisions\n" +
+               "(Chosen technologies with justification)\n\n" +
+               "## Security Considerations\n" +
+               "(Auth, data protection, validation)\n\n" +
+               "## Scaling Strategy\n" +
+               "(How the system scales)\n\n" +
+               "## Risks & Mitigations\n" +
+               "(Key risks and how to address them)\n\n" +
+               "Use these exact section headers. Be thorough and specific. " +
+               "This document will be the single source of truth for the engineering team.";
+        history.AddUserMessage(turn5Prompt);
 
         var architectureResponse = await chat.GetChatMessageContentAsync(
             history, cancellationToken: ct);
@@ -877,40 +948,50 @@ public class ArchitectAgent : AgentBase
             var hasScreenshots = screenshotImages.Count > 0 || !string.IsNullOrEmpty(screenshotContext);
 
             var history = CreateChatHistory();
-            var screenshotInstructions = hasScreenshots
-                ? "ALSO CHECK: Screenshots are provided — you can SEE them embedded in this message. " +
-                  "Verify the app renders correctly without errors.\n" +
-                  "  - Error pages, unhandled exceptions, blank screens, JSON errors visible in screenshots = REWORK.\n" +
-                  "  - The visual output should match what the PR description says it implements.\n" +
-                  "  - A white screen with error text or a 'data.json' error = REWORK.\n"
-                : "";
+            var reviewSysVars = new Dictionary<string, string>
+            {
+                ["screenshot_instructions"] = hasScreenshots
+                    ? "ALSO CHECK: Screenshots are provided — you can SEE them embedded in this message. " +
+                      "Verify the app renders correctly without errors.\n" +
+                      "  - Error pages, unhandled exceptions, blank screens, JSON errors visible in screenshots = REWORK.\n" +
+                      "  - The visual output should match what the PR description says it implements.\n" +
+                      "  - A white screen with error text or a 'data.json' error = REWORK.\n"
+                    : ""
+            };
 
-            history.AddSystemMessage(
-                "You are a software architect reviewing a PR for architecture alignment.\n\n" +
-                "SCOPE: This PR is ONE task. Review only the parts it touches against the architecture doc.\n\n" +
-                "CHECK: component boundaries, folder structure, tech stack compliance, architectural patterns.\n" +
-                "ALSO CHECK FILE COMPLETENESS: Compare the actual files in the PR against the acceptance criteria " +
-                "and file plan in the linked issue. If the acceptance criteria list specific files or components " +
-                "that should be created (e.g., Models, Interfaces, Layouts, CSS, config files) and those files " +
-                "are MISSING from the PR, this is a REWORK issue. A PR that delivers only 2 of 15 expected files " +
-                "is incomplete regardless of whether those 2 files are architecturally correct.\n" +
-                screenshotInstructions +
-                "IGNORE: code quality, null checks, naming, tests.\n\n" +
-                "IMPORTANT: Code may appear truncated in your review context due to length limits — " +
-                "this is a tooling limitation, NOT a code defect. Do NOT flag truncated code.\n\n" +
-                "Only request REWORK for real architectural violations (wrong boundaries, wrong tech stack, " +
-                "wrong patterns), MISSING files/components listed in acceptance criteria, " +
-                "OR runtime errors visible in screenshots. Minor issues → APPROVE.\n\n" +
-                "RESPONSE FORMAT — your ENTIRE response must be ONLY:\n" +
-                "- First line: APPROVED or REWORK\n" +
-                "- If REWORK: a **numbered list** (1. 2. 3.) starting on the SECOND line. " +
-                "Each item states the architectural violation, missing file/component, or screenshot issue. Nothing else. " +
-                "No preamble, no thinking, no analysis narration.\n" +
-                "- If APPROVED: one sentence or empty after the verdict. No recap.\n\n" +
-                "WRONG: 'Let me review the architecture... 1. Violation'\n" +
-                "RIGHT: 'REWORK\\n1. **Services/** folder violates layered boundary\\n" +
-                "2. Missing Models/ReportData.cs, Models/Milestone.cs listed in acceptance criteria\\n" +
-                "3. Screenshot shows unhandled exception on app load'");
+            var reviewSys = await _promptService.RenderAsync("architect/pr-review-system", reviewSysVars, ct)
+                ?? "You are a software architect reviewing a PR for architecture alignment.\n\n" +
+                   "SCOPE: This PR is ONE task. Review only the parts it touches against the architecture doc.\n\n" +
+                   "CHECK: component boundaries, folder structure, tech stack compliance, architectural patterns.\n" +
+                   "ALSO CHECK FILE COMPLETENESS: Compare the actual files in the PR against the acceptance criteria " +
+                   "and file plan in the linked issue. If the acceptance criteria list specific files or components " +
+                   "that should be created (e.g., Models, Interfaces, Layouts, CSS, config files) and those files " +
+                   "are MISSING from the PR, this is a REWORK issue. A PR that delivers only 2 of 15 expected files " +
+                   "is incomplete regardless of whether those 2 files are architecturally correct.\n" +
+                   (hasScreenshots
+                       ? "ALSO CHECK: Screenshots are provided — you can SEE them embedded in this message. " +
+                         "Verify the app renders correctly without errors.\n" +
+                         "  - Error pages, unhandled exceptions, blank screens, JSON errors visible in screenshots = REWORK.\n" +
+                         "  - The visual output should match what the PR description says it implements.\n" +
+                         "  - A white screen with error text or a 'data.json' error = REWORK.\n"
+                       : "") +
+                   "IGNORE: code quality, null checks, naming, tests.\n\n" +
+                   "IMPORTANT: Code may appear truncated in your review context due to length limits — " +
+                   "this is a tooling limitation, NOT a code defect. Do NOT flag truncated code.\n\n" +
+                   "Only request REWORK for real architectural violations (wrong boundaries, wrong tech stack, " +
+                   "wrong patterns), MISSING files/components listed in acceptance criteria, " +
+                   "OR runtime errors visible in screenshots. Minor issues → APPROVE.\n\n" +
+                   "RESPONSE FORMAT — your ENTIRE response must be ONLY:\n" +
+                   "- First line: APPROVED or REWORK\n" +
+                   "- If REWORK: a **numbered list** (1. 2. 3.) starting on the SECOND line. " +
+                   "Each item states the architectural violation, missing file/component, or screenshot issue. Nothing else. " +
+                   "No preamble, no thinking, no analysis narration.\n" +
+                   "- If APPROVED: one sentence or empty after the verdict. No recap.\n\n" +
+                   "WRONG: 'Let me review the architecture... 1. Violation'\n" +
+                   "RIGHT: 'REWORK\\n1. **Services/** folder violates layered boundary\\n" +
+                   "2. Missing Models/ReportData.cs, Models/Milestone.cs listed in acceptance criteria\\n" +
+                   "3. Screenshot shows unhandled exception on app load'";
+            history.AddSystemMessage(reviewSys);
 
             var userMessageText =
                 $"## Architecture Document\n{architectureDoc}\n\n" +
