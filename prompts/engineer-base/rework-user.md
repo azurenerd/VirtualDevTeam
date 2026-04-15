@@ -42,3 +42,5 @@ FILE: path/to/file.ext
 ```
 
 Include the COMPLETE content of each changed file. You MUST include at least one FILE: block — a summary alone is not sufficient.
+
+SCOPE RULE: Only output files that are DIRECTLY affected by the feedback items. Do NOT regenerate the entire project (.sln, .csproj, Program.cs, CSS files, config files) unless the reviewer SPECIFICALLY requested changes to those files. If the reviewer says "remove this file from the PR," simply omit it from your output.

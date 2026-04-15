@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk.Web">
+﻿<Project Sdk="Microsoft.NET.Sdk.Web">
 
   <ItemGroup>
     <ProjectReference Include="..\AgentSquad.Core\AgentSquad.Core.csproj" />
@@ -13,6 +13,7 @@
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <UserSecretsId>b0bc835e-6076-417b-8f54-56cce568d9c7</UserSecretsId>
   </PropertyGroup>
 
 </Project>

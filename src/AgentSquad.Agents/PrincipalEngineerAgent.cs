@@ -1440,13 +1440,14 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                     $"## Architecture\n{architectureDoc}" +
                     issueContext +
                     $"\n\n## Task: {task.Name}\n{task.Description}\n\n" +
-                    "Produce a complete implementation for this task. " +
+                    "Implement ONLY the files needed for this specific task. " +
                     "Output each file using this exact format:\n\n" +
                     "FILE: path/to/file.ext\n```language\n<file content>\n```\n\n" +
                     $"Use the {techStack} technology stack. " +
-                    "CRITICAL: You MUST include a .csproj project file at the project root AND a .sln solution file at the repository root. " +
-                    "Without these, `dotnet build` will fail. The .sln must reference the .csproj. " +
-                    "Include all source code files, configuration, and tests. " +
+                    "SCOPE RULE: Only output files that are NEW or MINIMALLY MODIFIED for this task. " +
+                    "Do NOT regenerate .sln, .csproj, Program.cs, or other infrastructure files unless " +
+                    "this task explicitly requires changes to them. " +
+                    "If the task has a FilePlan (CREATE:/MODIFY:/USE:), follow it strictly. " +
                     "Every file MUST use the FILE: marker format so it can be parsed and committed.");
 
                 var response = await chat.GetChatMessageContentAsync(history, cancellationToken: ct);
@@ -1634,11 +1635,8 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                     var hasNewCommits = await PrWorkflow.HasNewCommitsSinceReviewAsync(prNumber, "PrincipalEngineer", ct);
                     if (!hasNewCommits)
                     {
-                        Logger.LogWarning("No new commits on PR #{Number} since last review — approving to unblock", prNumber);
-                        approved = true;
-                        reviewBody = "No new code commits detected since last review. " +
-                            "The author marked the PR as ready but did not push file changes. " +
-                            "Approving to avoid blocking progress — previous feedback still applies.";
+                        Logger.LogDebug("No new commits on PR #{Number} since last review — skipping until author pushes fixes", prNumber);
+                        continue; // Don't re-review or auto-approve unchanged code
                     }
                     else
                     {
@@ -2196,13 +2194,13 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 if (!string.IsNullOrEmpty(existingFiles))
                     ctx.AppendLine($"## Existing Files in PR (may have build errors — fix or replace as needed)\n{existingFiles}\n");
 
-                ctx.AppendLine("Produce a complete implementation for this task. " +
+                ctx.AppendLine("Implement ONLY the files needed for this specific task. " +
                     "Output each file using this exact format:\n\n" +
                     "FILE: path/to/file.ext\n```language\n<file content>\n```\n\n" +
                     $"Use the {techStack} technology stack. " +
-                    "CRITICAL: You MUST include a .csproj project file at the project root AND a .sln solution file at the repository root. " +
-                    "Without these, `dotnet build` will fail. The .sln must reference the .csproj. " +
-                    "Include all source code files, configuration, and tests. " +
+                    "SCOPE RULE: Only output files that are NEW or MINIMALLY MODIFIED for this task. " +
+                    "Do NOT regenerate .sln, .csproj, Program.cs, or other infrastructure files unless " +
+                    "this task explicitly requires changes to them. " +
                     "Every file MUST use the FILE: marker format so it can be parsed and committed.");
 
                 history.AddUserMessage(ctx.ToString());

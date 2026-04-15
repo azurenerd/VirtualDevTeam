@@ -827,7 +827,7 @@ public partial class PullRequestWorkflow
                 await _github.UpdatePullRequestAsync(prNumber, labels: updatedLabels, ct: ct);
             }
 
-            // If inline test workflow is active, don't merge yet — wait for TE to add tests
+            // If inline test workflow is active, don't merge yet — wait for TE to add tests AND post results
             if (requireTestsBeforeMerge &&
                 pr is not null &&
                 !pr.Labels.Contains(Labels.TestsAdded, StringComparer.OrdinalIgnoreCase))
@@ -838,6 +838,27 @@ public partial class PullRequestWorkflow
                 await _github.AddPullRequestCommentAsync(prNumber,
                     "✅ **Code approved by all reviewers.** Waiting for the Test Engineer to add tests before merging.", ct);
                 return MergeAttemptResult.AwaitingTests;
+            }
+
+            // Even if tests-added label is present, verify TE actually posted a test results comment.
+            // The TE adds the label when pushing test files but posts results AFTER running tests.
+            if (requireTestsBeforeMerge &&
+                pr is not null &&
+                pr.Labels.Contains(Labels.TestsAdded, StringComparer.OrdinalIgnoreCase))
+            {
+                var comments = await _github.GetPullRequestCommentsAsync(prNumber, ct);
+                bool hasTeResultComment = comments.Any(c =>
+                    c.Body.Contains("Test Engineer", StringComparison.OrdinalIgnoreCase) &&
+                    (c.Body.Contains("Test Results", StringComparison.OrdinalIgnoreCase) ||
+                     c.Body.Contains("tests passed", StringComparison.OrdinalIgnoreCase) ||
+                     c.Body.Contains("UI Test", StringComparison.OrdinalIgnoreCase)));
+                if (!hasTeResultComment)
+                {
+                    _logger.LogInformation(
+                        "PR #{Number} has tests-added label but no TE results comment yet — waiting",
+                        prNumber);
+                    return MergeAttemptResult.AwaitingTests;
+                }
             }
 
             // If caller wants to defer merge (e.g. for a human gate), signal ready without merging

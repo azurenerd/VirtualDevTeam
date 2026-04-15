@@ -3,6 +3,7 @@ using AgentSquad.Core.Configuration;
 using AgentSquad.Core.GitHub;
 using AgentSquad.Core.Messaging;
 using AgentSquad.Core.Persistence;
+using Microsoft.Extensions.Configuration;
 using AgentSquad.Dashboard.Components;
 using AgentSquad.Dashboard.Hubs;
 using AgentSquad.Dashboard.Services;
@@ -14,6 +15,9 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Configuration.AddJsonFile(
     Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "AgentSquad.Runner", "appsettings.json"),
     optional: true, reloadOnChange: true);
+// Re-add user secrets so they override Runner's appsettings (e.g., GitHubToken)
+if (builder.Environment.IsDevelopment())
+    builder.Configuration.AddUserSecrets<Program>();
 builder.Services.Configure<AgentSquadConfig>(
     builder.Configuration.GetSection("AgentSquad"));
 builder.Services.Configure<LimitsConfig>(
