@@ -232,6 +232,12 @@ api.MapGet("/cost-summary", (DashboardDataService svc) =>
 api.MapGet("/repo-info", (IGitHubService github) =>
     Results.Ok(new { FullName = github.RepositoryFullName }));
 
+api.MapGet("/github/file", async (string path, IGitHubService github, CancellationToken ct) =>
+{
+    var content = await github.GetFileContentAsync(path, ct: ct);
+    return content is not null ? Results.Ok(new { content }) : Results.NotFound();
+});
+
 // ── Configuration REST API (consumed by standalone Dashboard.Host) ──
 var configApi = app.MapGroup("/api/configuration").WithTags("Configuration");
 

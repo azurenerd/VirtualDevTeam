@@ -1,3 +1,4 @@
+using System.Net.Http.Json;
 using AgentSquad.Core.Agents;
 using AgentSquad.Core.Configuration;
 using AgentSquad.Core.GitHub;
@@ -43,10 +44,17 @@ public static class StandaloneServiceRegistration
 
 /// <summary>
 /// No-op GitHub service for standalone dashboard mode.
-/// Read methods return empty results; write methods are no-ops.
+/// File reads are proxied through the Runner API; write methods are no-ops.
 /// </summary>
 file sealed class NullGitHubService : IGitHubService
 {
+    private readonly IHttpClientFactory _httpClientFactory;
+
+    public NullGitHubService(IHttpClientFactory httpClientFactory)
+    {
+        _httpClientFactory = httpClientFactory;
+    }
+
     public string RepositoryFullName => "standalone/not-connected";
 
     // Pull Requests
@@ -124,8 +132,19 @@ file sealed class NullGitHubService : IGitHubService
         => Task.FromResult(false);
 
     // File Management
-    public Task<string?> GetFileContentAsync(string path, string? branch = null, CancellationToken ct = default)
-        => Task.FromResult<string?>(null);
+    public async Task<string?> GetFileContentAsync(string path, string? branch = null, CancellationToken ct = default)
+    {
+        try
+        {
+            var client = _httpClientFactory.CreateClient("RunnerApi");
+            var encoded = Uri.EscapeDataString(path);
+            var response = await client.GetAsync($"/api/dashboard/github/file?path={encoded}", ct);
+            if (!response.IsSuccessStatusCode) return null;
+            var json = await response.Content.ReadFromJsonAsync<FileContentResponse>(ct);
+            return json?.Content;
+        }
+        catch { return null; }
+    }
     public Task CreateOrUpdateFileAsync(string path, string content, string commitMessage, string? branch = null, CancellationToken ct = default)
         => Task.CompletedTask;
     public Task DeleteFileAsync(string path, string commitMessage, string? branch = null, CancellationToken ct = default)
@@ -157,3 +176,5 @@ file sealed class NullGitHubService : IGitHubService
     public Task<GitHubRateLimitInfo> GetRateLimitAsync(CancellationToken ct = default)
         => Task.FromResult(new GitHubRateLimitInfo { Remaining = 0, Limit = 0, ResetAt = DateTime.UtcNow });
 }
+
+file record FileContentResponse(string? Content);
