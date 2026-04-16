@@ -129,7 +129,7 @@ public partial class PullRequestWorkflow
     }
 
     /// <summary>
-    /// Parse agent name from PR title: "Senior Engineer 1: Implement auth" → "Senior Engineer 1"
+    /// Parse agent name from PR title: "Software Engineer 1: Implement auth" → "Software Engineer 1"
     /// </summary>
     public static string? ParseAgentNameFromTitle(string title)
     {
@@ -141,7 +141,7 @@ public partial class PullRequestWorkflow
     }
 
     /// <summary>
-    /// Parse task title from PR title: "Senior Engineer 1: Implement auth" → "Implement auth"
+    /// Parse task title from PR title: "Software Engineer 1: Implement auth" → "Implement auth"
     /// </summary>
     public static string? ParseTaskTitleFromTitle(string title)
     {
@@ -722,27 +722,27 @@ public partial class PullRequestWorkflow
     /// The default agents required to approve code PRs before merge.
     /// When the PR author is one of the reviewers, the Architect substitutes in.
     /// </summary>
-    public static readonly string[] DefaultReviewers = ["ProgramManager", "PrincipalEngineer"];
+    public static readonly string[] DefaultReviewers = ["ProgramManager", "SoftwareEngineer"];
     public static readonly string FallbackReviewer = "Architect";
 
     /// <summary>
     /// Get the required reviewers for a PR, substituting the Architect when the
-    /// author is one of the default reviewers (e.g., PE can't review its own PR).
+    /// author is one of the default reviewers (e.g., SE can't review its own PR).
     /// </summary>
     /// <summary>
     /// Determine which agents must approve a PR before it can be merged.
     /// Routing rules:
-    ///   - TestEngineer PRs → only PrincipalEngineer (test quality, not business/arch review)
-    ///   - Engineer PRs (Senior/Junior/PE) → ProgramManager + PrincipalEngineer
+    ///   - TestEngineer PRs → only SoftwareEngineer (test quality, not business/arch review)
+    ///   - Engineer PRs → ProgramManager + SoftwareEngineer
     ///   - When the author IS a default reviewer, Architect substitutes in
     /// </summary>
     public static string[] GetRequiredReviewers(string prAuthorRole)
     {
-        // TestEngineer PRs need only PE approval — PM/Architect don't review test suites
+        // TestEngineer PRs need only SE approval — PM/Architect don't review test suites
         if (prAuthorRole.Contains("TestEngineer", StringComparison.OrdinalIgnoreCase)
             || prAuthorRole.Contains("Test Engineer", StringComparison.OrdinalIgnoreCase))
         {
-            return ["PrincipalEngineer"];
+            return ["SoftwareEngineer"];
         }
 
         if (DefaultReviewers.Any(r => string.Equals(r, prAuthorRole, StringComparison.OrdinalIgnoreCase)))
@@ -1173,7 +1173,7 @@ public partial class PullRequestWorkflow
                 // Determine screenshot source for PM review annotation
                 var source = comment.Body.Contains("Test Engineer", StringComparison.OrdinalIgnoreCase)
                     ? "[Test Engineer]"
-                    : comment.Body.Contains("PrincipalEngineer", StringComparison.OrdinalIgnoreCase)
+                    : comment.Body.Contains("SoftwareEngineer", StringComparison.OrdinalIgnoreCase)
                         ? "[Engineer/Author]"
                         : "[Unknown source]";
 

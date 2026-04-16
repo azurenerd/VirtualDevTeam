@@ -9,9 +9,9 @@ Detailed documentation of each agent's behavior, communication patterns, and art
 - [Program Manager Agent](#program-manager-agent)
 - [Researcher Agent](#researcher-agent)
 - [Architect Agent](#architect-agent)
-- [Principal Engineer Agent](#principal-engineer-agent)
-- [Senior Engineer Agent](#senior-engineer-agent)
-- [Junior Engineer Agent](#junior-engineer-agent)
+- [Software Engineer Agent](#software-engineer-agent)
+- [Software Engineer Agent](#software-engineer-agent)
+- [Software Engineer Agent](#software-engineer-agent)
 - [Test Engineer Agent](#test-engineer-agent)
 - [Agent Interaction Summary](#agent-interaction-summary)
 
@@ -26,9 +26,9 @@ AgentSquad deploys 7 specialized agent roles, each implemented as a class extend
 | Program Manager | Yes | Premium | TeamMembers.md, issue triage, PR reviews |
 | Researcher | Yes | Standard | Research.md |
 | Architect | Yes | Premium | Architecture.md, PR architectural reviews |
-| Principal Engineer | Yes | Premium | EngineeringPlan.md, task PRs, code reviews |
-| Senior Engineer | No (template) | Standard | Implementation PRs |
-| Junior Engineer | No (template) | Budget | Implementation PRs (with self-validation) |
+| Software Engineer | Yes | Premium | EngineeringPlan.md, task PRs, code reviews |
+| Software Engineer | No (template) | Standard | Implementation PRs |
+| Software Engineer | No (template) | Budget | Implementation PRs (with self-validation) |
 | Test Engineer | Yes | Standard | Test plan PRs |
 
 ## Naming Conventions
@@ -37,7 +37,7 @@ AgentSquad deploys 7 specialized agent roles, each implemented as a class extend
 ```
 [Agent Name]: Task Title
 ```
-Example: `Principal Engineer: Implement user authentication module`
+Example: `Software Engineer: Implement user authentication module`
 
 ### Issue Titles
 ```
@@ -45,14 +45,14 @@ Example: `Principal Engineer: Implement user authentication module`
 Executive Request: Title
 ```
 Examples:
-- `Junior Engineer: Task #42 exceeds Junior Engineer capability`
-- `Executive Request: Approve additional Senior Engineer`
+- `Software Engineer: Task #42 exceeds Software Engineer capability`
+- `Executive Request: Approve additional Software Engineer`
 
 ### Branch Names
 ```
 agent/{agent-name-slug}/{task-slug}
 ```
-Example: `agent/senior-engineer-1/implement-user-auth`
+Example: `agent/software-engineer-1/implement-user-auth`
 
 ### Labels
 
@@ -204,7 +204,7 @@ Architecture design requires the highest reasoning capability — making trade-o
    - **Turn 4:** Address security, scaling, and risk mitigation
    - **Turn 5:** Compile everything into structured `Architecture.md`
 3. Saves `Architecture.md` to the repository
-4. Creates a GitHub issue asking the Principal Engineer to review the architecture
+4. Creates a GitHub issue asking the Software Engineer to review the architecture
 5. Broadcasts `StatusUpdateMessage` with `"ArchitectureComplete"`
 
 **Phase 2 — Continuous PR Review:**
@@ -226,13 +226,13 @@ After architecture is complete, the Architect enters a polling loop:
 ### GitHub Artifacts
 
 - **Files created:** `Architecture.md` — Complete system design document
-- **Issues created:** Architecture review request for Principal Engineer
+- **Issues created:** Architecture review request for Software Engineer
 - **PR comments:** Architectural alignment reviews
 
 ### Dependencies
 
 - Waits for research to complete (Research.md available)
-- Principal Engineer depends on `Architecture.md` for engineering planning
+- Software Engineer depends on `Architecture.md` for engineering planning
 - All engineer agents reference `Architecture.md` for implementation guidance
 
 ### Error Handling
@@ -242,9 +242,9 @@ After architecture is complete, the Architect enters a polling loop:
 
 ---
 
-## Principal Engineer Agent
+## Software Engineer Agent
 
-**Class:** `PrincipalEngineerAgent` · **File:** `AgentSquad.Agents/PrincipalEngineerAgent.cs`
+**Class:** `SoftwareEngineerAgent` · **File:** `AgentSquad.Agents/SoftwareEngineerAgent.cs`
 
 ### Role and Responsibilities
 
@@ -268,7 +268,7 @@ Requires premium reasoning for engineering planning (task decomposition, depende
 
 **Phase 2 — Development Management (continuous loop):**
 
-1. **Assign tasks** — Reads `TeamMembers.md` for available engineers; matches task complexity to role (Senior → Medium, Junior → Low); creates branches and PRs; sends `TaskAssignmentMessage`
+1. **Assign tasks** — Reads `TeamMembers.md` for available engineers; matches task complexity to role (SE → assigned by priority); creates branches and PRs; sends `TaskAssignmentMessage`
 
 2. **Work on own tasks** — Claims High-complexity tasks with satisfied dependencies; generates implementation via AI; creates PR; marks ready for review
 
@@ -299,7 +299,7 @@ Requires premium reasoning for engineering planning (task decomposition, depende
 
 - Depends on `Architecture.md` being complete (waits for Architect signal)
 - Depends on `TeamMembers.md` for available engineer discovery
-- Engineers depend on task assignments from the Principal Engineer
+- Engineers depend on task assignments from the Software Engineer
 
 ### Error Handling
 
@@ -310,7 +310,7 @@ Requires premium reasoning for engineering planning (task decomposition, depende
 
 ### Task Dependencies
 
-The Principal Engineer maintains a task backlog with explicit dependencies:
+The Software Engineer maintains a task backlog with explicit dependencies:
 
 ```
 Task A (no deps) → Task B (depends on A) → Task C (depends on A, B)
@@ -320,13 +320,13 @@ Task A (no deps) → Task B (depends on A) → Task C (depends on A, B)
 
 ---
 
-## Senior Engineer Agent
+## Software Engineer Agent
 
-**Class:** `SeniorEngineerAgent` · **File:** `AgentSquad.Agents/SeniorEngineerAgent.cs`
+**Class:** `SoftwareEngineerAgent` · **File:** `AgentSquad.Agents/SoftwareEngineerAgent.cs`
 
 ### Role and Responsibilities
 
-Executes medium-complexity engineering tasks. Produces implementation PRs with a 3-turn AI loop (plan → implement → self-review). Receives guidance from the Principal Engineer via issue comments.
+Executes medium-complexity engineering tasks. Produces implementation PRs with a 3-turn AI loop (plan → implement → self-review). Receives guidance from the Software Engineer via issue comments.
 
 ### Model Tier: Standard
 
@@ -343,7 +343,7 @@ Medium-complexity tasks benefit from a capable but cost-efficient model. The 3-t
    - Post implementation summary as PR comment
    - Mark PR `ready-for-review`
    - Send `StatusUpdateMessage` with `"TaskComplete"`
-3. **Check for issues** — Poll for guidance or feedback issues (e.g., `REQUEST_CHANGES` from Principal Engineer); acknowledge and resolve
+3. **Check for issues** — Poll for guidance or feedback issues (e.g., `REQUEST_CHANGES` from Software Engineer); acknowledge and resolve
 
 ### Messages
 
@@ -360,25 +360,25 @@ Medium-complexity tasks benefit from a capable but cost-efficient model. The 3-t
 
 ### Dependencies
 
-- Depends on Principal Engineer for task assignments (PRs)
+- Depends on Software Engineer for task assignments (PRs)
 - References `Architecture.md` and `EngineeringPlan.md` for context
-- Principal Engineer reviews the implementation
+- Software Engineer reviews the implementation
 
 ### Error Handling
 
 - Implementation failure: creates a `blocker` issue via `IssueWorkflow.ReportBlockerAsync()`
 - Status transitions to `Blocked` on failure
-- Feedback from Principal Engineer (REQUEST_CHANGES) triggers re-implementation
+- Feedback from Software Engineer (REQUEST_CHANGES) triggers re-implementation
 
 ---
 
-## Junior Engineer Agent
+## Software Engineer Agent
 
-**Class:** `JuniorEngineerAgent` · **File:** `AgentSquad.Agents/JuniorEngineerAgent.cs`
+**Class:** `SoftwareEngineerAgent` · **File:** `AgentSquad.Agents/SoftwareEngineerAgent.cs`
 
 ### Role and Responsibilities
 
-Executes low-complexity engineering tasks with additional guardrails: complexity detection, self-validation with retries, and escalation when a task exceeds capability. Uses a smaller context window and simpler prompts than the Senior Engineer.
+Executes low-complexity engineering tasks with additional guardrails: complexity detection, self-validation with retries, and escalation when a task exceeds capability. Uses a smaller context window and simpler prompts than the Software Engineer.
 
 ### Model Tier: Budget
 
@@ -386,12 +386,12 @@ Low-complexity tasks are well-suited to budget models. The self-validation loop 
 
 ### Main Loop Behavior
 
-1. **Poll for assigned PRs** — Same as Senior Engineer
+1. **Poll for assigned PRs** — Same as Software Engineer
 2. **For each open PR not yet worked on:**
    - Execute `WorkOnTaskAsync(pr)`:
      - **Step 1:** Break task into small implementation steps; check for `COMPLEXITY_WARNING` keyword
        - If detected → escalate via `EscalateComplexityAsync()` (create issue, send `HelpRequestMessage`, go Blocked)
-     - **Step 2:** Implement step-by-step (simpler approach than Senior)
+     - **Step 2:** Implement step-by-step (simpler approach than Software Engineer)
      - **Step 3:** Self-validate with retry loop (up to 2 retries):
        - Separate validation context with validation-specific prompt
        - Model responds with `VALIDATION: PASS` or `VALIDATION: FAIL`
@@ -400,7 +400,7 @@ Low-complexity tasks are well-suited to budget models. The self-validation loop 
      - **Step 4:** Post implementation as PR comment with validation status (✅ or ⚠️)
      - **Step 5:** Mark PR `ready-for-review`
    - Send `StatusUpdateMessage` with self-validation pass/fail indicator
-3. **Check for issues** — Same as Senior Engineer
+3. **Check for issues** — Same as Software Engineer
 
 ### Messages
 
@@ -408,37 +408,37 @@ Low-complexity tasks are well-suited to budget models. The self-validation loop 
 |-----------|-------------|----------|
 | **Receives** | `TaskAssignmentMessage` | Logs task assignment |
 | **Sends** | `StatusUpdateMessage` | Broadcasts `"TaskComplete"` with validation status |
-| **Sends** | `HelpRequestMessage` | Complexity escalation (`IsBlocker = true`) to Principal Engineer |
+| **Sends** | `HelpRequestMessage` | Complexity escalation (`IsBlocker = true`) to Software Engineer |
 
 ### GitHub Artifacts
 
 - **PR comments:** Implementation summary with ✅ (validation passed) or ⚠️ (best effort warning)
 - **PRs updated:** Marks `ready-for-review`
-- **Issues created:** Complexity escalation: `"Task #{PR} exceeds Junior Engineer capability"`
+- **Issues created:** Complexity escalation: `"Task #{PR} exceeds Software Engineer capability"`
 - **Issues resolved:** Acknowledges feedback issues
 
-### Key Differences from Senior Engineer
+### Key Differences from Software Engineer
 
-| Aspect | Senior Engineer | Junior Engineer |
+| Aspect | Software Engineer | Software Engineer |
 |--------|----------------|-----------------|
 | Context window | Full architecture doc | Truncated to 4,000 chars |
 | Complexity handling | Implements directly | Detects and escalates |
 | Self-review | Single pass | Validation with up to 2 retries |
-| Failure mode | Reports blocker | Escalates to Principal Engineer |
+| Failure mode | Reports blocker | Escalates to Software Engineer |
 | Implementation style | 3-turn conversation | Step-by-step decomposition |
 | Max retries | N/A | `MaxSelfReviewRetries = 2` |
 
 ### Dependencies
 
-- Depends on Principal Engineer for task assignments
-- Escalates to Principal Engineer when complexity exceeds capability
-- Principal Engineer reviews implementation
+- Depends on Software Engineer for task assignments
+- Escalates to Software Engineer when complexity exceeds capability
+- Software Engineer reviews implementation
 
 ### Error Handling
 
 - Complexity escalation creates an issue and sends `HelpRequestMessage`
 - Self-validation failures after max retries proceed with "best effort" warning
-- Implementation failures report blockers same as Senior Engineer
+- Implementation failures report blockers same as Software Engineer
 
 ---
 
@@ -525,7 +525,7 @@ The Test Engineer does not subscribe to any message types — it operates entire
          ┌──────┼──────┐
          │      │      │
     ┌────┴──┐ ┌─┴───┐ ┌┴──────┐
-    │Senior │ │Junior│ │ Test  │
+    │Software Engineer │ │Software Engineer│ │ Test  │
     │Eng.(n)│ │Eng(n)│ │ Eng.  │
     └───────┘ └──────┘ └───────┘
 
@@ -552,7 +552,7 @@ Legend:
 
 | Document | Writer(s) | Reader(s) |
 |----------|-----------|-----------|
-| `TeamMembers.md` | PM | PM, Principal Engineer (for engineer discovery) |
-| `Research.md` | Researcher | Architect, Principal Engineer |
-| `Architecture.md` | Architect | Principal Engineer, Senior Engineer, Junior Engineer, Test Engineer |
-| `EngineeringPlan.md` | Principal Engineer | PM (for progress tracking), Engineers (for context) |
+| `TeamMembers.md` | PM | PM, Software Engineer (for engineer discovery) |
+| `Research.md` | Researcher | Architect, Software Engineer |
+| `Architecture.md` | Architect | Software Engineer, Software Engineer, Software Engineer, Test Engineer |
+| `EngineeringPlan.md` | Software Engineer | PM (for progress tracking), Engineers (for context) |

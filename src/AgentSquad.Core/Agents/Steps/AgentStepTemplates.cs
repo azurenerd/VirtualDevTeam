@@ -12,9 +12,7 @@ public static class AgentStepTemplates
         AgentRole.Researcher => ResearcherSteps,
         AgentRole.ProgramManager => ProgramManagerSteps,
         AgentRole.Architect => ArchitectSteps,
-        AgentRole.PrincipalEngineer => PrincipalEngineerSteps,
-        AgentRole.SeniorEngineer => SeniorEngineerSteps,
-        AgentRole.JuniorEngineer => JuniorEngineerSteps,
+        AgentRole.SoftwareEngineer => SoftwareEngineerSteps,
         AgentRole.TestEngineer => TestEngineerSteps,
         _ => GenericSteps,
     };
@@ -50,33 +48,15 @@ public static class AgentStepTemplates
         "Merge PR"
     ];
 
-    private static readonly string[] PrincipalEngineerSteps =
+    private static readonly string[] SoftwareEngineerSteps =
     [
         "Read architecture",
         "Task decomposition",
         "Self-assessment & impact classification",
         "Decision gate",
         "Create GitHub issues",
-        "Assign engineers"
-    ];
-
-    private static readonly string[] SeniorEngineerSteps =
-    [
-        "Claim issue",
-        "Create PR",
-        "Generate implementation steps",
-        "Execute implementation steps",
+        "Implement assigned tasks",
         "Self-review",
-        "Decision gate",
-        "Mark ready for review"
-    ];
-
-    private static readonly string[] JuniorEngineerSteps =
-    [
-        "Claim issue",
-        "Create PR",
-        "Generate implementation steps",
-        "Execute implementation steps",
         "Mark ready for review"
     ];
 

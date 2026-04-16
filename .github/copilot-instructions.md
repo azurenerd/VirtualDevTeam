@@ -61,12 +61,12 @@ The agent pipeline produces shared Markdown documents that each phase builds upo
 Project.Description → PM kickoff → Research.md (Researcher)
                                   → PMSpec.md (PM, after ResearchComplete)
                                   → Architecture.md (Architect, after PMSpecReady)
-                                  → EngineeringPlan.md (Principal Engineer, after Architecture)
+                                  → EngineeringPlan.md (Software Engineer, after Architecture)
                                   → PRs with enriched task context (assigned to engineers)
 ```
 
 - **PMSpec.md** — Business specification created by the PM from Research.md + project description. Contains: Executive Summary, Business Goals, User Stories & Acceptance Criteria, Scope, Non-Functional Requirements, Success Metrics, Constraints.
-- All downstream agents (Architect, Principal Engineer, Senior/Junior Engineers) read PMSpec.md for business context alignment.
+- All downstream agents (Architect, Software Engineers) read PMSpec.md for business context alignment.
 
 ### Dual-Layer Communication
 
@@ -93,12 +93,12 @@ Every agent follows the same structure:
 Agents use Semantic Kernel's `ChatHistory` for stateful multi-turn conversations. The pattern is:
 - Get a kernel via `_modelRegistry.GetKernel(Identity.ModelTier)` (tiers: premium, standard, budget, local)
 - Build turns: system message (role definition) → user prompt → assistant response → follow-up user prompt → etc.
-- Turn counts vary by agent complexity (Researcher: 3, Architect: 5, Senior Engineer: 3, Principal Engineer: 2)
+- Turn counts vary by agent complexity (Researcher: 3, Architect: 5, Software Engineer: 3)
 
 ### GitHub Conventions
 
-- **PR titles**: `{AgentDisplayName}: {TaskTitle}` (e.g., `"Senior Engineer 1: Implement auth"`)
-- **PR branches**: `agent/{name}/{task-slug}` (e.g., `agent/senior-engineer-1/implement-auth`)
+- **PR titles**: `{AgentDisplayName}: {TaskTitle}` (e.g., `"Software Engineer 1: Implement auth"`)
+- **PR branches**: `agent/{name}/{task-slug}` (e.g., `agent/software-engineer-1/implement-auth`)
 - **Issue titles**: `{TargetAgent}: {Title}` or `Executive Request: {Title}`
 - **Labels**: `in-progress`, `ready-for-review`, `blocker`, `agent-stuck`, `executive-request`, `resource-request`, `agent-question`, plus complexity labels
 - Agents parse their name from PR/issue titles to find their assigned work
@@ -120,10 +120,10 @@ Four tiers map to agent roles by quality requirements:
 
 | Tier | Default Provider | Used By |
 |------|-----------------|---------|
-| `premium` | Anthropic Opus | PM, Architect, Principal Engineer (quality-critical decisions) |
-| `standard` | Anthropic Sonnet | Researcher, Senior Engineers, Test Engineer (best cost/quality for code) |
-| `budget` | OpenAI GPT-mini | Junior Engineers |
-| `local` | Ollama (qwen2.5-coder:14b) | Junior Engineers (alternative to budget) |
+| `premium` | Anthropic Opus | PM, Architect, Software Engineer (quality-critical decisions) |
+| `standard` | Anthropic Sonnet | Researcher, SE Workers, Test Engineer (best cost/quality for code) |
+| `budget` | OpenAI GPT-mini | SE Workers (alternative) |
+| `local` | Ollama (qwen2.5-coder:14b) | SE Workers (alternative to budget) |
 
 Design principle from benchmarking: generating from scratch always beats a draft→fix pipeline in cost, speed, and quality. Prefer single high-quality generation passes over iterative refinement with cheaper models.
 

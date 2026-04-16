@@ -370,9 +370,7 @@ public class AgentStepTemplatesTests
     [InlineData(AgentRole.Researcher, 5)]
     [InlineData(AgentRole.ProgramManager, 7)]
     [InlineData(AgentRole.Architect, 7)]
-    [InlineData(AgentRole.PrincipalEngineer, 6)]
-    [InlineData(AgentRole.SeniorEngineer, 7)]
-    [InlineData(AgentRole.JuniorEngineer, 5)]
+    [InlineData(AgentRole.SoftwareEngineer, 8)]
     [InlineData(AgentRole.TestEngineer, 4)]
     [InlineData(AgentRole.Custom, 3)]
     public void GetTemplateSteps_ReturnsCorrectCountPerRole(AgentRole role, int expectedCount)

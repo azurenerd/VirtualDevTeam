@@ -402,7 +402,7 @@ public class ProgramManagerAgent : AgentBase
             // Create the initial TeamMembers.md with core agents
             var coreAgents = _registry.GetAllAgents()
                 .Where(a => a.Identity.Role is AgentRole.ProgramManager or AgentRole.Researcher
-                    or AgentRole.Architect or AgentRole.PrincipalEngineer or AgentRole.TestEngineer)
+                    or AgentRole.Architect or AgentRole.SoftwareEngineer or AgentRole.TestEngineer)
                 .ToList();
 
             var doc = """
@@ -430,7 +430,7 @@ public class ProgramManagerAgent : AgentBase
     }
 
     /// <summary>
-    /// Reads TeamMembers.md and re-spawns any Senior/Junior Engineers that were
+    /// Reads TeamMembers.md and re-spawns any Software Engineers that were
     /// previously active but are no longer running (e.g., after a restart).
     /// Matches engineers by display name and restores their task assignments from the EngineeringPlan.
     /// </summary>
@@ -455,20 +455,18 @@ public class ProgramManagerAgent : AgentBase
                 var name = columns[0].Trim();
                 var roleText = columns[1].Trim();
 
-                // Restore Senior/Junior engineers + additional Principal Engineers from pool
+                // Restore additional Software Engineers from pool
                 AgentRole? role = roleText switch
                 {
-                    "PrincipalEngineer" => AgentRole.PrincipalEngineer,
-                    "SeniorEngineer" => AgentRole.SeniorEngineer,
-                    "JuniorEngineer" => AgentRole.JuniorEngineer,
+                    "SoftwareEngineer" => AgentRole.SoftwareEngineer,
                     _ => null
                 };
 
                 if (role is null)
                     continue;
 
-                // Skip the core PE (rank 0) — it's already spawned by the worker
-                if (role == AgentRole.PrincipalEngineer && name == "PrincipalEngineer")
+                // Skip the core SE (rank 0) — it's already spawned by the worker
+                if (role == AgentRole.SoftwareEngineer && name == "SoftwareEngineer")
                     continue;
 
                 // Check if an agent with this name is already running
@@ -592,7 +590,7 @@ public class ProgramManagerAgent : AgentBase
                         var spawned = 0;
                         for (int i = 0; i < count; i++)
                         {
-                            var spawnedIdentity = await _spawnManager.SpawnAgentAsync(AgentRole.JuniorEngineer, ct);
+                            var spawnedIdentity = await _spawnManager.SpawnAgentAsync(AgentRole.SoftwareEngineer, ct);
                             if (spawnedIdentity is not null)
                             {
                                 _additionalEngineersHired++;
@@ -600,7 +598,7 @@ public class ProgramManagerAgent : AgentBase
                                 await _projectFiles.AddTeamMemberAsync(spawnedIdentity, "Online", ct: ct);
                                 Logger.LogInformation(
                                     "Executive override: spawned {Role} '{Name}' ({N}/{Count})",
-                                    AgentRole.JuniorEngineer, spawnedIdentity.DisplayName, spawned, count);
+                                    AgentRole.SoftwareEngineer, spawnedIdentity.DisplayName, spawned, count);
                             }
                         }
 
@@ -778,9 +776,7 @@ public class ProgramManagerAgent : AgentBase
                 else
                 {
                     // Parse which role is requested from the issue body
-                    var requestedRole = issue.Body?.Contains("SeniorEngineer", StringComparison.OrdinalIgnoreCase) == true
-                        ? AgentRole.SeniorEngineer
-                        : AgentRole.JuniorEngineer;
+                    var requestedRole = AgentRole.SoftwareEngineer;
 
                     _additionalEngineersHired++;
                     Logger.LogInformation(
@@ -1025,7 +1021,7 @@ public class ProgramManagerAgent : AgentBase
                                 var priorReviews = string.Join("\n\n",
                                     pr.Comments
                                         .Where(c => c.Body.Contains("[Architect]", StringComparison.OrdinalIgnoreCase)
-                                                 || c.Body.Contains("[PrincipalEngineer]", StringComparison.OrdinalIgnoreCase))
+                                                 || c.Body.Contains("[SoftwareEngineer]", StringComparison.OrdinalIgnoreCase))
                                         .Select(c => c.Body));
 
                                 critiqueFindings = await PerformCritiqueAsync(
@@ -1323,7 +1319,7 @@ public class ProgramManagerAgent : AgentBase
             tracking = new AgentTracking
             {
                 AgentId = message.FromAgentId,
-                Role = AgentRole.SeniorEngineer // default; updated if known
+                Role = AgentRole.SoftwareEngineer // default; updated if known
             };
             _trackedAgents[message.FromAgentId] = tracking;
         }
@@ -2549,8 +2545,8 @@ public class ProgramManagerAgent : AgentBase
                         && !string.Equals(trimmed, "CHANGES_REQUESTED", StringComparison.OrdinalIgnoreCase)
                         && !trimmed.StartsWith("[ProgramManager] CHANGES REQUESTED", StringComparison.OrdinalIgnoreCase)
                         && !trimmed.StartsWith("[ProgramManager] APPROVED", StringComparison.OrdinalIgnoreCase)
-                        && !trimmed.StartsWith("[PrincipalEngineer] CHANGES REQUESTED", StringComparison.OrdinalIgnoreCase)
-                        && !trimmed.StartsWith("[PrincipalEngineer] APPROVED", StringComparison.OrdinalIgnoreCase);
+                        && !trimmed.StartsWith("[SoftwareEngineer] CHANGES REQUESTED", StringComparison.OrdinalIgnoreCase)
+                        && !trimmed.StartsWith("[SoftwareEngineer] APPROVED", StringComparison.OrdinalIgnoreCase);
                 })
                 .ToList();
             reviewBody = string.Join('\n', cleanedLines).Trim();

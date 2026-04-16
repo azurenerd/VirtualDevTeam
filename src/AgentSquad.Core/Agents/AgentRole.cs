@@ -5,9 +5,7 @@ public enum AgentRole
     ProgramManager,
     Researcher,
     Architect,
-    PrincipalEngineer,
-    SeniorEngineer,
-    JuniorEngineer,
+    SoftwareEngineer,
     TestEngineer,
     Custom
 }

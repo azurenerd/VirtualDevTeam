@@ -60,7 +60,7 @@ This single rule governs what moves to templates and what stays in C#:
 
 Examples:
 
-- The 60-line code review rubric that tells the PE *what* to evaluate → **template**
+- The 60-line code review rubric that tells the SE *what* to evaluate → **template**
 - The `if (pr.Status == Approved)` check that decides *when* to trigger review → **C# code**
 - The system message defining the Researcher's persona and expertise → **template**
 - The `while (!ct.IsCancellationRequested)` agent loop polling for work → **C# code**
@@ -128,7 +128,7 @@ downstream agents consume.
 | 6 | **Executive communication** | Status reporting | ~10 lines | Project status, blockers, timeline |
 
 **Notes**: The PM Spec generation prompt is the most critical — its output format must match what
-the Architect, PE, and Engineers expect. Changes here require downstream validation.
+the Architect, SE, and Engineers expect. Changes here require downstream validation.
 
 The **research integration** prompt (combining Research.md content with project description to
 produce the initial spec draft) is embedded in the spec generation flow and should be extracted
@@ -156,9 +156,9 @@ interwoven with the architecture generation prompt and should be separated durin
 
 ---
 
-### 2.4 PrincipalEngineerAgent (~6 prompts)
+### 2.4 SoftwareEngineerAgent (~6 prompts)
 
-The PE is the technical lead, producing the EngineeringPlan.md and conducting code reviews.
+The SE is the technical lead, producing the EngineeringPlan.md and conducting code reviews.
 
 | # | Prompt | Location | Size | Variables |
 |---|--------|----------|------|-----------|
@@ -174,15 +174,15 @@ It includes a detailed scoring rubric, output format specification (JSON), revie
 (correctness, security, performance, maintainability, test coverage), and severity levels. This
 is the flagship migration target — demonstrating the most dramatic improvement in maintainability.
 
-The **leader election** prompt (used when multiple PEs exist in the PE fleet) defines consensus
+The **leader election** prompt (used when multiple PEs exist in the SE fleet) defines consensus
 criteria and is currently a shorter block within the spawn decision flow. It should be extracted
 as its own template.
 
 ---
 
-### 2.5 SeniorEngineerAgent (~4 prompts)
+### 2.5 SoftwareEngineerAgent (~4 prompts)
 
-Senior Engineers are the primary implementers, producing PRs with production code.
+Software Engineers are the primary implementers, producing PRs with production code.
 
 | # | Prompt | Location | Size | Variables |
 |---|--------|----------|------|-----------|
@@ -191,19 +191,19 @@ Senior Engineers are the primary implementers, producing PRs with production cod
 | 3 | **Self-review criteria** | Pre-submit review | ~20 lines | Own PR diff, coding standards, test requirements |
 | 4 | **Rework handling** | Review feedback response | ~15 lines | Review comments, original code, requested changes |
 
-**Notes**: Senior Engineers share significant prompt DNA with Junior Engineers. The
+**Notes**: Software Engineers share significant prompt DNA with Software Engineers. The
 **implementation instructions** prompt includes sections on file organization, error handling
-patterns, and test expectations that are nearly identical between Senior and Junior roles.
+patterns, and test expectations that are nearly identical between Software Engineers roles.
 These should become shared fragments with role-specific overrides.
 
 The **PR description generation** prompt (formatting the PR body with context, changes summary,
-and testing notes) is currently in `EngineerAgentBase` and shared by both Senior and Junior.
+and testing notes) is currently in `EngineerAgentBase` and shared by both Software Engineers.
 
 ---
 
-### 2.6 JuniorEngineerAgent (~4 prompts)
+### 2.6 SoftwareEngineerAgent (~4 prompts)
 
-Junior Engineers handle simpler tasks with additional guidance and mentoring emphasis.
+Software Engineers handle simpler tasks with additional guidance and mentoring emphasis.
 
 | # | Prompt | Location | Size | Variables |
 |---|--------|----------|------|-----------|
@@ -212,13 +212,13 @@ Junior Engineers handle simpler tasks with additional guidance and mentoring emp
 | 3 | **Self-review criteria** | Pre-submit review | ~25 lines | Own PR diff, common mistakes checklist, learning goals |
 | 4 | **Rework handling** | Review feedback response | ~20 lines | Review comments, original code, mentoring guidance |
 
-**Notes**: Junior prompts are ~20% longer than Senior equivalents due to:
+**Notes**: Software Engineer prompts are ~20% longer than Software Engineer equivalents due to:
 - Explicit mentoring language ("explain your reasoning", "consider edge cases")
 - Common mistakes checklists
 - Learning goal tracking
 - More detailed examples in implementation instructions
 
-The template system should support a **base + override** pattern where the Junior implementation
+The template system should support a **base + override** pattern where the Software Engineer implementation
 template extends the shared engineer implementation template with additional sections.
 
 ---
@@ -251,7 +251,7 @@ contents). The template system must handle large variable values gracefully.
 
 ### 2.8 EngineerAgentBase (~3 shared prompts)
 
-The abstract base class for Senior and Junior Engineers contains shared prompt logic.
+The abstract base class for Software Engineers contains shared prompt logic.
 
 | # | Prompt | Location | Size | Variables |
 |---|--------|----------|------|-----------|
@@ -259,7 +259,7 @@ The abstract base class for Senior and Junior Engineers contains shared prompt l
 | 2 | **File change instructions** | PR file modification guidance | ~15 lines | File list, change scope, backward compatibility rules |
 | 3 | **Context building** | Task context assembly | ~15 lines | Architecture doc, engineering plan, related PRs |
 
-**Notes**: These prompts are prepended to role-specific prompts in both Senior and Junior
+**Notes**: These prompts are prepended to role-specific prompts in both Software Engineers
 Engineers. In the template system, they become shared fragments included via
 `{{> shared/implementation-patterns}}` or similar syntax.
 
@@ -272,8 +272,8 @@ Engineers. In the template system, they become shared fragments included via
 | Total hardcoded prompt blocks | **39+** |
 | Total approximate lines of prompt text | **~750** |
 | Agent files containing prompts | **8** |
-| Agents with 5+ prompts | **4** (PM, Architect, PE, TE) |
-| Largest single prompt | **~60 lines** (PE code review) |
+| Agents with 5+ prompts | **4** (PM, Architect, SE, TE) |
+| Largest single prompt | **~60 lines** (SE code review) |
 | Shared/duplicated fragments | **~5** (code style, PR format, review output, project context, implementation patterns) |
 | Existing externalized agents | **2** (CustomAgent, SmeAgent via RoleContextProvider) |
 
@@ -292,7 +292,7 @@ prompts/{agent-role}/{prompt-name}.md
 
 **Naming conventions**:
 - Agent role directories use **kebab-case** matching the agent's conceptual name:
-  `researcher`, `pm`, `architect`, `principal-engineer`, `senior-engineer`, `junior-engineer`,
+  `researcher`, `pm`, `architect`, `software-engineer`, `software-engineer`, `software-engineer`,
   `test-engineer`
 - Prompt file names use **kebab-case** describing the prompt's purpose:
   `system-message.md`, `code-review.md`, `test-strategy.md`
@@ -310,8 +310,8 @@ model_tier: premium
 max_tokens: 4096
 temperature: 0.7
 version: "1.0"
-tags: [code-review, principal-engineer]
-description: "Principal Engineer code review rubric and scoring criteria"
+tags: [code-review, software-engineer]
+description: "Software Engineer code review rubric and scoring criteria"
 variables:
   - pr_number
   - pr_diff
@@ -342,7 +342,7 @@ so agents can optionally respect template-declared preferences.
 Template variables use double-curly-brace syntax: `{{variable_name}}`.
 
 ```markdown
-You are {{agent_name}}, the Principal Engineer for the {{project_name}} project.
+You are {{agent_name}}, the Software Engineer for the {{project_name}} project.
 
 ## Your Task
 Review PR #{{pr_number}} against the architecture defined in:
@@ -364,7 +364,7 @@ Review PR #{{pr_number}} against the architecture defined in:
 | Variable | Source | Description |
 |----------|--------|-------------|
 | `{{agent_name}}` | `AgentIdentity.DisplayName` | The agent's display name |
-| `{{agent_role}}` | `AgentIdentity.Role` | The agent's role (e.g., "PrincipalEngineer") |
+| `{{agent_role}}` | `AgentIdentity.Role` | The agent's role (e.g., "SoftwareEngineer") |
 | `{{project_name}}` | `AgentSquadConfig.Project.Name` | Project name |
 | `{{project_description}}` | `ProjectFileManager` | Full project description |
 | `{{tech_stack}}` | `ProjectFileManager` | Technology stack summary |
@@ -380,7 +380,7 @@ Reusable prompt fragments are included using the `{{> path/to/fragment}}` syntax
 Mustache/Handlebars partials):
 
 ```markdown
-You are {{agent_name}}, a Senior Engineer.
+You are {{agent_name}}, a Software Engineer.
 
 ## Coding Standards
 {{> shared/code-style-guidelines}}
@@ -428,7 +428,7 @@ public class PromptTemplateService : IPromptTemplateService
     /// </summary>
     /// <param name="templatePath">
     /// Relative path from prompts root, without .md extension.
-    /// Example: "principal-engineer/code-review"
+    /// Example: "software-engineer/code-review"
     /// </param>
     /// <param name="variables">Key-value pairs for {{variable}} substitution.</param>
     /// <returns>The rendered prompt string.</returns>
@@ -521,7 +521,7 @@ Request Flow:
 │  Agent Code  │────>│ PromptTemplate   │────>│  File System    │
 │              │     │   Service        │     │  (prompts/*.md) │
 │ RenderAsync( │     │                  │     │                 │
-│  "pe/review",│     │ 1. Check cache   │     │                 │
+│  "se/review",│     │ 1. Check cache   │     │                 │
 │  variables)  │     │ 2. Load if miss  │     │                 │
 │              │<────│ 3. Parse YAML    │<────│                 │
 │              │     │ 4. Substitute    │     │                 │
@@ -532,7 +532,7 @@ Request Flow:
 
 **Caching strategy**:
 - Templates are cached in a `ConcurrentDictionary<string, PromptTemplate>` after first load
-- Cache key is the normalized template path (e.g., `"principal-engineer/code-review"`)
+- Cache key is the normalized template path (e.g., `"software-engineer/code-review"`)
 - Cache entries include `LoadedAt` timestamp for staleness detection
 - Cache is invalidated:
   - Explicitly via `InvalidateCache()` (called by FileSystemWatcher in Phase 5)
@@ -593,12 +593,12 @@ This is **optional** and only enabled when `AgentSquadConfig.Prompts.HotReload` 
 
 ## 4. Concrete Before/After Examples
 
-### 4.1 Example 1: Principal Engineer Code Review Prompt
+### 4.1 Example 1: Software Engineer Code Review Prompt
 
 This is the largest and most complex prompt in the codebase (~60 lines). It demonstrates the
 highest-value migration.
 
-#### Before (PrincipalEngineerAgent.cs)
+#### Before (SoftwareEngineerAgent.cs)
 
 ```csharp
 private async Task<string> ReviewPullRequestAsync(int prNumber, string diff, string description)
@@ -607,7 +607,7 @@ private async Task<string> ReviewPullRequestAsync(int prNumber, string diff, str
     var chat = new ChatHistory();
 
     chat.AddSystemMessage($"""
-        You are {Identity.DisplayName}, the Principal Engineer for the {_config.Project.Name} project.
+        You are {Identity.DisplayName}, the Software Engineer for the {_config.Project.Name} project.
         You are an expert code reviewer with deep knowledge of software architecture,
         design patterns, security best practices, and performance optimization.
 
@@ -696,18 +696,18 @@ private async Task<string> ReviewPullRequestAsync(int prNumber, string diff, str
 
 #### After
 
-**File: `prompts/principal-engineer/system-message.md`**
+**File: `prompts/software-engineer/system-message.md`**
 
 ```markdown
 ---
 model_tier: premium
 version: "1.0"
-description: "Principal Engineer persona and expertise definition"
+description: "Software Engineer persona and expertise definition"
 variables:
   - agent_name
   - project_name
 ---
-You are {{agent_name}}, the Principal Engineer for the {{project_name}} project.
+You are {{agent_name}}, the Software Engineer for the {{project_name}} project.
 You are an expert code reviewer with deep knowledge of software architecture,
 design patterns, security best practices, and performance optimization.
 
@@ -715,7 +715,7 @@ Your role is to provide thorough, constructive code reviews that maintain
 high engineering standards while being respectful and educational.
 ```
 
-**File: `prompts/principal-engineer/code-review.md`**
+**File: `prompts/software-engineer/code-review.md`**
 
 ```markdown
 ---
@@ -724,7 +724,7 @@ max_tokens: 4096
 temperature: 0.3
 version: "1.0"
 description: "Code review rubric with weighted scoring across 5 categories"
-tags: [code-review, principal-engineer, scoring]
+tags: [code-review, software-engineer, scoring]
 variables:
   - pr_number
   - pr_description
@@ -784,7 +784,7 @@ Evaluate the code against the following categories, scoring each 1-5:
 - < 3.0: Request changes
 ```
 
-**Updated C# code in PrincipalEngineerAgent.cs**:
+**Updated C# code in SoftwareEngineerAgent.cs**:
 
 ```csharp
 private async Task<string> ReviewPullRequestAsync(int prNumber, string diff, string description)
@@ -794,7 +794,7 @@ private async Task<string> ReviewPullRequestAsync(int prNumber, string diff, str
 
     // System message — externalized to template
     var systemPrompt = await _templateService.RenderAsync(
-        "principal-engineer/system-message",
+        "software-engineer/system-message",
         new Dictionary<string, string>
         {
             ["agent_name"] = Identity.DisplayName,
@@ -804,7 +804,7 @@ private async Task<string> ReviewPullRequestAsync(int prNumber, string diff, str
 
     // Review prompt — externalized with fragment includes
     var reviewPrompt = await _templateService.RenderWithIncludesAsync(
-        "principal-engineer/code-review",
+        "software-engineer/code-review",
         new Dictionary<string, string>
         {
             ["pr_number"] = prNumber.ToString(),
@@ -1005,7 +1005,7 @@ included via the `{{> shared/fragment-name}}` syntax.
 
 ### 5.1 `prompts/shared/code-style-guidelines.md`
 
-Referenced by: Senior Engineer, Junior Engineer, Test Engineer (for test code), PE (for review)
+Referenced by: Software Engineer, Software Engineer, Test Engineer (for test code), SE (for review)
 
 ```markdown
 ## Coding Standards
@@ -1023,7 +1023,7 @@ Follow these project coding conventions:
 
 ### 5.2 `prompts/shared/pr-description-format.md`
 
-Referenced by: Senior Engineer, Junior Engineer (PR creation)
+Referenced by: Software Engineer, Software Engineer (PR creation)
 
 ```markdown
 ## PR Description Format
@@ -1048,7 +1048,7 @@ A 1-2 sentence overview of what this PR does.
 
 ### 5.3 `prompts/shared/review-output-format.md`
 
-Referenced by: Principal Engineer (code review), Architect (architecture review)
+Referenced by: Software Engineer (code review), Architect (architecture review)
 
 ```markdown
 Respond with a JSON object following this structure:
@@ -1102,7 +1102,7 @@ Referenced by: All agents that need project background
 
 ### 5.5 `prompts/shared/implementation-patterns.md`
 
-Referenced by: Senior Engineer, Junior Engineer (via EngineerAgentBase)
+Referenced by: Software Engineer, Software Engineer (via EngineerAgentBase)
 
 ```markdown
 ## Implementation Patterns
@@ -1201,7 +1201,7 @@ deployable and adds value on its own. No phase requires subsequent phases to be 
 ```
 Phase 1          Phase 2         Phase 3           Phase 4              Phase 5
 Foundation +     Shared          Engineer          Complex Agents       Polish +
-Researcher       Fragments + PM  Agents            (Arch, PE, TE)       Hot-Reload
+Researcher       Fragments + PM  Agents            (Arch, SE, TE)       Hot-Reload
 ─────────────>  ──────────────>  ──────────────>   ──────────────────>  ──────────>
   ~2 days          ~2 days         ~3 days            ~4 days            ~2 days
 ```
@@ -1335,7 +1335,7 @@ critical PMSpec.md consumed by all downstream agents.
 
 ### Phase 3: Engineer Agents
 
-**Goal**: Migrate Senior, Junior, and the shared EngineerAgentBase prompts, proving the
+**Goal**: Migrate Software Engineer, Software Engineer, and the shared EngineerAgentBase prompts, proving the
 base + override pattern.
 
 **Duration**: ~3 days
@@ -1349,20 +1349,20 @@ base + override pattern.
    ├── file-change-instructions.md (new)
    └── context-building.md         (new)
    ```
-   These become shared fragments that both Senior and Junior templates include.
+   These become shared fragments that both Software Engineers templates include.
 
-2. **Extract SeniorEngineerAgent's 4 prompts**:
+2. **Extract SoftwareEngineerAgent's 4 prompts**:
    ```
-   prompts/senior-engineer/
+   prompts/software-engineer/
    ├── system-message.md
    ├── implementation.md          (includes shared/implementation-patterns)
    ├── self-review.md
    └── rework.md
    ```
 
-3. **Extract JuniorEngineerAgent's 4 prompts**:
+3. **Extract SoftwareEngineerAgent's 4 prompts**:
    ```
-   prompts/junior-engineer/
+   prompts/software-engineer/
    ├── system-message.md
    ├── implementation.md          (includes shared/implementation-patterns + mentoring)
    ├── self-review.md             (includes common-mistakes checklist)
@@ -1370,9 +1370,9 @@ base + override pattern.
    ```
 
 4. **Validate the base + override pattern**:
-   - Senior `implementation.md` includes `{{> shared/implementation-patterns}}` then adds
-     Senior-specific instructions
-   - Junior `implementation.md` includes the same fragment then adds mentoring language,
+   - Software Engineer `implementation.md` includes `{{> shared/implementation-patterns}}` then adds
+     Software Engineer Self-Review instructions
+   - Software Engineer `implementation.md` includes the same fragment then adds mentoring language,
      examples, and learning goals
    - Verify that both render correctly with distinct outputs
 
@@ -1381,14 +1381,14 @@ base + override pattern.
    - PR description must match expected format (uses `{{> shared/pr-description-format}}`)
 
 6. **Write tests**:
-   - Base + override pattern renders correctly for Senior
-   - Base + override pattern renders correctly for Junior (with extra sections)
-   - PR description format is consistent between Senior and Junior
+   - Base + override pattern renders correctly for Software Engineer
+   - Base + override pattern renders correctly for Software Engineer (with extra sections)
+   - PR description format is consistent between Software Engineers
 
 #### Definition of Done
 - [x] EngineerAgentBase shared prompts are fragments
-- [x] SeniorEngineerAgent uses external templates for all 4 prompts
-- [x] JuniorEngineerAgent uses external templates for all 4 prompts
+- [x] SoftwareEngineerAgent uses external templates for all 4 prompts
+- [x] SoftwareEngineerAgent uses external templates for all 4 prompts
 - [x] Base + override pattern verified
 - [x] PR descriptions render correctly
 - [x] All tests pass
@@ -1400,7 +1400,7 @@ base + override pattern.
 
 ---
 
-### Phase 4: Complex Agents (Architect, PE, Test Engineer)
+### Phase 4: Complex Agents (Architect, SE, Test Engineer)
 
 **Goal**: Migrate the most complex agents with the largest and most variable-rich prompts.
 
@@ -1418,9 +1418,9 @@ base + override pattern.
    └── design-patterns.md
    ```
 
-2. **Extract PrincipalEngineerAgent's 6 prompts**:
+2. **Extract SoftwareEngineerAgent's 6 prompts**:
    ```
-   prompts/principal-engineer/
+   prompts/software-engineer/
    ├── system-message.md
    ├── engineering-plan.md
    ├── task-decomposition.md
@@ -1448,7 +1448,7 @@ base + override pattern.
    - Verify that variable substitution handles large values without performance degradation
    - Consider streaming or chunked rendering if needed (unlikely for current scale)
 
-5. **PE Code Review — flagship migration**:
+5. **SE Code Review — flagship migration**:
    - Extract the ~60-line review prompt with its scoring rubric
    - Include `{{> shared/review-output-format}}` for the JSON schema
    - Verify that JSON output format is preserved exactly
@@ -1457,14 +1457,14 @@ base + override pattern.
 6. **Write comprehensive tests**:
    - Each agent's templates render correctly with full variable sets
    - Large variable values (10KB+) substitute without issues
-   - PE review output JSON schema is preserved
+   - SE review output JSON schema is preserved
    - Architect's 5-turn conversation renders all turns correctly
 
 #### Definition of Done
 - [x] ArchitectAgent uses external templates for all 5 prompts
-- [x] PrincipalEngineerAgent uses external templates for all 6 prompts
+- [x] SoftwareEngineerAgent uses external templates for all 6 prompts
 - [x] TestEngineerAgent uses external templates for all 8+ prompts
-- [x] PE code review flagship migration verified
+- [x] SE code review flagship migration verified
 - [x] Large variable handling tested
 - [x] All tests pass
 
@@ -1493,7 +1493,7 @@ base + override pattern.
 2. **Add prompt versioning support**:
    - Read `version` from frontmatter
    - Log which version of each prompt is being used
-   - Support version selection via config: `"Prompts.Overrides.pe-code-review": "2.0"`
+   - Support version selection via config: `"Prompts.Overrides.se-code-review": "2.0"`
 
 3. **Add A/B testing support**:
    - Config-based prompt variant selection
@@ -1503,7 +1503,7 @@ base + override pattern.
      {
        "Prompts": {
          "ABTest": {
-           "principal-engineer/code-review": {
+           "software-engineer/code-review": {
              "variants": ["1.0", "2.0"],
              "distribution": [50, 50]
            }
@@ -1719,7 +1719,7 @@ public class PromptTemplateIntegrationTests : IDisposable
     [Fact]
     public async Task PEAgent_CodeReview_ProducesValidJson()
     {
-        // Run PE code review with external template
+        // Run SE code review with external template
         // Parse JSON output
         // Verify schema: overall_score, recommendation, categories, etc.
     }
@@ -1727,9 +1727,9 @@ public class PromptTemplateIntegrationTests : IDisposable
     [Fact]
     public async Task EngineerAgents_SharedFragments_IncludedCorrectly()
     {
-        // Render Senior and Junior implementation prompts
+        // Render Software Engineers implementation prompts
         // Both should contain shared/implementation-patterns content
-        // Junior should additionally contain mentoring sections
+        // Software Engineer should additionally contain mentoring sections
     }
 }
 ```
@@ -1842,13 +1842,13 @@ prompts/
 ├── README.md                           # How to create and modify templates
 │
 ├── shared/                             # Reusable fragments included by multiple agents
-│   ├── code-style-guidelines.md        # Coding standards (Senior, Junior, TE, PE)
-│   ├── pr-description-format.md        # PR body template (Senior, Junior)
-│   ├── review-output-format.md         # JSON review schema (PE, Architect)
+│   ├── code-style-guidelines.md        # Coding standards (Software Engineer, TE, SE)
+│   ├── pr-description-format.md        # PR body template (Software Engineer)
+│   ├── review-output-format.md         # JSON review schema (SE, Architect)
 │   ├── project-context.md              # Project description + tech stack (all agents)
-│   ├── implementation-patterns.md      # Error handling, DI, file org (Senior, Junior)
-│   ├── file-change-instructions.md     # PR file modification guidance (Senior, Junior)
-│   └── context-building.md             # Task context assembly (Senior, Junior)
+│   ├── implementation-patterns.md      # Error handling, DI, file org (Software Engineer)
+│   ├── file-change-instructions.md     # PR file modification guidance (Software Engineer)
+│   └── context-building.md             # Task context assembly (Software Engineer)
 │
 ├── researcher/                         # ResearcherAgent prompts (Phase 1)
 │   ├── system-message.md               # Researcher persona and expertise
@@ -1870,22 +1870,22 @@ prompts/
 │   ├── technology-evaluation.md        # Technology comparison framework
 │   └── design-patterns.md              # Pattern selection criteria
 │
-├── principal-engineer/                 # PrincipalEngineerAgent prompts (Phase 4)
-│   ├── system-message.md               # PE persona
+├── software-engineer/                 # SoftwareEngineerAgent prompts (Phase 4)
+│   ├── system-message.md               # SE persona
 │   ├── engineering-plan.md             # EngineeringPlan.md creation
 │   ├── task-decomposition.md           # Work breakdown structure
 │   ├── code-review.md                  # 60-line review rubric (flagship)
 │   ├── spawn-decision.md               # Engineer scaling criteria
-│   └── leader-election.md              # PE fleet consensus
+│   └── leader-election.md              # SE fleet consensus
 │
-├── senior-engineer/                    # SeniorEngineerAgent prompts (Phase 3)
-│   ├── system-message.md               # Senior Engineer persona
+├── software-engineer/                    # SoftwareEngineerAgent prompts (Phase 3)
+│   ├── system-message.md               # Software Engineer persona
 │   ├── implementation.md               # Code generation instructions
 │   ├── self-review.md                  # Pre-submit review criteria
 │   └── rework.md                       # Review feedback handling
 │
-├── junior-engineer/                    # JuniorEngineerAgent prompts (Phase 3)
-│   ├── system-message.md               # Junior Engineer persona (with mentoring)
+├── software-engineer/                    # SoftwareEngineerAgent prompts (Phase 3)
+│   ├── system-message.md               # Software Engineer persona (with mentoring)
 │   ├── implementation.md               # Code generation with extra guidance
 │   ├── self-review.md                  # Review with common mistakes checklist
 │   └── rework.md                       # Feedback handling with learning goals
@@ -1909,9 +1909,9 @@ prompts/
 | `researcher/` | 3 | 1 |
 | `pm/` | 6 | 2 |
 | `architect/` | 5 | 4 |
-| `principal-engineer/` | 6 | 4 |
-| `senior-engineer/` | 4 | 3 |
-| `junior-engineer/` | 4 | 3 |
+| `software-engineer/` | 6 | 4 |
+| `software-engineer/` | 4 | 3 |
+| `software-engineer/` | 4 | 3 |
 | `test-engineer/` | 8 | 4 |
 | **Total** | **43 + README** | — |
 
@@ -1994,8 +1994,8 @@ allowing teams to customize agent behavior without forking the codebase.
 Prompt changes produce focused diffs:
 
 ```diff
---- a/prompts/principal-engineer/code-review.md
-+++ b/prompts/principal-engineer/code-review.md
+--- a/prompts/software-engineer/code-review.md
++++ b/prompts/software-engineer/code-review.md
 @@ -15,7 +15,7 @@
  ### 2. Security (Weight: 25%)
 -- Are inputs validated and sanitized?
@@ -2145,14 +2145,14 @@ agents get the template system for free.
 
 ### 12.2 PEParallelismEnhancements.md
 
-The [PE Parallelism Enhancements](PEParallelismEnhancements.md) plan introduces a PE fleet
-with multiple Principal Engineers working in parallel. With prompt externalization:
+The [SE Parallelism Enhancements](PEParallelismEnhancements.md) plan introduces a SE fleet
+with multiple Software Engineers working in parallel. With prompt externalization:
 
-- PE fleet prompts are templates from the start — no hardcoded strings to migrate
-- Leader election prompts (`prompts/principal-engineer/leader-election.md`) are shared across
-  all PE instances
+- SE fleet prompts are templates from the start — no hardcoded strings to migrate
+- Leader election prompts (`prompts/software-engineer/leader-election.md`) are shared across
+  all SE instances
 - Individual PEs can have customized review emphasis via template variable overrides
-- A/B testing of review approaches across PE fleet members
+- A/B testing of review approaches across SE fleet members
 
 ### 12.3 .agent.md Files (Copilot CLI)
 

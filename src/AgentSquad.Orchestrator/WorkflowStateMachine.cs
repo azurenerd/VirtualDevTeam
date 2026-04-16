@@ -59,7 +59,7 @@ public class WorkflowStateMachine
         public const string ArchitectureComplete = "architecture.complete";
         public const string ArchitectureDocReady = "architecture.doc.ready";
         public const string EngineeringPlanReady = "engineering.plan.ready";
-        public const string PrincipalEngineerReady = "principal.ready";
+        public const string SoftwareEngineerReady = "software-engineer.ready";
         public const string AllEngineeringComplete = "engineering.all.complete";
         public const string TestCoverageMet = "testing.coverage.met";
         public const string AllReviewsApproved = "reviews.all.approved";
@@ -389,9 +389,9 @@ public class WorkflowStateMachine
                 },
                 new()
                 {
-                    Name = "Principal Engineer Ready",
-                    Description = "Principal Engineer must signal readiness (signal: principal.ready).",
-                    IsMet = _signals.Contains(Signals.PrincipalEngineerReady)
+                    Name = "Software Engineer Ready",
+                    Description = "Software Engineer must signal readiness (signal: software-engineer.ready).",
+                    IsMet = _signals.Contains(Signals.SoftwareEngineerReady)
                 }
             },
 

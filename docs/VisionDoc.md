@@ -19,8 +19,8 @@ Each human team member selects a **role** that matches their expertise and is pa
 | **Director** | Orchestrator Agent | Full-team oversight, all agents report up |
 | **Product Manager** | PM Agent | Spec reviews, priority decisions, stakeholder alignment |
 | **Architect** | Architect Agent | Design reviews, technology decisions, pattern approval |
-| **Principal Engineer** | PE Agent | Engineering plan review, task decomposition approval |
-| **Senior Engineer** | Senior Engineer Agent(s) | Code review, PR approval, implementation guidance |
+| **Software Engineer** | SE Agent | Engineering plan review, task decomposition approval |
+| **Software Engineer** | Software Engineer Agent(s) | Code review, PR approval, implementation guidance |
 | **Test Engineer** | Test Engineer Agent | Test strategy, coverage decisions, quality gates |
 | **UX Developer** | (Future) UX Agent | Design system, accessibility, user experience |
 
@@ -219,7 +219,7 @@ The Director tab becomes the central command for the human to orchestrate everyt
 │    └ Paired: You │   [Document Review Panel]                │
 │  🟢 Architect    │   [PR/Code Review Panel]                 │
 │    └ Paired: -   │   [Interactive Chat Panel]               │
-│  🟡 PE           │                                           │
+│  🟡 SE           │                                           │
 │    └ Waiting...  │                                           │
 │  🟢 Sr Eng 1     │                                           │
 │  🟢 Sr Eng 2     │                                           │
@@ -339,7 +339,7 @@ Escalations are triggered when:
 
 1. **Agent exhausts retries** — rework cycles depleted, build/test failures persist
 2. **Agent confidence drops** — AI model expresses uncertainty in its output
-3. **Conflict between agents** — two agents disagree (e.g., PE rejects Architect's plan)
+3. **Conflict between agents** — two agents disagree (e.g., SE rejects Architect's plan)
 4. **Gate timeout** — human hasn't responded within the configured timeout
 5. **Critical error** — unhandled exception, data loss risk, security concern
 6. **Agent requests help** — agent explicitly signals it needs human input (new `HumanHelpRequestMessage` on the bus)
@@ -438,22 +438,22 @@ The human can use chat to provide guidance that influences agent behavior *betwe
 
 #### The Vision: "Director's Screening Room"
 
-When `HumanFinalApproval` is enabled in configuration, no PR is merged until a human reviews and approves it. This is the **final gate** in the PR lifecycle — after the PE Worker implements, the Architect reviews architecture, the PE Leader reviews code quality, and the Test Engineer runs all tests (unit, integration, UI) and posts results with screenshots and video recordings.
+When `HumanFinalApproval` is enabled in configuration, no PR is merged until a human reviews and approves it. This is the **final gate** in the PR lifecycle — after the SE Worker implements, the Architect reviews architecture, the SE Leader reviews code quality, and the Test Engineer runs all tests (unit, integration, UI) and posts results with screenshots and video recordings.
 
 The human "Director" sees the PR only after all agent reviewers have done their best to catch issues, saving the human from having to find problems that automated review would have caught. The human's role shifts from "find bugs" to "validate intent" — does this PR actually deliver what was requested?
 
 #### PR Review Flow with Human Gate
 
 ```
-PE Worker creates PR
+SE Worker creates PR
   → Architect reviews (architecture alignment, screenshot analysis)
-  → PE Leader reviews (code quality, completeness)
-  → PE Worker addresses rework (if changes requested)
-  → Architect + PE Leader re-approve
+  → SE Leader reviews (code quality, completeness)
+  → SE Worker addresses rework (if changes requested)
+  → Architect + SE Leader re-approve
   → TE runs tests (unit, integration, UI), posts results + screenshots + video
   → [NEW] Human Final Approval — PR is held in "awaiting-human-review" state
   → Human approves → PR is merged
-  → Human requests changes → Comment posted, PE Worker picks up rework cycle
+  → Human requests changes → Comment posted, SE Worker picks up rework cycle
 ```
 
 #### The Review Board UI
@@ -466,9 +466,9 @@ The Review Board is a dedicated dashboard view designed like a **director review
 |---|---|
 | **Header** | PR title, linked issue/story, author agent, creation timestamp |
 | **Requirements** | Linked issue acceptance criteria + relevant PMSpec section (auto-extracted) |
-| **Agent Review Trail** | Chronological feed of all agent reviews — Architect's architecture assessment, PE Leader's code quality notes, each with their APPROVE/CHANGES REQUESTED verdict |
+| **Agent Review Trail** | Chronological feed of all agent reviews — Architect's architecture assessment, SE Leader's code quality notes, each with their APPROVE/CHANGES REQUESTED verdict |
 | **Code Changes** | Embedded diff viewer (or link to GitHub diff) showing actual files changed |
-| **Screenshots** | Gallery of all screenshots posted by PE (UI preview) and TE (test screenshots), rendered inline for visual comparison against requirements |
+| **Screenshots** | Gallery of all screenshots posted by SE (UI preview) and TE (test screenshots), rendered inline for visual comparison against requirements |
 | **Video Recordings** | Embedded video player for Playwright test recordings — the human can watch a real walkthrough of the feature being tested. If video analysis becomes available via multimodal models (e.g., Gemini), an AI-generated summary of the video can accompany the player. |
 | **Test Results** | Test summary table: passed/failed/skipped counts by tier (unit, integration, UI), with expandable failure details |
 | **Decision Controls** | `[Approve & Merge]` `[Request Changes]` `[Skip to Next]` buttons, with optional comment field for change requests |
@@ -537,8 +537,8 @@ Agent Team:
   ✅ PM Agent (premium tier)
   ✅ Researcher Agent (standard tier)
   ✅ Architect Agent (premium tier)
-  ✅ Principal Engineer × 2 (premium tier)
-  ✅ Senior Engineer × 2 (standard tier)  [spawned on demand]
+  ✅ Software Engineer × 2 (premium tier)
+  ✅ Software Engineer × 2 (standard tier)  [spawned on demand]
   ✅ Test Engineer (standard tier)
   ☐ UX Agent (not available yet)
 ```

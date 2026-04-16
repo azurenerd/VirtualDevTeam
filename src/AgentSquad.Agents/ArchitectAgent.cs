@@ -814,7 +814,7 @@ public class ArchitectAgent : AgentBase
         }
 
         // BUG FIX: Removed unnecessary GitHub Issue creation for PE notification.
-        // The Architect was creating an issue titled "Principal Engineer: Question from Architect"
+        // The Architect was creating an issue titled "Software Engineer: Question from Architect"
         // to tell the PE that Architecture.md was ready. This was wrong because: (a) it's not a
         // question, (b) the PE should be notified via message bus not a GitHub Issue, and (c) the
         // issue was never closed, cluttering the issue tracker. The StatusUpdateMessage broadcast

@@ -22,7 +22,7 @@ AgentSquad is a .NET 8 multi-agent AI system that manages a full software develo
 ## Key Capabilities
 
 - **Full Development Lifecycle** — From a single project description, agents autonomously produce Research.md → PMSpec.md → Architecture.md → EngineeringPlan.md → implemented PRs → test PRs → reviewed and merged code
-- **Dynamic SME Agents** — The PM and PE can spawn Subject Matter Expert agents on-demand (security auditors, database specialists, etc.) with custom personas, MCP tool servers, and external knowledge sources — driven by AI assessment of project needs
+- **Dynamic SME Agents** — The PM and SE can spawn Subject Matter Expert agents on-demand (security auditors, database specialists, etc.) with custom personas, MCP tool servers, and external knowledge sources — driven by AI assessment of project needs
 - **Multi-Tier Test Automation** — The Test Engineer generates and runs unit tests, integration tests, and Playwright UI/E2E tests in local workspaces, with AI-powered failure classification (test bug vs source bug) and automatic retry/fix cycles
 - **Human Gate Checkpoints** — Configurable gates pause workflow at critical points for human approval. Three presets (Full Auto, Supervised, Full Control) with hot-reloadable config via `IOptionsMonitor`
 - **GitHub Copilot CLI as AI Backend** — All model tiers route through the `copilot` CLI binary by default — no API keys required. Process-per-request with concurrency limiting, MCP server passthrough, and automatic fallback to direct API providers
@@ -38,7 +38,7 @@ AgentSquad is a .NET 8 multi-agent AI system that manages a full software develo
 - **15-Page Real-Time Dashboard** — Blazor Server UI with agent overview, project timeline, metrics, health monitor, PR/issue browsers, engineering plan graph, team visualization, director CLI terminal, and approval management
 - **Decision Impact Classification & Gating** — Agents classify decisions by impact level (XS–XL) using AI. High-impact decisions are gated for human approval before agents proceed. Configurable threshold levels, structured implementation plans for gated decisions, and a rich dashboard UI for reviewing and approving decisions
 - **Agent Task Steps** — Real-time workflow visibility: all 7 agents report step-by-step progress (BeginStep/CompleteStep/RecordSubStep) with per-step timing, LLM call counts, and cost. Dashboard shows live step timelines with progress bars and expected-step templates per role — zero LLM overhead, pure observability
-- **PE Parallelism Enhancements** — Principal Engineer validates file overlap across parallel tasks, enforces wave scheduling (W1/W2/W3+), uses typed dependencies, and logs parallelism metrics. AI-assisted repair of file conflicts ensures engineers can work in parallel without merge conflicts
+- **SE Parallelism Enhancements** — Software Engineer validates file overlap across parallel tasks, enforces wave scheduling (W1/W2/W3+), uses typed dependencies, and logs parallelism metrics. AI-assisted repair of file conflicts ensures engineers can work in parallel without merge conflicts
 - **Phase-Gated Workflow** — State machine enforces linear progression: Initialization → Research → Architecture → Planning → Development → Testing → Review → Finalization
 - **GitHub-Native Coordination** — Dual-layer communication: in-process message bus (<1ms, real-time) + GitHub API (durable PRs/Issues, human-visible). All work products are real GitHub artifacts
 - **Multi-Model Support** — Anthropic Claude, OpenAI GPT, Azure OpenAI, and local Ollama with four configurable tiers (premium / standard / budget / local) assigned per agent role
@@ -66,10 +66,10 @@ AgentSquad is a .NET 8 multi-agent AI system that manages a full software develo
 │  │          ResourceRequest, ReviewRequest, SpawnSme, SmeResult         │  │
 │  └──┬──────┬──────┬──────────┬──────────┬──────────┬──────────┬─────┬──┘  │
 │     │      │      │          │          │          │          │     │      │
-│  ┌──┴──┐┌──┴──┐┌──┴───┐┌────┴───┐┌─────┴──┐┌─────┴──┐┌─────┴─┐┌──┴───┐  │
-│  │ PM  ││Rschr││Archt ││ PE     ││SE (×n) ││JE (×n) ││ TE    ││ SME  │  │
-│  │Agent││Agent││Agent ││Agent   ││Agents  ││Agents  ││Agent  ││(×n)  │  │
-│  └──┬──┘└──┬──┘└──┬───┘└────┬───┘└────┬───┘└────┬───┘└────┬──┘└──┬───┘  │
+│  ┌──┴──┐┌──┴──┐┌──┴───┐┌────┴───┐┌─────────┴─────────┐┌─────┴─┐┌──┴───┐  │
+│  │ PM  ││Rschr││Archt ││ SE     ││  SE Workers (×n)  ││ TE    ││ SME  │  │
+│  │Agent││Agent││Agent ││Leader  ││  (dynamic pool)   ││Agent  ││(×n)  │  │
+│  └──┬──┘└──┬──┘└──┬───┘└────┬───┘└─────────┬─────────┘└────┬──┘└──┬───┘  │
 │     └──────┴──────┴─────────┴─────────┴─────────┴─────────┴──────┘      │
 │              GitHubService (60s TTL cache) · REST API                     │
 │              CopilotCliChatCompletionService · MCP Servers                │
@@ -186,7 +186,7 @@ You provide a project description
          │
          ▼
 ┌─ Initialization ──────────────────────────────────────────────────────┐
-│  PM spawns → Researcher, Architect, PE, Engineers, Test Engineer      │
+│  PM spawns → Researcher, Architect, SE, Engineers, Test Engineer      │
 └──────────────────────────────────────────────────────────────────────┘
          │
          ▼
@@ -197,21 +197,21 @@ You provide a project description
          ▼
 ┌─ Architecture ────────────────────────────────────────────────────────┐
 │  PM writes PMSpec.md (business spec with user stories)               │
-│  Architect designs system → Architecture.md (reviewed by PE)         │
+│  Architect designs system → Architecture.md (reviewed by SE)         │
 └──────────────────────────────────────────────────────────────────────┘
          │
          ▼
 ┌─ Engineering Planning ────────────────────────────────────────────────┐
-│  PE decomposes Architecture into tasks with dependencies             │
+│  SE decomposes Architecture into tasks with dependencies             │
 │  PM proposes team composition (core agents + SME specialists)        │
 │  Human gate → approve team → EngineeringPlan.md                      │
 └──────────────────────────────────────────────────────────────────────┘
          │
          ▼
 ┌─ Parallel Development ────────────────────────────────────────────────┐
-│  PE assigns tasks to engineers based on complexity                    │
+│  SE assigns tasks to engineers based on complexity                    │
 │  Engineers create PRs with implementation (local build verification)  │
-│  PE + Architect review PRs → approve or request rework               │
+│  SE + Architect review PRs → approve or request rework               │
 │  SME agents provide specialist input on-demand                       │
 └──────────────────────────────────────────────────────────────────────┘
          │
@@ -238,9 +238,8 @@ You provide a project description
 | **Program Manager** | `premium` | Orchestrates team composition, writes PMSpec with user stories, triages blockers, reviews PRs for business alignment, manages escalations to human executive |
 | **Researcher** | `standard` | Multi-turn technical research, technology evaluation, feasibility analysis → produces Research.md |
 | **Architect** | `premium` | System design via 5-turn AI conversation, API/data modeling, technology selection → produces Architecture.md, reviews PRs for architectural compliance |
-| **Principal Engineer** | `premium` | Decomposes architecture into engineering tasks, assigns work by complexity, conducts rigorous code reviews with scoring rubrics, handles high-complexity PRs directly |
-| **Senior Engineer** | `standard` | Implements medium-complexity tasks with plan → implement → self-review pipeline. Local build/test verification before PR submission |
-| **Junior Engineer** | `budget` | Implements low-complexity tasks with self-validation retries. Escalates tasks that exceed capability threshold |
+| **Software Engineer (Leader)** | `premium` | Decomposes architecture into engineering tasks, assigns work, conducts rigorous code reviews with scoring rubrics, handles high-complexity PRs directly. The first SE (rank 0) acts as the leader. |
+| **Software Engineer (Worker)** | `standard` | Implements tasks via plan → implement → self-review pipeline. Local build/test verification before PR submission. Additional SEs spawned dynamically from the SE pool. |
 | **Test Engineer** | `standard` | Three-tier test generation (unit → integration → UI/E2E), testability assessment, source-bug classification, coverage tracking |
 
 ### Dynamic Specialists (spawned on-demand)
@@ -332,10 +331,10 @@ AgentSquad/
 │   │   ├── ProgramManagerAgent.cs      # Team composition, PMSpec, blocker triage
 │   │   ├── ResearcherAgent.cs          # Multi-turn technical research
 │   │   ├── ArchitectAgent.cs           # System architecture design + PR review
-│   │   ├── PrincipalEngineerAgent.cs   # Eng planning, task assignment, code review
+│   │   ├── SoftwareEngineerAgent.cs   # Eng planning, task assignment, code review
 │   │   ├── EngineerAgentBase.cs        # Shared engineer logic (sessions, rework, build)
-│   │   ├── SeniorEngineerAgent.cs      # Medium-complexity implementation
-│   │   ├── JuniorEngineerAgent.cs      # Low-complexity with escalation
+│   │   ├── SoftwareEngineerAgent.cs      # Medium-complexity implementation
+│   │   ├── SoftwareEngineerAgent.cs      # Low-complexity with escalation
 │   │   ├── TestEngineerAgent.cs        # Multi-tier test generation + execution
 │   │   ├── CustomAgent.cs              # Config-driven custom agent roles
 │   │   ├── SmeAgent.cs                 # Dynamic SME specialist agents
@@ -382,9 +381,9 @@ AgentSquad/
 │   ├── pm/                             # 21 templates (specs, stories, reviews)
 │   ├── architect/                      # 13 templates (architecture design, review)
 │   ├── engineer-base/                  # 13 shared templates (planning, build-fix, rework)
-│   ├── senior-engineer/                # 2 templates (implementation, self-review)
-│   ├── junior-engineer/                # 1 template (implementation)
-│   ├── principal-engineer/             # 14 templates (plan gen, code review, integration)
+│   ├── software-engineer/                # 2 templates (implementation, self-review)
+│   ├── software-engineer/                # 1 template (implementation)
+│   ├── software-engineer/             # 14 templates (plan gen, code review, integration)
 │   ├── test-engineer/                  # 17 templates (test gen, tiers, failure mgmt)
 │   └── custom/                         # 4 templates (task/issue processing)
 │

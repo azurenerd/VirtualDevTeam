@@ -1,7 +1,7 @@
 # Lessons Learned: Building a Multi-Agent AI Development System
 
 > **Author:** Ben Humphrey (azurenerd) with Copilot CLI  
-> **Project:** AgentSquad — a .NET 8 multi-agent system where 7 AI agents (PM, Researcher, Architect, Principal Engineer, Senior/Junior Engineers, Test Engineer) collaborate through GitHub PRs/Issues to build software.  
+> **Project:** AgentSquad — a .NET 8 multi-agent system where 7 AI agents (PM, Researcher, Architect, Software Engineer, Software Engineers, Test Engineer) collaborate through GitHub PRs/Issues to build software.  
 > **Purpose:** This document captures hard-won lessons from ~85+ iterative build-run-fix cycles over multiple sessions. It's intended for engineering teams considering AI agent-based development pipelines, to help them avoid the same pitfalls and build better agent orchestration from day one.
 
 ---
@@ -31,7 +31,7 @@
 21. [Blazor Server SynchronizationContext Kills HTTP Calls](#21-blazor-server-synchronizationcontext-kills-http-calls)
 22. [Transient Status Flash from Pre-Gate Status Updates](#22-transient-status-flash-from-pre-gate-status-updates)
 23. [AI Agents Rewrite Components from Scratch During Incremental PRs](#23-ai-agents-rewrite-components-from-scratch-during-incremental-prs)
-24. [PE Parallelism Enhancements](#24-pe-parallelism-enhancements)
+24. [SE Parallelism Enhancements](#24-se-parallelism-enhancements)
 25. [Decision Impact Classification & Gating](#25-decision-impact-classification--gating)
 26. [Agent Task Steps — Real-Time Workflow Visibility](#26-agent-task-steps--real-time-workflow-visibility)
 
@@ -48,7 +48,7 @@
 
 ### Examples of guidance that was needed but not in the original plan:
 - "The PM agent doesn't create a PM Spec document" — the original plan had agents but didn't specify the document pipeline (Research.md → PMSpec.md → Architecture.md → Engineering tasks)
-- "The PE agent created the plan but hasn't asked for any new developers and no new PRs have been created" — the spawning workflow for engineer agents wasn't detailed
+- "The SE agent created the plan but hasn't asked for any new developers and no new PRs have been created" — the spawning workflow for engineer agents wasn't detailed
 - "Make sure the agents don't review the code until the engineering agents are ready" — review timing relative to PR readiness wasn't specified
 - "After a review we need to add a message to send back to the author when there is feedback" — the rework loop wasn't in the original design
 
@@ -62,7 +62,7 @@
 **Lesson:** AI agents lose all context between invocations. Every piece of information they need must be explicitly provided in their prompt, or they will produce generic, misaligned output.
 
 ### What happened:
-- Reviewers (PM, Architect, PE) were approving or rejecting PRs without reading the actual code files, the linked issue, the PMSpec, or the Architecture document. They were reviewing based solely on the PR title and description.
+- Reviewers (PM, Architect, SE) were approving or rejecting PRs without reading the actual code files, the linked issue, the PMSpec, or the Architecture document. They were reviewing based solely on the PR title and description.
 - Engineers were generating code without knowing what files already existed in the repository, leading to duplicate classes and conflicting namespaces.
 - The Test Engineer was writing markdown test plans instead of actual runnable test code because it wasn't told the technology stack or given examples.
 - The Architect was building Architecture.md without reading the PMSpec business goals.
@@ -83,7 +83,7 @@
 | PM | Review PR | PMSpec.md, Linked Issue, PR Code Files |
 | Architect | Write Architecture | PMSpec.md, Research.md, Design Files |
 | Architect | Review PR | Architecture.md, PMSpec.md, PR Code Files |
-| PE | Create Tasks | PMSpec.md, Architecture.md, Design Files, Repo Structure |
+| SE | Create Tasks | PMSpec.md, Architecture.md, Design Files, Repo Structure |
 | Engineer | Implement | PMSpec.md, Architecture.md, Issue Details, Design Files, Repo Structure |
 | TE | Write Tests | Merged PR Code, PMSpec.md, Architecture.md, Design Files |
 
@@ -164,7 +164,7 @@ If it's not in the prompt, it doesn't exist to the agent.
 - **Verbose reviews:** AI reviewers wrote 2000-4000 character reviews with headers, bullet lists, and summaries when a 2-sentence verdict was sufficient.
 - **Scope confusion:** The PM agent requested changes because a single PR didn't cover the entire PMSpec — not understanding that PRs are incremental.
 - **Review loops:** The rework counter was tracked per-feedback-item instead of per-round, so with 2 reviewers, the 3-rework limit was hit in 1.5 actual rounds.
-- **Approval deadlock:** The PE couldn't approve its own PR, but was listed as a required reviewer.
+- **Approval deadlock:** The SE couldn't approve its own PR, but was listed as a required reviewer.
 - **Force-approval gaps:** When max rework cycles were reached, the force-approval logic was blocked by stale "needs review" state.
 - **PM giving code advice:** The PM was commenting on implementation details instead of business alignment.
 
@@ -177,7 +177,7 @@ If it's not in the prompt, it doesn't exist to the agent.
 ### Takeaway:
 **Define explicit review contracts:**
 - Engineers signal "ready for review" via message bus — reviewers don't poll
-- Each reviewer has a defined scope (PM = business alignment, Architect = architecture compliance, PE = code quality)
+- Each reviewer has a defined scope (PM = business alignment, Architect = architecture compliance, SE = code quality)
 - Reviews are brief (1-3 sentences with a clear APPROVED/CHANGES_REQUESTED verdict)
 - Rework counting is per-round, not per-feedback-item
 - Force-approval exists as a safety valve with a reasonable threshold
@@ -284,7 +284,7 @@ If it's not in the prompt, it doesn't exist to the agent.
 - Design a model tier system (premium/standard/budget/local) that maps to agent roles
 - Quality-critical decisions (PM spec, Architecture) benefit most from premium models
 - Code generation (Engineers) gets best cost/quality ratio from standard-tier models
-- Simple tasks (Junior Engineer assignments) work fine with budget models
+- Simple tasks (Software Engineer assignments) work fine with budget models
 
 ---
 
@@ -294,7 +294,7 @@ If it's not in the prompt, it doesn't exist to the agent.
 
 ### What happened:
 - A professional HTML design reference (`OriginalDesignConcept.html`) with SVG Gantt timelines, monthly heatmap grids, and precise color schemes was sitting in the repository root.
-- **Not a single agent** — Researcher, PM, Architect, PE, or Engineers — ever read it.
+- **Not a single agent** — Researcher, PM, Architect, SE, or Engineers — ever read it.
 - The built UI was bare, unstyled HTML that looked "like something a free local model would have created in 4 minutes."
 - The design file had specific CSS grid patterns, hex color codes, typography specifications, and component layouts — all ignored.
 
@@ -304,7 +304,7 @@ If it's not in the prompt, it doesn't exist to the agent.
 - "Ensure the PM reads the design files, puts together a terrific and detailed description, and incorporates that into the PM Spec document with images, screenshots, or whatever design files were created"
 - "Make sure the Researcher agent is looking at those design ideas as well"
 - "And the architect of course too"
-- "Make sure the PE agent puts in the design details in Issues and PRs where able to give perfect design guidance"
+- "Make sure the SE agent puts in the design details in Issues and PRs where able to give perfect design guidance"
 - "Ensure the testing engineer knows the designs well to know how to best test them and do the UI tests too"
 
 ### Takeaway:
@@ -314,7 +314,7 @@ Design Files in Repo
   → Researcher: Analyzes design, recommends technologies for the specific design
   → PM: Creates "Visual Design Specification" section in PMSpec with layout, colors, interaction scenarios
   → Architect: Creates "UI Component Architecture" mapping visual sections to code components
-  → PE: Includes design details in every UI-related engineering task issue
+  → SE: Includes design details in every UI-related engineering task issue
   → Engineers: Reads design files before code generation, includes in AI prompts
   → TE: Reads design context for UI tests, generates assertions for layout/color/structure conformance
 ```
@@ -480,7 +480,7 @@ var response = await Task.Run(async () =>
 **Lesson:** Agents that call `UpdateStatus("⏳ Awaiting human approval...")` BEFORE checking whether the gate actually requires human approval create a misleading status flash on the dashboard. Even if the gate is in auto mode and returns `Proceed` in <1ms, the dashboard's 10-second poll interval can capture the transient status.
 
 ### What happened:
-- All agents with gates (PM, Architect, Principal Engineer, Researcher) updated their status to "Awaiting human approval" before calling `WaitForGateAsync`.
+- All agents with gates (PM, Architect, Software Engineer, Researcher) updated their status to "Awaiting human approval" before calling `WaitForGateAsync`.
 - When gates are in auto mode, `CheckGateAsync` returns `Proceed` instantly — but the status update was already published.
 - The dashboard polling at 10s intervals would randomly show "⏳ Awaiting human approval" on agent cards, then switch back to the real status on the next poll.
 
@@ -549,14 +549,14 @@ if (_gateCheck.RequiresHuman("pm_spec_review"))
 **Lesson:** If your AI agent receives a screenshot URL as plain text, it will "review" the screenshot based solely on the URL's presence — not its visual content. The AI will hallucinate a review, producing plausible-sounding approval text, because it literally cannot see the image.
 
 ### What happened:
-- The Test Engineer posted screenshots of the running application as PR comments (e.g., "Screenshot: https://github.com/user/repo/assets/123/screenshot.png"). The three reviewers (PM, Architect, PE) received these URLs as plain text in their AI prompts.
+- The Test Engineer posted screenshots of the running application as PR comments (e.g., "Screenshot: https://github.com/user/repo/assets/123/screenshot.png"). The three reviewers (PM, Architect, SE) received these URLs as plain text in their AI prompts.
 - PR #1152 shipped with a screenshot that clearly showed a broken UI — an error page with "Error: Failed to load data.json" visible in the image. All three reviewers approved the PR because they could see the text "Screenshot: https://..." but physically could not view the image content.
 - The AI models produced confident, specific-sounding reviews: "Screenshots confirm the UI is functioning correctly" — pure hallucination based on URL presence.
 
 ### Technical solution:
 - Added `GetPRScreenshotImagesAsync` to `PullRequestWorkflow.cs` that downloads actual image bytes from GitHub PR comment URLs (max 5 images per PR, max 2MB each, 15-second timeout per download).
 - `CopilotCliChatCompletionService` updated with `AppendMessageContent` helper that handles `ImageContent` by converting to base64 data URIs embedded directly in the prompt.
-- All three reviewer agents (PM, Architect, PE) now receive actual screenshot images as Semantic Kernel `ImageContent` items in their ChatHistory — not just URLs.
+- All three reviewer agents (PM, Architect, SE) now receive actual screenshot images as Semantic Kernel `ImageContent` items in their ChatHistory — not just URLs.
 - PM and Architect prompts explicitly instruct: "examine the screenshots for error pages, blank screens, JSON parse errors, broken layouts, missing CSS, or any visual indication the application is not working correctly."
 - Falls back to URL-only text context (`GetPRScreenshotContextAsync`) if image download fails — degraded but not broken.
 
@@ -570,13 +570,13 @@ if (_gateCheck.RequiresHuman("pm_spec_review"))
 **Lesson:** A gate check that exists on one code path but not another is worse than no gate at all — it creates false confidence that human review is happening when it's silently bypassed on the unchecked path.
 
 ### What happened:
-- The PE agent had two paths that could lead to a PR merge: (1) a direct merge path via `ApproveAndMaybeMergeAsync` (PE approves and immediately merges), and (2) a Phase 3 path via `MergeTestedPRsAsync` (after PM + TE approval). Only the Phase 3 path had the `FinalPRApproval` gate check. The direct merge path completely bypassed human gate review.
-- Gate rejection results from `AssessGateApprovalAsync` were silently discarded — when a human posted "Not approved" on a PR, the PE ignored the rejection and continued to the next task without triggering rework.
+- The SE agent had two paths that could lead to a PR merge: (1) a direct merge path via `ApproveAndMaybeMergeAsync` (SE approves and immediately merges), and (2) a Phase 3 path via `MergeTestedPRsAsync` (after PM + TE approval). Only the Phase 3 path had the `FinalPRApproval` gate check. The direct merge path completely bypassed human gate review.
+- Gate rejection results from `AssessGateApprovalAsync` were silently discarded — when a human posted "Not approved" on a PR, the SE ignored the rejection and continued to the next task without triggering rework.
 - `GateCheckService` used `IOptions<AgentSquadConfig>` which captures config once at construction time. Changing gate configuration in the dashboard or appsettings.json had no effect until the runner was restarted, making it impossible to dynamically enable gates during a run.
 
 ### Technical solution:
-- Added `ReadyToMerge` enum value and `deferMerge` parameter to `ApproveAndMaybeMergeAsync`. PE now checks `_gateCheck.RequiresHuman(GateIds.FinalPRApproval)` on BOTH merge paths.
-- Gate rejection results are now properly handled: if `GateDecision.Rejected`, PE sends a `ChangesRequestedMessage` with the human's feedback and triggers a rework cycle. Human-initiated rework uses "HumanReviewer" as `ReviewerAgent`.
+- Added `ReadyToMerge` enum value and `deferMerge` parameter to `ApproveAndMaybeMergeAsync`. SE now checks `_gateCheck.RequiresHuman(GateIds.FinalPRApproval)` on BOTH merge paths.
+- Gate rejection results are now properly handled: if `GateDecision.Rejected`, SE sends a `ChangesRequestedMessage` with the human's feedback and triggers a rework cycle. Human-initiated rework uses "HumanReviewer" as `ReviewerAgent`.
 - Changed `GateCheckService` from `IOptions<AgentSquadConfig>` to `IOptionsMonitor<AgentSquadConfig>` with a `Config` property that reads `_configMonitor.CurrentValue.HumanInteraction` on every gate check call. Changes to appsettings.json are now picked up at runtime.
 
 ### Takeaway:
@@ -586,19 +586,19 @@ if (_gateCheck.RequiresHuman("pm_spec_review"))
 
 ## 17. Port Conflicts When Multiple Agents Run Apps Simultaneously
 
-**Lesson:** When multiple agents (PE + TE, or multiple PEs) try to start the application under test on the same port (e.g., `:5100`), the second process fails because the port is already bound. This manifests as "App did not respond at http://localhost:5100 within 90s" — a timeout that looks like a build failure but is actually a port conflict.
+**Lesson:** When multiple agents (SE + TE, or multiple PEs) try to start the application under test on the same port (e.g., `:5100`), the second process fails because the port is already bound. This manifests as "App did not respond at http://localhost:5100 within 90s" — a timeout that looks like a build failure but is actually a port conflict.
 
 ### What happened:
 - The workspace config had a single `AppBaseUrl` of `http://localhost:5100` shared by all agents.
-- PE 1 starts the app on `:5100` to capture a screenshot — succeeds.
-- TE starts the app on `:5100` to run UI tests — the port is occupied by PE 1's still-running app, so `dotnet run` fails silently or can't bind.
-- Activity log shows concurrent screenshot capture (PE at 19:02) and UI test execution (TE at 18:56-19:04) on the same port.
+- SE 1 starts the app on `:5100` to capture a screenshot — succeeds.
+- TE starts the app on `:5100` to run UI tests — the port is occupied by SE 1's still-running app, so `dotnet run` fails silently or can't bind.
+- Activity log shows concurrent screenshot capture (SE at 19:02) and UI test execution (TE at 18:56-19:04) on the same port.
 - The TE's "app not responding" error was misdiagnosed as a build failure, missing data.json, or project path issue.
 
 ### Technical solution:
 - Added `DeriveUniquePort(workspacePath)` to `PlaywrightRunner` — hashes the workspace path to a port in the range 5100–5899.
 - Each agent's workspace path contains their unique agent ID (e.g., `C:\Agents\testengineer-8f2b...\`), so each gets a different port.
-- Applied port rewriting in both `RunUITestsAsync` (TE tests) and `CaptureAppScreenshotAsync` (PE screenshots).
+- Applied port rewriting in both `RunUITestsAsync` (TE tests) and `CaptureAppScreenshotAsync` (SE screenshots).
 - Port rewrite also updates `ASPNETCORE_URLS` env var and the `--urls` flag in the start command.
 - Config's `AppStartCommand` is temporarily swapped during execution and restored in the finally block.
 
@@ -621,7 +621,7 @@ if (_gateCheck.RequiresHuman("pm_spec_review"))
 1. **DB path**: Dashboard's `Program.cs` resolves the Runner's DB file via relative path (`../AgentSquad.Runner/agentsquad_*.db`).
 2. **Data hydration**: `DashboardDataService.SeedFromDatabase()` queries `ai_usage` for agent IDs + cost + model, and `activity_log` for latest status per agent.
 3. **Boot time filtering**: `AgentStateStore.RecordBoot()` writes `last_boot_utc` to `run_metadata` table on each Runner startup. Dashboard filters agents to only those with activity AFTER `last_boot_utc`.
-4. **Display names**: `InferRole()` extracts role from agent ID prefix (e.g., `principalengineer-xxx` → "Principal Engineer"). `FormatDisplayName()` numbers agents per role.
+4. **Display names**: `InferRole()` extracts role from agent ID prefix (e.g., `SoftwareEngineer-xxx` → "Software Engineer"). `FormatDisplayName()` numbers agents per role.
 5. **Periodic refresh**: Timer loop re-seeds from DB every 10 seconds.
 
 ### Takeaway:
@@ -659,9 +659,9 @@ if (_gateCheck.RequiresHuman("pm_spec_review"))
 
 ---
 
-## 24. PE Parallelism Enhancements
+## 24. SE Parallelism Enhancements
 
-**What**: Enhanced the Principal Engineer agent's task planning to maximize parallel execution by multiple engineers working simultaneously on separate PRs.
+**What**: Enhanced the Software Engineer agent's task planning to maximize parallel execution by multiple engineers working simultaneously on separate PRs.
 
 **Key Lessons**:
 
@@ -717,7 +717,7 @@ if (_gateCheck.RequiresHuman("pm_spec_review"))
 
 5. **Sub-Steps Add Depth Without Complexity** — Rather than creating deeply nested step hierarchies, `RecordSubStep()` adds a flat child entry to an existing step (e.g., "Reviewing file: auth.cs" under "Code Review"). This gives meaningful progress detail during long-running steps without complicating the data model or the UI rendering.
 
-6. **Shared Engineer Base Reduces Instrumentation Duplication** — Senior and Junior engineers share common workflows (issue pickup, implementation, build/test, PR creation) via `EngineerAgentBase`. Instrumenting steps at the base class level means both roles get step tracking for free, with role-specific steps added only in subclasses. This mirrors the existing agent architecture — step instrumentation follows the same inheritance patterns.
+6. **Shared Engineer Base Reduces Instrumentation Duplication** — Software Engineers share common workflows (issue pickup, implementation, build/test, PR creation) via `EngineerAgentBase`. Instrumenting steps at the base class level means both roles get step tracking for free, with role-specific steps added only in subclasses. This mirrors the existing agent architecture — step instrumentation follows the same inheritance patterns.
 
 7. **REST API Enables External Tooling** — The five step endpoints (`/api/steps/{agentId}`, `/current`, `/progress`, `/active`, `/templates/{role}`) enable external dashboards, CLI tools, and automation scripts to consume step data. This is important for CI/CD integration where teams want to monitor agent progress programmatically, not just through the Blazor UI.
 

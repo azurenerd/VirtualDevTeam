@@ -21,19 +21,19 @@ public class EngineeringTaskIssueManagerTests
     [Fact]
     public void ParseTaskName_AgentPrefixAfterBracket_StripsAgent()
     {
-        Assert.Equal("Set up project", EngineeringTaskIssueManager.ParseTaskName("[T1] Senior Engineer 1: Set up project"));
+        Assert.Equal("Set up project", EngineeringTaskIssueManager.ParseTaskName("[T1] Software Engineer 1: Set up project"));
     }
 
     [Fact]
     public void ParseAssignedAgent_AgentPrefixAfterBracket_ReturnsAgent()
     {
-        Assert.Equal("Senior Engineer 1", EngineeringTaskIssueManager.ParseAssignedAgent("[T1] Senior Engineer 1: Set up project"));
+        Assert.Equal("Software Engineer 1", EngineeringTaskIssueManager.ParseAssignedAgent("[T1] Software Engineer 1: Set up project"));
     }
 
     [Fact]
     public void ParseAssignedAgent_NoBracket_ReturnsAgent()
     {
-        Assert.Equal("Senior Engineer 1", EngineeringTaskIssueManager.ParseAssignedAgent("Senior Engineer 1: Set up project"));
+        Assert.Equal("Software Engineer 1", EngineeringTaskIssueManager.ParseAssignedAgent("Software Engineer 1: Set up project"));
     }
 
     [Fact]
@@ -103,7 +103,7 @@ public class EngineeringTaskIssueManagerTests
         var issue = new AgentIssue
         {
             Number = 100,
-            Title = "[T3] Senior Engineer 1: Build auth module",
+            Title = "[T3] Software Engineer 1: Build auth module",
             Body = "## Build auth module\n\nImplement JWT auth.\n\n## Metadata\n- **Task ID:** T3\n- **Complexity:** High\n- **Parent Issue:** #52\n- **Depends On:** #98, #99",
             State = "open",
             Url = "https://github.com/owner/repo/issues/100",
@@ -116,7 +116,7 @@ public class EngineeringTaskIssueManagerTests
         Assert.Equal("Build auth module", task.Name);
         Assert.Equal("High", task.Complexity);
         Assert.Equal("Assigned", task.Status);
-        Assert.Equal("Senior Engineer 1", task.AssignedTo);
+        Assert.Equal("Software Engineer 1", task.AssignedTo);
         Assert.Equal(100, task.IssueNumber);
         Assert.Equal(52, task.ParentIssueNumber);
         Assert.Equal([98, 99], task.DependencyIssueNumbers);

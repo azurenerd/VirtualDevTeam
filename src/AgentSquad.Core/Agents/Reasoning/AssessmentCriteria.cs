@@ -36,7 +36,7 @@ public static class AssessmentCriteria
         6. COMPONENT INTERACTIONS: Are component interactions and data flow described? Isolated component descriptions without integration is a gap.
         """;
 
-    public const string PrincipalEngineer = """
+    public const string SoftwareEngineer = """
         Evaluate the engineering plan against these criteria:
         1. ARCHITECTURE COVERAGE: Does every component from the architecture document have at least one task? Missing components are a gap.
         2. DEPENDENCY ORDER: Are tasks ordered so that dependencies are built before dependents? Tasks referencing unbuilt dependencies are a gap.
@@ -54,7 +54,7 @@ public static class AssessmentCriteria
         AgentRole.Researcher => Researcher,
         AgentRole.ProgramManager => ProgramManager,
         AgentRole.Architect => Architect,
-        AgentRole.PrincipalEngineer => PrincipalEngineer,
+        AgentRole.SoftwareEngineer => SoftwareEngineer,
         _ => null, // Engineers and TestEngineer use build/test loops instead
     };
 }

@@ -213,7 +213,7 @@ public class HealthMonitor : IHostedService, IDisposable
         {
             bool archDone =
                 HasReasonContaining(AgentRole.Architect, "architecture complete", "monitoring pr", "complete") ||
-                IsDownstreamWorking(AgentRole.PrincipalEngineer);
+                IsDownstreamWorking(AgentRole.SoftwareEngineer);
 
             if (archDone)
             {
@@ -227,31 +227,30 @@ public class HealthMonitor : IHostedService, IDisposable
         if (!_workflow.HasSignal(WorkflowStateMachine.Signals.EngineeringPlanReady))
         {
             bool planReady =
-                HasReasonContaining(AgentRole.PrincipalEngineer, "orchestrating", "tasks complete", "assigned task", "task done", "plan complete", "development loop", "working on task") ||
-                agents.Any(a => a.Identity.Role is AgentRole.SeniorEngineer or AgentRole.JuniorEngineer);
+                HasReasonContaining(AgentRole.SoftwareEngineer, "orchestrating", "tasks complete", "assigned task", "task done", "plan complete", "development loop", "working on task");
 
             if (planReady)
             {
                 SignalIfNew(WorkflowStateMachine.Signals.EngineeringPlanReady);
-                SignalIfNew(WorkflowStateMachine.Signals.PrincipalEngineerReady);
+                SignalIfNew(WorkflowStateMachine.Signals.SoftwareEngineerReady);
             }
         }
 
         // --- Parallel Development signals ---
         if (!_workflow.HasSignal(WorkflowStateMachine.Signals.AllEngineeringComplete))
         {
-            // Check if PE reports engineering complete (PE may do all coding itself)
-            bool peComplete = HasReasonContaining(AgentRole.PrincipalEngineer,
+            // Check if SE leader reports engineering complete (SE may do all coding itself)
+            bool seComplete = HasReasonContaining(AgentRole.SoftwareEngineer,
                 "engineering complete", "all tasks complete", "all tasks done", "integration pr");
 
-            var engineers = agents.Where(a => a.Identity.Role is AgentRole.SeniorEngineer or AgentRole.JuniorEngineer).ToList();
+            var engineers = agents.Where(a => a.Identity.Role is AgentRole.SoftwareEngineer && a.Identity.Rank > 0).ToList();
             bool engineersDone = engineers.Count > 0 && engineers.All(a =>
                 a.Status is AgentStatus.Online or AgentStatus.Idle &&
                 ((a.StatusReason ?? "").Contains("complete", StringComparison.OrdinalIgnoreCase) ||
                  (a.StatusReason ?? "").Contains("no task", StringComparison.OrdinalIgnoreCase) ||
                  (a.StatusReason ?? "").Contains("no assigned", StringComparison.OrdinalIgnoreCase)));
 
-            if (peComplete || engineersDone)
+            if (seComplete || engineersDone)
             {
                 SignalIfNew(WorkflowStateMachine.Signals.AllEngineeringComplete);
             }

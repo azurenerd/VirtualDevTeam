@@ -179,7 +179,7 @@ internal sealed partial class EngineeringTaskIssueManager
                 var depTaskId = dep.Id;
                 if (task.DependencyTypes.TryGetValue(depTaskId, out var depType))
                 {
-                    return PrincipalEngineerAgent.CanRelaxDependency(
+                    return SoftwareEngineerAgent.CanRelaxDependency(
                         depType, dep, sharedFiles ?? new HashSet<string>());
                 }
             }
@@ -365,7 +365,7 @@ internal sealed partial class EngineeringTaskIssueManager
             sb.AppendLine($"- **Owned Files:** {string.Join(", ", task.OwnedFiles)}");
 
         sb.AppendLine();
-        sb.AppendLine("_Created by Principal Engineer._");
+        sb.AppendLine("_Created by Software Engineer._");
         return sb.ToString();
     }
 

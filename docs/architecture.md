@@ -76,9 +76,9 @@ Concrete implementations of the 7 agent roles plus the factory.
 | `ProgramManagerAgent` | Team leadership, resource management, blocker triage |
 | `ResearcherAgent` | Multi-turn technical research → Research.md |
 | `ArchitectAgent` | 5-turn architecture design → Architecture.md + PR reviews |
-| `PrincipalEngineerAgent` | Engineering plan creation, task assignment, high-complexity implementation, code review |
-| `SeniorEngineerAgent` | Medium-complexity implementation with 3-turn AI loop |
-| `JuniorEngineerAgent` | Low-complexity with self-validation and escalation |
+| `SoftwareEngineerAgent` | Engineering plan creation, task assignment, high-complexity implementation, code review |
+| `SoftwareEngineerAgent` | Medium-complexity implementation with 3-turn AI loop |
+| `SoftwareEngineerAgent` | Low-complexity with self-validation and escalation |
 | `TestEngineerAgent` | Scans untested PRs, generates test plans and test PRs |
 | `AgentTracking` | Internal DTO for PM's team status tracking |
 
@@ -186,7 +186,7 @@ The `InProcessMessageBus` provides async pub/sub via `System.Threading.Channels`
 | `TaskAssignmentMessage` | Principal → Engineers | Assign implementation task with PR URL |
 | `StatusUpdateMessage` | Any → Broadcast (`*`) | Notify status transitions and task completion |
 | `HelpRequestMessage` | Engineer → Principal/PM | Escalate blockers or complexity issues |
-| `ResourceRequestMessage` | Principal → PM | Request additional Senior/Junior Engineers |
+| `ResourceRequestMessage` | Principal → PM | Request additional Software Engineers |
 | `ReviewRequestMessage` | Any → Any | Request code review on a PR |
 
 **Routing:** Messages with `ToAgentId = "*"` or `null` broadcast to all subscribers. Otherwise, delivered to the specific agent's mailbox.
@@ -219,7 +219,7 @@ PRs are the primary vehicle for task tracking and code delivery:
 ```
 ┌──────────────┐  Create PR   ┌─────────────────────┐  Submit review   ┌──────────────┐
 │  Principal   ├─────────────►│   GitHub PRs        ├─────────────────►│  Reviewer    │
-│  Engineer    │              │  Branch: agent/...   │                  │  (Arch/PE)   │
+│  Engineer    │              │  Branch: agent/...   │                  │  (Arch/SE)   │
 └──────────────┘              │  Labels: in-progress │                  └──────────────┘
                               │  → ready-for-review  │
                               │  → approved / tested │
@@ -227,10 +227,10 @@ PRs are the primary vehicle for task tracking and code delivery:
 ```
 
 **PR workflow:**
-1. Principal Engineer creates a task branch and PR from the engineering plan
+1. Software Engineer creates a task branch and PR from the engineering plan
 2. Assigned engineer implements and marks `ready-for-review`
 3. Architect reviews for architectural alignment
-4. Principal Engineer reviews for quality; approves or requests changes
+4. Software Engineer reviews for quality; approves or requests changes
 5. Test Engineer generates a test plan PR
 6. PR is merged on approval
 
@@ -243,7 +243,7 @@ Repository-hosted markdown files serve as shared, versioned state:
 | `TeamMembers.md` | PM | Markdown table tracking all agents: name, role, status, model tier, current PR |
 | `Research.md` | Researcher | Accumulated research findings with sections per topic |
 | `Architecture.md` | Architect | System design document (components, data model, APIs, security) |
-| `EngineeringPlan.md` | Principal Engineer | Task breakdown with status, assignments, dependencies, PRs |
+| `EngineeringPlan.md` | Software Engineer | Task breakdown with status, assignments, dependencies, PRs |
 
 These files are managed via `ProjectFileManager` using the GitHub contents API (get/create/update with SHA tracking).
 
@@ -280,9 +280,9 @@ Agents are assigned to model tiers based on the cognitive complexity of their ro
 
 | Tier | Typical Provider | Default Agents | Rationale |
 |------|-----------------|----------------|-----------|
-| **Premium** | Claude Opus / GPT-4o | PM, Architect, Principal Engineer | Leadership roles requiring deep reasoning, multi-turn planning, and nuanced judgment |
-| **Standard** | Claude Sonnet / GPT-4o | Researcher, Senior Engineer, Test Engineer | Strong implementation capability with good cost efficiency |
-| **Budget** | GPT-4o-mini | Junior Engineer | Simple, well-scoped tasks with self-validation guardrails |
+| **Premium** | Claude Opus / GPT-4o | PM, Architect, Software Engineer | Leadership roles requiring deep reasoning, multi-turn planning, and nuanced judgment |
+| **Standard** | Claude Sonnet / GPT-4o | Researcher, Software Engineer, Test Engineer | Strong implementation capability with good cost efficiency |
+| **Budget** | GPT-4o-mini | Software Engineer | Simple, well-scoped tasks with self-validation guardrails |
 | **Local** | Ollama (deepseek-coder-v2) | Configurable | Zero-cost inference for development/testing or low-priority tasks |
 
 The `ModelRegistry` manages `Kernel` instances (Microsoft Semantic Kernel) per tier, creating them lazily and caching for reuse. Provider routing:

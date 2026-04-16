@@ -189,7 +189,7 @@ public class SystemBootstrapTests : IDisposable
             AgentRole.ProgramManager,
             AgentRole.Researcher,
             AgentRole.Architect,
-            AgentRole.PrincipalEngineer,
+            AgentRole.SoftwareEngineer,
             AgentRole.TestEngineer
         };
 
@@ -217,7 +217,7 @@ public class SystemBootstrapTests : IDisposable
         Assert.True(spawnManager.CanSpawn(AgentRole.ProgramManager));
         Assert.True(spawnManager.CanSpawn(AgentRole.Researcher));
         Assert.True(spawnManager.CanSpawn(AgentRole.Architect));
-        Assert.True(spawnManager.CanSpawn(AgentRole.PrincipalEngineer));
+        Assert.True(spawnManager.CanSpawn(AgentRole.SoftwareEngineer));
         Assert.True(spawnManager.CanSpawn(AgentRole.TestEngineer));
     }
 
@@ -238,8 +238,8 @@ public class SystemBootstrapTests : IDisposable
         var architect = await spawnManager.SpawnAgentAsync(AgentRole.Architect, cts.Token);
         Assert.NotNull(architect);
 
-        var principal = await spawnManager.SpawnAgentAsync(AgentRole.PrincipalEngineer, cts.Token);
-        Assert.NotNull(principal);
+        var softwareEng = await spawnManager.SpawnAgentAsync(AgentRole.SoftwareEngineer, cts.Token);
+        Assert.NotNull(softwareEng);
 
         var tester = await spawnManager.SpawnAgentAsync(AgentRole.TestEngineer, cts.Token);
         Assert.NotNull(tester);

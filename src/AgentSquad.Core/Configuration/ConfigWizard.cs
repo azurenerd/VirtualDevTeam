@@ -158,10 +158,8 @@ public static partial class ConfigWizard
         config.Agents.ProgramManager.ModelTier = ResolveTier("premium", "standard");
         config.Agents.Researcher.ModelTier = ResolveTier("standard", "budget");
         config.Agents.Architect.ModelTier = ResolveTier("premium", "standard");
-        config.Agents.PrincipalEngineer.ModelTier = ResolveTier("premium", "standard");
+        config.Agents.SoftwareEngineer.ModelTier = ResolveTier("premium", "standard");
         config.Agents.TestEngineer.ModelTier = ResolveTier("standard", "budget");
-        config.Agents.SeniorEngineerTemplate.ModelTier = ResolveTier("standard", "budget");
-        config.Agents.JuniorEngineerTemplate.ModelTier = ResolveTier("local", "budget");
     }
 
     private static string ParseGitHubRepo(string input)

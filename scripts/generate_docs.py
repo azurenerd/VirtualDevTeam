@@ -96,7 +96,7 @@ def generate_executive_summary():
     add_para(doc,
         "AgentSquad is a working, battle-tested prototype that demonstrates this future. It is a "
         "multi-agent AI system where 7+ specialized AI agents \u2014 Program Manager, Researcher, "
-        "Architect, Principal Engineer, Senior and Junior Engineers, and Test Engineer \u2014 "
+        "Architect, Software Engineer, Software Engineers, and Test Engineer \u2014 "
         "collaborate through real GitHub PRs and Issues to build software end-to-end. Over 85+ "
         "iterative build-run-fix cycles, the system has been hardened with crash recovery, rate "
         "limiting, vision-based PR review, multi-tier test automation (including Playwright UI "
@@ -105,7 +105,7 @@ def generate_executive_summary():
         "Since the initial prototype, AgentSquad has evolved significantly with capabilities "
         "that dramatically increase its power and flexibility:")
     add_bullet(doc,
-        "Dynamic SME Agents \u2014 The PM and PE can spawn Subject Matter Expert agents on-demand "
+        "Dynamic SME Agents \u2014 The PM and SE can spawn Subject Matter Expert agents on-demand "
         "(security auditors, database specialists, etc.) with custom AI personas, MCP tool "
         "servers, and external knowledge sources")
     add_bullet(doc,
@@ -208,7 +208,7 @@ def generate_executive_summary():
         "team. Agents handle research, spec writing, architecture, coding, testing, and reviews "
         "autonomously \u2014 the human provides direction and quality gates.")
     add_bold_para(doc, "Quality Through Systematic Review: ",
-        "Every PR gets multi-agent peer review (PM for requirements, PE for architecture, TE for "
+        "Every PR gets multi-agent peer review (PM for requirements, SE for architecture, TE for "
         "test coverage). Vision-based screenshot review catches UI regressions. Incremental "
         "modification rules prevent agents from rewriting existing code during feature additions.")
     add_bold_para(doc, "Extensible Expertise: ",
@@ -343,7 +343,7 @@ def generate_detailed_summary():
     add_table(doc,
         ["Metric", "Value"],
         [
-            ["Core agent roles", "7 (PM, Researcher, Architect, PE, SE, JE, TE)"],
+            ["Core agent roles", "5 (PM, Researcher, Architect, SE, TE)"],
             ["Dynamic agent types", "SME Agents + Custom Agents (unlimited definitions)"],
             ["Automated tests", "167+ (unit, integration, agent behavior)"],
             ["Dashboard pages", "15 (real-time Blazor Server + SignalR)"],
@@ -403,7 +403,7 @@ def generate_detailed_summary():
         "The agent pipeline produces shared Markdown documents that each phase builds upon:")
     add_para(doc,
         "Project Description \u2192 Research.md (Researcher) \u2192 PMSpec.md (PM) \u2192 "
-        "Architecture.md (Architect, reviewed by PE) \u2192 EngineeringPlan.md (PE) \u2192 "
+        "Architecture.md (Architect, reviewed by SE) \u2192 EngineeringPlan.md (SE) \u2192 "
         "TeamComposition.md (PM) \u2192 PRs with code (Engineers) \u2192 Test PRs (TE)")
 
     add_h2(doc, "Thread Safety")
@@ -426,12 +426,12 @@ def generate_detailed_summary():
              "feasibility analysis. Produces Research.md"],
             ["Architect", "Premium", "System design via 5-turn AI conversation, API/data modeling, "
              "technology selection. Produces Architecture.md. Reviews PRs for architectural compliance"],
-            ["Principal Engineer", "Premium", "Decomposes architecture into engineering tasks, assigns "
+            ["Software Engineer", "Premium", "Decomposes architecture into engineering tasks, assigns "
              "work by complexity, conducts rigorous code reviews with scoring rubrics, handles "
              "high-complexity PRs, creates integration PR, spawns reactive SME agents"],
-            ["Senior Engineer", "Standard", "Implements medium-complexity tasks with plan \u2192 implement "
+            ["Software Engineer", "Standard", "Implements medium-complexity tasks with plan \u2192 implement "
              "\u2192 self-review pipeline. Local build/test verification before PR submission"],
-            ["Junior Engineer", "Budget", "Implements low-complexity tasks with self-validation retries. "
+            ["Software Engineer", "Budget", "Implements low-complexity tasks with self-validation retries. "
              "Escalates tasks that exceed capability threshold"],
             ["Test Engineer", "Standard", "Three-tier test generation (unit \u2192 integration \u2192 UI/E2E), "
              "testability assessment, source-bug classification, Playwright screenshots, coverage tracking"],
@@ -458,7 +458,7 @@ def generate_detailed_summary():
     add_bullet(doc, "Maximum 5 concurrent SME agents (configurable)")
     add_bullet(doc, "Per-definition instance limits")
     add_bullet(doc, "Human gate approval before spawning")
-    add_bullet(doc, "Only PM and PE can spawn SMEs (no agent-spawns-agent chains)")
+    add_bullet(doc, "Only PM and SE can spawn SMEs (no agent-spawns-agent chains)")
     add_bullet(doc, "Metrics tracking for all spawn/retirement events")
 
     # --- Section 4 ---
@@ -474,7 +474,7 @@ def generate_detailed_summary():
                      "before any code reaches GitHub")
     add_bullet(doc, "Multi-Step Implementation \u2014 Engineers break tasks into 3-6 discrete steps, "
                      "each committed atomically")
-    add_bullet(doc, "Self-Review Pipeline \u2014 Senior Engineers review their own code before submission")
+    add_bullet(doc, "Self-Review Pipeline \u2014 Software Engineers review their own code before submission")
 
     add_h2(doc, "Testing Features")
     add_bullet(doc, "Three-Tier Test Generation \u2014 Unit \u2192 Integration \u2192 UI/E2E (Playwright)")
@@ -492,11 +492,11 @@ def generate_detailed_summary():
     add_bullet(doc, "Agent Memory \u2014 SQLite-backed persistent recall across restarts (30 recent entries)")
 
     add_h2(doc, "Review & Quality Features")
-    add_bullet(doc, "Multi-Agent Peer Review \u2014 PM (requirements) + PE (architecture) + TE (tests)")
+    add_bullet(doc, "Multi-Agent Peer Review \u2014 PM (requirements) + SE (architecture) + TE (tests)")
     add_bullet(doc, "Configurable Rework Cycles \u2014 Max review rounds with force-approval fallback")
-    add_bullet(doc, "Integration PR \u2014 PE creates final assembly PR after all tasks merge")
+    add_bullet(doc, "Integration PR \u2014 SE creates final assembly PR after all tasks merge")
     add_bullet(doc, "Conflict Resolution \u2014 Detects and resolves merge conflicts across agent PRs")
-    add_bullet(doc, "Incremental Modification Check \u2014 PE review flags excessive file rewrites")
+    add_bullet(doc, "Incremental Modification Check \u2014 SE review flags excessive file rewrites")
 
     add_h2(doc, "Infrastructure Features")
     add_bullet(doc, "Prompt Externalization \u2014 ~95 templates in .md files with {{variable}} substitution")
@@ -530,19 +530,19 @@ def generate_detailed_summary():
          "Produces Research.md with technology evaluation and feasibility analysis."),
         ("Phase 3: Architecture", "PM writes PMSpec.md (business spec with user stories and "
          "acceptance criteria). Architect designs system via 5-turn AI conversation. Produces "
-         "Architecture.md. PE reviews architecture for feasibility."),
-        ("Phase 4: Engineering Planning", "PE decomposes Architecture into tasks with dependencies "
+         "Architecture.md. SE reviews architecture for feasibility."),
+        ("Phase 4: Engineering Planning", "SE decomposes Architecture into tasks with dependencies "
          "and complexity ratings. PM proposes team composition (core agents + SME specialists). "
          "Human gate approves team. EngineeringPlan.md and TeamComposition.md produced."),
-        ("Phase 5: Parallel Development", "PE assigns tasks to engineers based on complexity. "
-         "Engineers create PRs with implementation (local build verification). PE + Architect "
+        ("Phase 5: Parallel Development", "SE assigns tasks to engineers based on complexity. "
+         "Engineers create PRs with implementation (local build verification). SE + Architect "
          "review PRs. SME agents provide specialist input on-demand. Rework cycles for feedback."),
         ("Phase 6: Testing", "Test Engineer scans approved PRs. Generates three-tier test strategy "
          "(unit \u2192 integration \u2192 UI/E2E). Runs tests locally with Playwright. Classifies "
          "failures as test bugs vs source bugs. Routes rework to appropriate agent."),
         ("Phase 7: Review", "PM conducts final review for business alignment. All PRs pass "
          "multi-agent review pipeline. Human gate for final PR approval."),
-        ("Phase 8: Finalization", "PE creates integration PR (final assembly). All PRs merged. "
+        ("Phase 8: Finalization", "SE creates integration PR (final assembly). All PRs merged. "
          "Project marked complete. Workspaces cleaned up."),
     ]
     for phase_name, description in phases:
@@ -630,13 +630,13 @@ def generate_detailed_summary():
     add_table(doc,
         ["Tier", "Default Provider", "Used By", "Rationale"],
         [
-            ["Premium", "Claude Opus 4.6", "PM, Architect, PE",
+            ["Premium", "Claude Opus 4.6", "PM, Architect, SE",
              "Quality-critical decisions: specs, architecture, code review"],
             ["Standard", "Claude Sonnet 4.6", "Researcher, SE, TE",
              "Best cost/quality for research and code generation"],
-            ["Budget", "GPT-5.2", "Junior Engineers",
+            ["Budget", "GPT-5.2", "Software Engineers",
              "Cost-effective for low-complexity tasks"],
-            ["Local", "Ollama (qwen2.5-coder:14b)", "Junior Engineers (alt)",
+            ["Local", "Ollama (qwen2.5-coder:14b)", "Software Engineers (alt)",
              "Free, offline, good for simple tasks"],
         ])
 
@@ -653,7 +653,7 @@ def generate_detailed_summary():
     add_bullet(doc, "Local Build Verification \u2014 No code reaches GitHub until it compiles and passes tests")
     add_bullet(doc, "Multi-Agent Review \u2014 Every PR reviewed by 2+ agents for different quality dimensions")
     add_bullet(doc, "Incremental Modification Rules \u2014 Agents preserve existing code when adding features")
-    add_bullet(doc, "Duplicate Type Detection \u2014 PE review catches duplicate class/type definitions")
+    add_bullet(doc, "Duplicate Type Detection \u2014 SE review catches duplicate class/type definitions")
     add_bullet(doc, "Namespace Consistency \u2014 Engineers use namespaces matching existing code structure")
 
     add_h2(doc, "Operational Safety")
@@ -775,7 +775,7 @@ def generate_detailed_summary():
     add_h2(doc, "Near-Term Enhancements")
     add_bullet(doc, "Multi-channel notifications (Teams Adaptive Cards, email, browser push)")
     add_bullet(doc, "Interactive agent chat via dashboard for real-time guidance")
-    add_bullet(doc, "PE fleet-style parallelism for faster task execution")
+    add_bullet(doc, "SE fleet-style parallelism for faster task execution")
     add_bullet(doc, "Cross-project agent memory sharing")
     add_bullet(doc, "Plugin architecture for custom workflow stages")
 

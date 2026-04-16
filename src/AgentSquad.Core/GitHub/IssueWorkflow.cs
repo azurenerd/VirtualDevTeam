@@ -32,7 +32,7 @@ public class IssueWorkflow
     }
 
     /// <summary>
-    /// Parse the target agent name from an issue title: "Senior Engineer 1: Question" → "Senior Engineer 1"
+    /// Parse the target agent name from an issue title: "Software Engineer 1: Question" → "Software Engineer 1"
     /// </summary>
     public static string? ParseAgentNameFromTitle(string title)
     {

@@ -32,7 +32,7 @@
 
 ### What We're Building
 
-Enable AgentSquad agents (primarily the PM and PE) to **dynamically define and spawn new agents at runtime** with:
+Enable AgentSquad agents (primarily the PM and SE) to **dynamically define and spawn new agents at runtime** with:
 
 1. **Custom role definitions** — system prompts, behavioral instructions, domain expertise
 2. **MCP server toolsets** — each SME agent gets a tailored set of MCP servers providing specialized tools (GitHub, Playwright, database, custom APIs, etc.)
@@ -48,7 +48,7 @@ The core vision is that the **PM agent acts as the team director** — it doesn'
 3. **PM writes and reads PMSpec.md** (its own business specification synthesizing the above)
 4. **PM reviews the catalog of available agents and their capabilities** — both the 7 built-in roles and any previously-defined SME agent templates
 5. **PM decides the optimal team composition:**
-   - Which built-in agents are needed (and how many of each — e.g., 2 Senior Engineers, 1 Junior)
+   - Which built-in agents are needed (and how many of each — e.g., 2 Software Engineers, 1 Software Engineer)
    - Which existing SME templates match the project needs (e.g., "Database Architect" for a data-heavy feature)
    - Whether a **new SME agent role needs to be created** for capabilities not covered by any existing agent
 6. **For new SME agents, the PM defines the role** — provides a role description, selects MCP servers from the registry, and specifies websites/documents/APIs for the agent to digest and build domain expertise from
@@ -129,7 +129,7 @@ public List<string> McpServers { get; set; }         // MCP server names
 
 **`AgentSpawnManager`** (`src/AgentSquad.Orchestrator/AgentSpawnManager.cs`):
 - Already handles runtime agent creation with slot reservation, gate checks, DI-based instantiation
-- Supports PE, SE, JE roles with configurable pool sizes
+- Supports SE roles with configurable pool sizes
 
 **`AgentFactory`** (`src/AgentSquad.Agents/AgentFactory.cs`):
 - Switch-based factory mapping `AgentRole` → concrete agent class
@@ -160,7 +160,7 @@ These server names must correspond to MCP servers configured in the CLI's settin
 │                                                             │
 │  ┌──────────┐    ┌─────────────────┐    ┌──────────────┐   │
 │  │ PM Agent  │───▶│ SME Agent Defn  │───▶│ AgentSpawn   │   │
-│  │ PE Agent  │    │ Service         │    │ Manager      │   │
+│  │ SE Agent  │    │ Service         │    │ Manager      │   │
 │  └──────────┘    └────────┬────────┘    └──────┬───────┘   │
 │                           │                     │           │
 │                           ▼                     ▼           │
@@ -465,18 +465,18 @@ Ship with a library of ready-to-use SME definitions:
 
 ## 6. Dynamic Agent Creation Flow
 
-### Sequence: PM/PE Creates an SME Agent
+### Sequence: PM/SE Creates an SME Agent
 
 ```
-1. PM/PE identifies need for specialized expertise
+1. PM/SE identifies need for specialized expertise
    (e.g., "This task requires deep security knowledge")
 
-2. PM/PE constructs or selects an SMEAgentDefinition
+2. PM/SE constructs or selects an SMEAgentDefinition
    Option A: Select from SmeTemplates ("security-auditor")
    Option B: AI generates a custom definition based on task requirements
    Option C: Human provides via dashboard Configuration page
 
-3. PM/PE sends SpawnSmeAgentMessage to AgentSpawnManager
+3. PM/SE sends SpawnSmeAgentMessage to AgentSpawnManager
    {
      Definition: <SMEAgentDefinition>,
      AssignToTask: <IssueNumber or null>,
@@ -926,7 +926,7 @@ Phase 2: Agent Team Composition (NEW — added after PMSpec is written)
     → PM queries the SME Agent Catalog (built-in roles + saved templates)
     → PM evaluates: "What capabilities does this project need?"
     → PM produces TeamComposition proposal:
-       ├── Built-in agents needed (with counts: e.g., 2× SE, 1× JE)
+       ├── Built-in agents needed (with counts: e.g., 2× SE, 1× SE)
        ├── Existing SME templates to activate (e.g., "database-architect")
        └── New SME agents to create (with role def, MCP servers, knowledge links)
     → Human gate: Director reviews & approves/modifies the proposal
@@ -1015,22 +1015,22 @@ public record BuiltInAgentRequest
 }
 ```
 
-### PE as Reactive Spawner (Complementary Role)
+### SE as Reactive Spawner (Complementary Role)
 
-While the PM handles **proactive team design** at the start, the PE retains the ability to **reactively spawn SME agents** during the engineering phases when unexpected needs arise:
+While the PM handles **proactive team design** at the start, the SE retains the ability to **reactively spawn SME agents** during the engineering phases when unexpected needs arise:
 
 ```
-PE analyzes engineering-task Issue #55: "Implement RBAC with OAuth2 + JWT"
+SE analyzes engineering-task Issue #55: "Implement RBAC with OAuth2 + JWT"
   → AI evaluates: "This task requires deep security expertise beyond standard engineering"
-  → PE checks SmeTemplates for matching capabilities: finds "security-auditor"
-  → PE sends SpawnSmeAgentMessage { DefinitionId="security-auditor", AssignToIssue=55 }
+  → SE checks SmeTemplates for matching capabilities: finds "security-auditor"
+  → SE sends SpawnSmeAgentMessage { DefinitionId="security-auditor", AssignToIssue=55 }
   → Human gate approval
   → Security Auditor SME agent spawns → reviews the task → provides security-focused guidance
 ```
 
-### AI-Generated Agent Definitions (Used by Both PM and PE)
+### AI-Generated Agent Definitions (Used by Both PM and SE)
 
-For tasks where no template matches, either the PM (during composition) or PE (reactively) can ask AI to design a new agent:
+For tasks where no template matches, either the PM (during composition) or SE (reactively) can ask AI to design a new agent:
 
 ```csharp
 public class SmeDefinitionGenerator
@@ -1100,7 +1100,7 @@ public record TeamCompositionApprovalMessage : AgentMessage
     public string? DirectorNotes { get; init; }
 }
 
-/// PE/PM requests an individual SME agent spawn (reactive)
+/// SE/PM requests an individual SME agent spawn (reactive)
 public record SpawnSmeAgentMessage : AgentMessage
 {
     public required string DefinitionId { get; init; }    // Template ID or custom
@@ -1245,10 +1245,10 @@ GET  /api/dashboard/mcp/servers/{name}/status — Check server availability
 
 | Scenario | Flow |
 |----------|------|
-| PE spawns security auditor for RBAC task | PE → SpawnSmeAgent → security-auditor starts → reviews code → posts findings on Issue |
+| SE spawns security auditor for RBAC task | SE → SpawnSmeAgent → security-auditor starts → reviews code → posts findings on Issue |
 | PM spawns API designer for spec review | PM → SpawnSmeAgent → api-designer starts → reviews endpoints → comments on PR |
 | MCP server unavailable (no Node.js) | Spawn attempt → availability check fails → graceful degradation → agent runs without MCP tools |
-| Max SME agents reached | 6th spawn request → rejected → PE logs warning → falls back to standard engineer |
+| Max SME agents reached | 6th spawn request → rejected → SE logs warning → falls back to standard engineer |
 
 ---
 
@@ -1324,13 +1324,13 @@ GET  /api/dashboard/mcp/servers/{name}/status — Check server availability
 - Wire into `WorkflowStateMachine`: team composition gate between Research/PMSpec and Architecture phases
 - PM tracks SME agents in TeamMembers.md alongside built-in agents
 
-### Phase 7: PE Reactive Agent Spawning (Agents/Orchestrator)
+### Phase 7: SE Reactive Agent Spawning (Agents/Orchestrator)
 
-**Goal:** PE can reactively spawn SME agents during engineering phases when unexpected needs arise.
+**Goal:** SE can reactively spawn SME agents during engineering phases when unexpected needs arise.
 
 - Add `SpawnSmeAgentMessage` and `SmeResultMessage` message types
 - Add `SmeDefinitionGenerator` for AI-generated definitions
-- PE integration: evaluate tasks for SME needs, request spawns (with human gate)
+- SE integration: evaluate tasks for SME needs, request spawns (with human gate)
 - Wire into existing workflow (SME agents can participate in review pipeline)
 
 ### Phase 8: Dashboard Integration (Dashboard)
@@ -1365,7 +1365,7 @@ GET  /api/dashboard/mcp/servers/{name}/status — Check server availability
 | 1 | MCP server lifecycle management | A: CLI-managed (write config), B: Direct SDK, C: Hybrid | **C (Hybrid)** — Start with A, migrate to B |
 | 2 | Where to persist SME definitions | JSON file, SQLite, GitHub repo file | **JSON file** (simple, human-editable, git-friendly) |
 | 3 | Should SME agents participate in the review pipeline? | Yes (as reviewers), No (advisory only), Configurable | **Configurable** per definition |
-| 4 | Can SME agents create other SME agents? | Yes (recursive), No (only PM/PE), Depth-limited | **No for v1** — only PM/PE can spawn |
+| 4 | Can SME agents create other SME agents? | Yes (recursive), No (only PM/SE), Depth-limited | **No for v1** — only PM/SE can spawn |
 | 5 | How do SME agents get GitHub access? | Shared PAT, Per-agent tokens, MCP GitHub server only | **MCP GitHub server** (cleanest separation) |
 | 6 | Should MCP servers run per-agent or shared? | Per-agent (isolation), Shared (efficiency) | **Shared for v1** (CLI manages lifecycle) |
 | 7 | Knowledge link refresh frequency | Once at init, Periodic, On-demand | **Once at init** (v1), periodic for v2 |

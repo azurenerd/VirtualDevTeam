@@ -15,7 +15,7 @@
 
 {{test_results}}
 
-### Prior Review Comments (Architect, PE)
+### Prior Review Comments (Architect, SE)
 
 {{prior_reviews}}
 

@@ -9,7 +9,7 @@ public record AgentIdentity
 
     /// <summary>
     /// Rank within the role pool. 0 = original/leader, 1+ = additional/worker.
-    /// Used for leader election among multiple PrincipalEngineer agents.
+    /// Used for leader election among multiple SoftwareEngineer agents.
     /// </summary>
     public int Rank { get; init; } = 0;
 

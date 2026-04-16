@@ -417,8 +417,7 @@ public sealed class DashboardDataService : BackgroundService, IDashboardDataServ
                         Role = role,
                         ModelTier = role switch
                         {
-                            AgentRole.ProgramManager or AgentRole.Architect or AgentRole.PrincipalEngineer => "premium",
-                            AgentRole.JuniorEngineer => "budget",
+                            AgentRole.ProgramManager or AgentRole.Architect or AgentRole.SoftwareEngineer => "premium",
                             _ => "standard"
                         },
                         Status = inferredStatus,
@@ -446,11 +445,9 @@ public sealed class DashboardDataService : BackgroundService, IDashboardDataServ
         if (agentId.StartsWith("programmanager", StringComparison.OrdinalIgnoreCase)) return AgentRole.ProgramManager;
         if (agentId.StartsWith("researcher", StringComparison.OrdinalIgnoreCase)) return AgentRole.Researcher;
         if (agentId.StartsWith("architect", StringComparison.OrdinalIgnoreCase)) return AgentRole.Architect;
-        if (agentId.StartsWith("principalengineer", StringComparison.OrdinalIgnoreCase)) return AgentRole.PrincipalEngineer;
-        if (agentId.StartsWith("seniorengineer", StringComparison.OrdinalIgnoreCase)) return AgentRole.SeniorEngineer;
-        if (agentId.StartsWith("juniorengineer", StringComparison.OrdinalIgnoreCase)) return AgentRole.JuniorEngineer;
+        if (agentId.StartsWith("softwareengineer", StringComparison.OrdinalIgnoreCase)) return AgentRole.SoftwareEngineer;
         if (agentId.StartsWith("testengineer", StringComparison.OrdinalIgnoreCase)) return AgentRole.TestEngineer;
-        return AgentRole.SeniorEngineer;
+        return AgentRole.SoftwareEngineer;
     }
 
     private static string FormatDisplayName(string agentId, AgentRole role, int indexInRole)
@@ -460,9 +457,7 @@ public sealed class DashboardDataService : BackgroundService, IDashboardDataServ
             AgentRole.ProgramManager => "Program Manager",
             AgentRole.Researcher => "Researcher",
             AgentRole.Architect => "Architect",
-            AgentRole.PrincipalEngineer => "Principal Engineer",
-            AgentRole.SeniorEngineer => "Senior Engineer",
-            AgentRole.JuniorEngineer => "Junior Engineer",
+            AgentRole.SoftwareEngineer => "Software Engineer",
             AgentRole.TestEngineer => "Test Engineer",
             _ => agentId
         };

@@ -166,7 +166,7 @@ Read `docs/MonitorPrompt.md` for the full checklist. Key points:
 ### What to watch
 1. **Phase progression**: Research → PM Spec → Architecture → Engineering Planning → Development → Testing → Review → Complete
 2. **Agent status cycles**: Idle → Working → Idle is normal. Idle → Idle → Idle with open work = stuck.
-3. **PR pipeline per engineering PR**: created → `ready-for-review` → Architect review → `architect-approved` → TE tests → `tests-added` → PM review → `pm-approved` → PE merge
+3. **PR pipeline per engineering PR**: created → `ready-for-review` → Architect review → `architect-approved` → TE tests → `tests-added` → PM review → `pm-approved` → SE merge
 4. **Rate limiting**: GitHub API limit is 5000/hr. Runner has 30s TTL shared cache (~90% reduction). Watch for `Rate limit exceeded` in logs.
 5. **Human gates**: If FinalPRApproval gate is enabled, PRs will pause with `awaiting-human-review` label. Check the Approvals page or PR comments to approve/reject.
 
@@ -250,9 +250,9 @@ Key settings:
 ### Model tier strategy
 | Tier | Used By | Default Model |
 |------|---------|---------------|
-| premium | PM, Architect, PE | claude-opus-4.6 |
-| standard | Researcher, Senior Engineers, TE | claude-sonnet-4.6 |
-| budget | Junior Engineers | gpt-5.2 |
+| premium | PM, Architect, SE | claude-opus-4.6 |
+| standard | Researcher, Software Engineers, TE | claude-sonnet-4.6 |
+| budget | Software Engineers | gpt-5.2 |
 
 ---
 
@@ -267,7 +267,7 @@ Key settings:
 7. **Standalone dashboard limitations**: Configuration page and Engineering Plan page are hidden. Use embedded dashboard (port 5050) or `fresh-reset.ps1` script for cleanup.
 8. **Vision review requires network access**: Screenshot download in PR reviews needs the runner to reach GitHub's raw content URLs. If behind a proxy, images fall back to URL-only text context.
 9. **Gate config hot-reload**: Gate settings are hot-reloaded via `IOptionsMonitor`. Other config sections (Models, Agents, Limits) still require restart.
-10. **Port conflicts between agents**: PE screenshots and TE UI tests both start the app under test. Each agent now uses a unique port derived from its workspace path (range 5100–5899). If you see "App did not respond" errors, check for port conflicts.
+10. **Port conflicts between agents**: SE screenshots and TE UI tests both start the app under test. Each agent now uses a unique port derived from its workspace path (range 5100–5899). If you see "App did not respond" errors, check for port conflicts.
 11. **Standalone dashboard stale agents**: The DB accumulates agent records across restarts. `RecordBoot()` writes `last_boot_utc` to filter to current-run agents only. If dashboard shows old agents, restart the Runner to update the boot timestamp.
 12. **TE data.json**: Blazor apps that depend on `wwwroot/data.json` may fail on fresh clones. `EnsureSampleDataExists()` auto-creates a sample data file if missing.
 

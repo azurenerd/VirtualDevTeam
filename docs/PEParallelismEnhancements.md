@@ -1,6 +1,6 @@
-# PE Agent Parallelism Enhancements Plan
+# SE Agent Parallelism Enhancements Plan
 
-> **Purpose:** Comprehensive plan for enhancing the Principal Engineer agent's engineering plan generation to maximize task parallelism, enforce file ownership, and adopt fleet-style dependency wave scheduling — reducing merge conflicts and accelerating parallel development.
+> **Purpose:** Comprehensive plan for enhancing the Software Engineer agent's engineering plan generation to maximize task parallelism, enforce file ownership, and adopt fleet-style dependency wave scheduling — reducing merge conflicts and accelerating parallel development.
 >
 > **Author:** Ben Humphrey (@azurenerd) with Copilot CLI
 > **Status:** PLAN — Not yet implemented
@@ -29,7 +29,7 @@
 
 ### The Gap
 
-The PE agent's engineering plan generation has solid parallelism *intent* — the system prompt explicitly asks for star-topology dependencies, vertical slicing, and file ownership. However, the **enforcement and optimization** of these goals is weak:
+The SE agent's engineering plan generation has solid parallelism *intent* — the system prompt explicitly asks for star-topology dependencies, vertical slicing, and file ownership. However, the **enforcement and optimization** of these goals is weak:
 
 - File overlaps between tasks are **warned but not rejected** — leading to merge conflicts when parallel engineers modify the same file
 - Dependencies are **flat and untyped** (`T1,T3`) — making it impossible to distinguish necessary vs. unnecessary blockers
@@ -48,7 +48,7 @@ Adopt fleet-style parallelism patterns where:
 
 ### Comparison: Current vs Fleet-Style
 
-| Aspect | Current PE | Fleet-Style (Target) |
+| Aspect | Current SE | Fleet-Style (Target) |
 |--------|-----------|---------------------|
 | File ownership | Advisory (prompt asks, warns post-hoc) | Enforced (reject + regenerate on overlap) |
 | Dependency tracking | Flat IDs (`T1,T3`) | Typed (`T1(files),T3(api)`) |
@@ -64,9 +64,9 @@ Adopt fleet-style parallelism patterns where:
 
 ### What Exists Today
 
-#### System Prompt (Lines 454-509 of `PrincipalEngineerAgent.cs`)
+#### System Prompt (Lines 454-509 of `SoftwareEngineerAgent.cs`)
 
-The PE's planning system prompt already has strong parallelism guidance:
+The SE's planning system prompt already has strong parallelism guidance:
 
 ```
 "## CRITICAL — Parallel-Friendly Task Decomposition
@@ -179,7 +179,7 @@ Logger.LogWarning("File overlap detected: '{File}' is created by both {Task1} an
     file, owner, task.Id);
 ```
 
-This means two parallel engineers can be assigned tasks that create/modify the same file, causing merge conflicts that require PE to close and recreate PRs (`TryCloseAndRecreatePRAsync`).
+This means two parallel engineers can be assigned tasks that create/modify the same file, causing merge conflicts that require SE to close and recreate PRs (`TryCloseAndRecreatePRAsync`).
 
 ### Solution
 
@@ -308,7 +308,7 @@ private List<EngineeringTask> AutoResolveOverlaps(
 
 ### Where to Integrate
 
-In `PrincipalEngineerAgent.cs`, after line 643 (`EnsureFoundationFirstPattern(parsedTasks)`):
+In `SoftwareEngineerAgent.cs`, after line 643 (`EnsureFoundationFirstPattern(parsedTasks)`):
 
 ```csharp
 EnsureFoundationFirstPattern(parsedTasks);
@@ -321,7 +321,7 @@ parsedTasks = await EnsureNoFileOverlapsAsync(parsedTasks, chat, ct);
 
 | File | Change |
 |------|--------|
-| `PrincipalEngineerAgent.cs` | Add `EnsureNoFileOverlapsAsync()`, `DetectFileOverlaps()`, `AutoResolveOverlaps()`, `BuildOverlapFixPrompt()` methods. Replace warning-only logic in `EnsureFoundationFirstPattern()`. |
+| `SoftwareEngineerAgent.cs` | Add `EnsureNoFileOverlapsAsync()`, `DetectFileOverlaps()`, `AutoResolveOverlaps()`, `BuildOverlapFixPrompt()` methods. Replace warning-only logic in `EnsureFoundationFirstPattern()`. |
 | `EngineeringTaskIssueManager.cs` | Add `ExtractFileOperations()` returning `(file, operation)` tuples (enhanced from existing `ExtractCreateFilesFromDescription()`) |
 
 ---
@@ -330,7 +330,7 @@ parsedTasks = await EnsureNoFileOverlapsAsync(parsedTasks, chat, ct);
 
 ### Problem
 
-The PE creates tasks with dependencies but never groups them into execution waves. The runtime discovers parallelism opportunistically (`AreDependenciesMet` count) rather than having it designed into the plan.
+The SE creates tasks with dependencies but never groups them into execution waves. The runtime discovers parallelism opportunistically (`AreDependenciesMet` count) rather than having it designed into the plan.
 
 ### Solution
 
@@ -354,7 +354,7 @@ TASK|T-FINAL|42|Final Integration|...|High|T2,T3,T4,T5|...|W4
 
 ### System Prompt Addition
 
-Add to the PE system prompt (after the "Parallel-Friendly Task Decomposition" section):
+Add to the SE system prompt (after the "Parallel-Friendly Task Decomposition" section):
 
 ```
 ## CRITICAL — Execution Wave Assignment
@@ -484,7 +484,7 @@ Include wave info in issue bodies (`EngineeringTaskIssueManager.BuildIssueBodyWi
 
 | File | Change |
 |------|--------|
-| `PrincipalEngineerAgent.cs` | Update system prompt to include wave assignment instructions. Add wave parsing from output. Add `ValidateWaves()`. Update `EvaluateResourceNeedsAsync()` for wave-aware scaling. |
+| `SoftwareEngineerAgent.cs` | Update system prompt to include wave assignment instructions. Add wave parsing from output. Add `ValidateWaves()`. Update `EvaluateResourceNeedsAsync()` for wave-aware scaling. |
 | `EngineeringTask` record | Add `public string Wave { get; init; } = "W1";` property |
 | `EngineeringTaskIssueManager.cs` | Include wave metadata in issue body. Parse wave from issue body on recovery. |
 
@@ -502,7 +502,7 @@ Require T1 to output a `SHARED_FILES` declaration that acts as a registry. Other
 
 ### System Prompt Addition
 
-Add to the T1 section of the PE system prompt:
+Add to the T1 section of the SE system prompt:
 
 ```
 ## CRITICAL — T1 Shared File Registry
@@ -591,7 +591,7 @@ parsedTasks = await EnsureNoFileOverlapsAsync(parsedTasks, chat, ct);  // Enhanc
 
 | File | Change |
 |------|--------|
-| `PrincipalEngineerAgent.cs` | Update T1 system prompt section. Add `EnforceSharedFileRegistry()`, `ExtractSharedFiles()`. Call after `EnsureFoundationFirstPattern()`. |
+| `SoftwareEngineerAgent.cs` | Update T1 system prompt section. Add `EnforceSharedFileRegistry()`, `ExtractSharedFiles()`. Call after `EnsureFoundationFirstPattern()`. |
 
 ---
 
@@ -599,7 +599,7 @@ parsedTasks = await EnsureNoFileOverlapsAsync(parsedTasks, chat, ct);  // Enhanc
 
 ### Problem
 
-Dependencies are flat strings: `"T1,T3"`. The PE and runtime can't distinguish:
+Dependencies are flat strings: `"T1,T3"`. The SE and runtime can't distinguish:
 - **File dependency**: T3 reads a file T2 creates → hard block
 - **API dependency**: T3 calls an interface T2 implements → soft block (interface defined in T1)
 - **Concept dependency**: T3 "should happen after" T2 → often unnecessary
@@ -742,7 +742,7 @@ if (!depsRaw.Equals("NONE", StringComparison.OrdinalIgnoreCase))
 
 | File | Change |
 |------|--------|
-| `PrincipalEngineerAgent.cs` | Update system prompt with dependency type format. Update parser for typed deps. Add `CanRelaxDependency()`, `IsInterfaceAvailableInFoundation()`. |
+| `SoftwareEngineerAgent.cs` | Update system prompt with dependency type format. Update parser for typed deps. Add `CanRelaxDependency()`, `IsInterfaceAvailableInFoundation()`. |
 | `EngineeringTask` record | Add `DependencyTypes` dictionary property. |
 | `EngineeringTaskIssueManager.cs` | Update `AreDependenciesMet()` with relaxation logic. Include dep types in issue body metadata. Parse dep types from issue body on recovery. |
 
@@ -752,7 +752,7 @@ if (!depsRaw.Equals("NONE", StringComparison.OrdinalIgnoreCase))
 
 ### Problem
 
-The existing self-assessment criteria (`AssessmentCriteria.PrincipalEngineer`) evaluate architecture coverage, dependency order, task specificity, definition of done, test strategy, and integration points — but **nothing about parallelism quality**.
+The existing self-assessment criteria (`AssessmentCriteria.SoftwareEngineer`) evaluate architecture coverage, dependency order, task specificity, definition of done, test strategy, and integration points — but **nothing about parallelism quality**.
 
 ### Solution
 
@@ -763,7 +763,7 @@ Add parallelism-specific assessment criteria and a dedicated validation AI turn.
 Add to `AssessmentCriteria.cs`:
 
 ```csharp
-public const string PrincipalEngineerParallelism = """
+public const string SoftwareEngineerParallelism = """
     Evaluate the engineering plan's parallelism and conflict-avoidance:
     1. WAVE DISTRIBUTION: Are at least 60% of non-foundation tasks in Wave 2 (the main parallel wave)?
        Plans with most tasks in W3+ are over-serialized — a gap.
@@ -848,8 +848,8 @@ private void LogParallelismMetrics(List<EngineeringTask> tasks)
 
 | File | Change |
 |------|--------|
-| `AssessmentCriteria.cs` | Add `PrincipalEngineerParallelism` criteria string |
-| `PrincipalEngineerAgent.cs` | Add parallelism assessment AI turn after plan generation. Add `LogParallelismMetrics()`. Add `CalculateCriticalPathLength()`. |
+| `AssessmentCriteria.cs` | Add `SoftwareEngineerParallelism` criteria string |
+| `SoftwareEngineerAgent.cs` | Add parallelism assessment AI turn after plan generation. Add `LogParallelismMetrics()`. Add `CalculateCriticalPathLength()`. |
 
 ---
 
@@ -857,7 +857,7 @@ private void LogParallelismMetrics(List<EngineeringTask> tasks)
 
 ### Problem
 
-The PE doesn't analyze the dependency graph to find the critical path (longest chain of dependent tasks). This means:
+The SE doesn't analyze the dependency graph to find the critical path (longest chain of dependent tasks). This means:
 - Bottleneck tasks aren't prioritized for assignment
 - Worker scaling doesn't account for future waves
 - The plan may have an unnecessarily long critical path that could be shortened
@@ -988,9 +988,9 @@ private EngineeringTask? FindNextAssignableTask(string engineerId, AgentRole eng
     
     return engineerRole switch
     {
-        AgentRole.PrincipalEngineer => preferred.OrderByDescending(ComplexityRank).FirstOrDefault(),
-        AgentRole.SeniorEngineer => preferred.OrderBy(t => Math.Abs(ComplexityRank(t) - 2)).FirstOrDefault(),
-        AgentRole.JuniorEngineer => preferred.OrderBy(ComplexityRank).FirstOrDefault(),
+        AgentRole.SoftwareEngineer => preferred.OrderByDescending(ComplexityRank).FirstOrDefault(),
+        AgentRole.SoftwareEngineer => preferred.OrderBy(t => Math.Abs(ComplexityRank(t) - 2)).FirstOrDefault(),
+        AgentRole.SoftwareEngineer => preferred.OrderBy(ComplexityRank).FirstOrDefault(),
         _ => preferred.FirstOrDefault()
     };
 }
@@ -1000,7 +1000,7 @@ private EngineeringTask? FindNextAssignableTask(string engineerId, AgentRole eng
 
 | File | Change |
 |------|--------|
-| `PrincipalEngineerAgent.cs` | Add `AnalyzeCriticalPath()`, `CriticalPathResult` record. Store `_criticalPath` as field. Update `FindNextAssignableTask()` with critical path priority. Log critical path in plan metrics. |
+| `SoftwareEngineerAgent.cs` | Add `AnalyzeCriticalPath()`, `CriticalPathResult` record. Store `_criticalPath` as field. Update `FindNextAssignableTask()` with critical path priority. Log critical path in plan metrics. |
 
 ---
 
@@ -1081,7 +1081,7 @@ internal record CriticalPathResult
 - Replace warning-only logic in `EnsureFoundationFirstPattern()`
 - Enhance `ExtractCreateFilesFromDescription()` → `ExtractFileOperations()` returning operation types
 
-**Files:** `PrincipalEngineerAgent.cs`, `EngineeringTaskIssueManager.cs`
+**Files:** `SoftwareEngineerAgent.cs`, `EngineeringTaskIssueManager.cs`
 **Tests:** Unit tests for overlap detection, shared file parsing, auto-resolution logic
 **Risk:** Low — additive logic, doesn't change task output format
 
@@ -1097,7 +1097,7 @@ internal record CriticalPathResult
 - Update issue body generation to include wave metadata
 - Update issue body parsing to recover wave on restart
 
-**Files:** `PrincipalEngineerAgent.cs`, `EngineeringTask` record, `EngineeringTaskIssueManager.cs`
+**Files:** `SoftwareEngineerAgent.cs`, `EngineeringTask` record, `EngineeringTaskIssueManager.cs`
 **Tests:** Unit tests for wave parsing, validation, wave-from-issue-body recovery
 **Risk:** Medium — changes task output format (backward compatibility: default Wave="W1" if missing)
 
@@ -1113,7 +1113,7 @@ internal record CriticalPathResult
 - Update `AreDependenciesMet()` with optional relaxation parameter
 - Include dep types in issue body metadata
 
-**Files:** `PrincipalEngineerAgent.cs`, `EngineeringTask` record, `EngineeringTaskIssueManager.cs`
+**Files:** `SoftwareEngineerAgent.cs`, `EngineeringTask` record, `EngineeringTaskIssueManager.cs`
 **Tests:** Unit tests for typed dep parsing, relaxation logic, backward compat with untyped deps
 **Risk:** Medium — changes dependency behavior. Use `useRelaxation = false` flag as safety valve.
 
@@ -1122,14 +1122,14 @@ internal record CriticalPathResult
 **Goal:** AI-validated parallelism quality and bottleneck identification.
 
 **Changes:**
-- Add `PrincipalEngineerParallelism` to `AssessmentCriteria.cs`
+- Add `SoftwareEngineerParallelism` to `AssessmentCriteria.cs`
 - Add parallelism validation AI turn after plan generation
 - Add `AnalyzeCriticalPath()` with topological sort
 - Add `LogParallelismMetrics()` for monitoring
 - Update `FindNextAssignableTask()` with critical path priority
-- Store `_criticalPath` as PE agent field
+- Store `_criticalPath` as SE agent field
 
-**Files:** `PrincipalEngineerAgent.cs`, `AssessmentCriteria.cs`
+**Files:** `SoftwareEngineerAgent.cs`, `AssessmentCriteria.cs`
 **Tests:** Unit tests for critical path calculation (DAG test cases), parallelism metric logging
 **Risk:** Low — adds AI turn (cost) but doesn't change plan structure. Critical path priority is additive.
 
@@ -1142,7 +1142,7 @@ internal record CriticalPathResult
 - Scale worker requests to match wave task count
 - Pre-request workers for upcoming waves when current wave is nearly complete
 
-**Files:** `PrincipalEngineerAgent.cs`
+**Files:** `SoftwareEngineerAgent.cs`
 **Tests:** Integration test for scaling decisions based on wave width
 **Risk:** Low — improves existing scaling logic without changing interfaces
 
@@ -1210,7 +1210,7 @@ Phases 4 and 5 depend on waves being in place.
 | Dependency relaxation releases task too early | High — broken build | Low | `useRelaxation` flag defaults to false initially. Opt-in per run. |
 | Extra AI turn (parallelism assessment) increases cost | Low — ~1 extra API call | High | Only run when wave analysis shows <60% W2. Skip for small plans (<4 tasks). |
 | Backward compatibility with existing plans | Medium — recovery fails | Medium | All new fields have defaults (Wave="W1", DependencyTypes=empty). Parse handles missing 8th field. |
-| Critical path priority starves simple tasks | Low — junior engineers idle | Low | Critical path priority only applies to PE/SE. JE assignment unchanged. |
+| Critical path priority starves simple tasks | Low — Software Engineers idle | Low | Critical path priority only applies to SE/SE. SE assignment unchanged. |
 
 ---
 

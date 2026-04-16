@@ -10,7 +10,7 @@
 |-----------|-----------|----------|
 | **Philosophy** | Opinionated SDLC pipeline — agents fill real software team roles | Flexible workspace manager — agents are generic workers you assign tasks to |
 | **Language** | C# / .NET 8 | Go 1.25 |
-| **Agent Identity** | 7 fixed roles (PM, Researcher, Architect, PE, SE, JE, TE) | Generic "polecats" (workers) + named infrastructure roles (Mayor, Witness, Deacon) |
+| **Agent Identity** | 5 core roles (PM, Researcher, Architect, SE, TE) + dynamic SE pool | Generic "polecats" (workers) + named infrastructure roles (Mayor, Witness, Deacon) |
 | **Coordination** | Centralized orchestrator with phase-gated workflow | Decentralized — Mayor provides guidance, agents self-coordinate via mail/nudge |
 | **Communication** | In-process message bus (System.Threading.Channels) + GitHub API | tmux sessions + git-backed mailboxes + nudge (inter-process messaging) |
 | **Work Tracking** | GitHub Issues + PRs + SQLite state | Beads (git-backed issue tracker) + Convoys (work bundles) + Dolt database |
@@ -59,7 +59,7 @@ Both route problems that agents can't solve to higher authority:
 
 ### 8. Merge Queue / Code Integration
 Both manage how agent code gets into main:
-- **AgentSquad**: PE's `MergeTestedPRsAsync` with label-gated squash merge
+- **AgentSquad**: SE's `MergeTestedPRsAsync` with label-gated squash merge
 - **Gas Town**: Refinery — Bors-style bisecting merge queue with verification gates
 
 ---
@@ -69,7 +69,7 @@ Both manage how agent code gets into main:
 ### 1. Agent Model: Roles vs Generic Workers
 
 **AgentSquad** assigns agents to **fixed SDLC roles** that mirror a real software team:
-- PM → Researcher → Architect → Principal Engineer → Senior/Junior Engineers → Test Engineer
+- PM → Researcher → Architect → Software Engineer → Software Engineers → Test Engineer
 - Each role has specialized AI prompts, different model tiers, and distinct workflow behaviors
 - Agents produce domain-specific artifacts (PMSpec.md, Architecture.md, EngineeringPlan.md)
 
@@ -170,7 +170,7 @@ Each phase must complete before the next begins. The `WorkflowStateMachine` enfo
 1. Architect review → `architect-approved` label
 2. Test Engineer → adds tests to same PR → `tests-added` label
 3. PM Final Review (with visual evidence) → `pm-approved` label
-4. PE merges only when all 3 labels present
+4. SE merges only when all 3 labels present
 
 **Gas Town**: Merge queue via Refinery:
 - Polecats run `gt done` → branch pushed → MR bead created
@@ -194,7 +194,7 @@ The `TestStrategyAnalyzer` + `PlaywrightRunner` pipeline that automatically dete
 The Blazor Server dashboard with SignalR push updates, agent cards with live status, engineering plan dependency graph, project timeline, and health monitoring provides richer visualization than Gas Town's htmx dashboard or TUI feed.
 
 ### 5. **Model Tier Strategy**
-Mapping AI model quality to agent role importance (premium for PM/Architect/PE, standard for SE/TE, budget for JE) is a practical cost optimization that Gas Town doesn't offer — all agents use whatever runtime is configured.
+Mapping AI model quality to agent role importance (premium for PM/Architect/SE, standard for SE/TE, budget for SE) is a practical cost optimization that Gas Town doesn't offer — all agents use whatever runtime is configured.
 
 ### 6. **Document Pipeline**
 The structured document flow (Research.md → PMSpec.md → Architecture.md → EngineeringPlan.md) creates a traceable chain of decisions from business requirements to code. Each downstream agent builds on the previous agent's output, creating coherent context.
@@ -216,7 +216,7 @@ Each Gas Town agent runs as an independent process. One agent crashing doesn't a
 The ability to query previous agent sessions for context and decisions (`gt seance --talk <id>`) is a unique feature. When agents restart, they can ask their predecessors "what did you find?" instead of re-doing work.
 
 ### 5. **Merge Queue (Refinery)**
-The Bors-style bisecting merge queue is more sophisticated than AgentSquad's label-gated merge. It batches MRs, runs verification, and isolates failures automatically. AgentSquad relies on the PE to manage merges sequentially.
+The Bors-style bisecting merge queue is more sophisticated than AgentSquad's label-gated merge. It batches MRs, runs verification, and isolates failures automatically. AgentSquad relies on the SE to manage merges sequentially.
 
 ### 6. **Multi-Project Support**
 Gas Town's Rig model manages multiple projects simultaneously with independent agent pools, hooks, and refineries. AgentSquad processes one project at a time.
@@ -254,8 +254,8 @@ AgentSquad (Single Process)              Gas Town (Multi-Process)
 │  │ ├─ PM                 │  │          │  Communication:           │
 │  │ ├─ Researcher         │  │          │  ├── gt nudge (immediate) │
 │  │ ├─ Architect          │  │          │  ├── gt mail (persistent) │
-│  │ ├─ Principal Engineer │  │          │  ├── gt seance (history)  │
-│  │ ├─ Senior/Junior Eng  │  │          │  └── git hooks (state)   │
+│  │ ├─ Software Engineer │  │          │  ├── gt seance (history)  │
+│  │ ├─ Software Engineer/Software Engineer Eng  │  │          │  └── git hooks (state)   │
 │  │ └─ Test Engineer      │  │          │                           │
 │  ├──────────────────────┤  │          │  Persistence:             │
 │  │ SQLite + GitHub API   │  │          │  ├── Dolt (SQL + git)    │

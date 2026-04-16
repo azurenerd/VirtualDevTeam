@@ -101,9 +101,7 @@ public sealed class RequirementsCache
         ExtractSection("Program Manager", AgentRole.ProgramManager);
         ExtractSection("Researcher", AgentRole.Researcher);
         ExtractSection("Architect", AgentRole.Architect);
-        ExtractSection("Principal Engineer", AgentRole.PrincipalEngineer);
-        ExtractSection("Senior Engineer", AgentRole.SeniorEngineer);
-        ExtractSection("Junior Engineer", AgentRole.JuniorEngineer);
+        ExtractSection("Software Engineer", AgentRole.SoftwareEngineer);
         ExtractSection("Test Engineer", AgentRole.TestEngineer);
 
         // Extract scenario sections (## End-to-End or ### Scenario)

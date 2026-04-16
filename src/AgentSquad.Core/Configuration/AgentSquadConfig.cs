@@ -82,10 +82,8 @@ public class AgentConfigs
     public AgentConfig ProgramManager { get; set; } = new() { ModelTier = "premium", Enabled = true };
     public AgentConfig Researcher { get; set; } = new() { ModelTier = "standard", Enabled = true };
     public AgentConfig Architect { get; set; } = new() { ModelTier = "premium", Enabled = true };
-    public AgentConfig PrincipalEngineer { get; set; } = new() { ModelTier = "premium", Enabled = true };
+    public AgentConfig SoftwareEngineer { get; set; } = new() { ModelTier = "premium", Enabled = true };
     public AgentConfig TestEngineer { get; set; } = new() { ModelTier = "standard", Enabled = true };
-    public AgentConfig SeniorEngineerTemplate { get; set; } = new() { ModelTier = "standard" };
-    public AgentConfig JuniorEngineerTemplate { get; set; } = new() { ModelTier = "local" };
 
     /// <summary>
     /// Model tier for the independent critique ("rubber-duck") pass during PM review.
@@ -145,9 +143,9 @@ public class LimitsConfig
 {
     /// <summary>
     /// Per-role engineer pool configuration. Controls how many additional engineers
-    /// of each type can be spawned. The original PE is always created as a core agent;
+    /// can be spawned. The original Software Engineer is always created as a core agent;
     /// the pool config only governs ADDITIONAL engineers.
-    /// Default: 2 PEs, 0 SEs, 0 JEs — only additional Principal Engineers are spawned.
+    /// Default: 2 Software Engineers.
     /// </summary>
     public EngineerPoolConfig EngineerPool { get; set; } = new();
 
@@ -157,7 +155,7 @@ public class LimitsConfig
     /// </summary>
     public int MaxAdditionalEngineers
     {
-        get => EngineerPool.PrincipalEngineerPool + EngineerPool.SeniorEngineerPool + EngineerPool.JuniorEngineerPool;
+        get => EngineerPool.SoftwareEngineerPool;
         set { } // no-op for backward compat deserialization
     }
 
@@ -206,43 +204,30 @@ public class LimitsConfig
     public int MaxSourceBugRounds { get; set; } = 2;
 
     /// <summary>
-    /// If the Principal Engineer estimates all remaining tasks can be completed within
+    /// If the Software Engineer leader estimates all remaining tasks can be completed within
     /// this many minutes, it won't request additional engineers.
     /// </summary>
     public int SelfCompletionThresholdMinutes { get; set; } = 10;
 
     /// <summary>
-    /// Minimum number of parallelizable tasks required before the Principal Engineer
+    /// Minimum number of parallelizable tasks required before the Software Engineer leader
     /// requests a new engineer from the PM.
     /// </summary>
     public int MinParallelizableTasksForNewEngineer { get; set; } = 3;
 }
 
 /// <summary>
-/// Controls the pool of additional engineers that can be spawned to parallelize work.
-/// The original PrincipalEngineer is always created as a core agent (rank 0).
-/// Additional engineers are spawned on demand by the PE when parallelizable tasks exist.
+/// Controls the pool of additional Software Engineers that can be spawned to parallelize work.
+/// The first Software Engineer is always created as a core agent (rank 0, the "leader").
+/// Additional engineers are spawned on demand when parallelizable tasks exist.
 /// </summary>
 public class EngineerPoolConfig
 {
     /// <summary>
-    /// Maximum additional Principal Engineers (premium tier, full review + implementation capability).
-    /// These act as worker PEs — the original PE (rank 0) remains the leader.
-    /// Default: 2. Set to 0 to disable additional PE spawning.
+    /// Maximum additional Software Engineers beyond the leader (rank 0).
+    /// Default: 2. Set to 0 to disable additional engineer spawning.
     /// </summary>
-    public int PrincipalEngineerPool { get; set; } = 2;
-
-    /// <summary>
-    /// Maximum additional Senior Engineers (standard tier, self-review capability).
-    /// Default: 0. Set > 0 to allow SE spawning alongside or instead of PEs.
-    /// </summary>
-    public int SeniorEngineerPool { get; set; } = 0;
-
-    /// <summary>
-    /// Maximum additional Junior Engineers (budget/local tier, basic implementation).
-    /// Default: 0. Set > 0 to allow JE spawning alongside or instead of PEs.
-    /// </summary>
-    public int JuniorEngineerPool { get; set; } = 0;
+    public int SoftwareEngineerPool { get; set; } = 2;
 }
 
 public class DashboardConfig
@@ -531,7 +516,7 @@ public static class GateIds
         ("Architecture", ArchitectureDesign, "Architecture Design",
             "Pause after Architect produces Architecture.md. When enabled: you review system design, component diagrams, technology choices, and data models — the blueprint engineers will implement. When auto: Architecture is accepted and planning begins."),
         ("Engineering", EngineeringPlan, "Engineering Plan",
-            "Pause after Principal Engineer produces EngineeringPlan.md. When enabled: you review the task breakdown, dependency ordering, and effort estimates before any code is written. When auto: tasks are created and assigned immediately."),
+            "Pause after Software Engineer produces EngineeringPlan.md. When enabled: you review the task breakdown, dependency ordering, and effort estimates before any code is written. When auto: tasks are created and assigned immediately."),
         ("Engineering", TaskAssignment, "Task Assignment",
             "Pause when PRs are created and engineers are assigned. When enabled: you review each task's PR, branch naming, and engineer assignment. When auto: engineers begin coding as soon as tasks are assigned."),
         ("Development", PRCodeComplete, "PR Code Complete",
@@ -557,7 +542,7 @@ public static class GateIds
 
 /// <summary>
 /// Configuration for the agentic self-assessment loop.
-/// When enabled, document-producing agents (Researcher, PM, Architect, Principal Engineer)
+/// When enabled, document-producing agents (Researcher, PM, Architect, Software Engineer)
 /// assess their own output against quality criteria and refine before publishing.
 /// This reduces downstream review cycles by catching gaps early.
 /// </summary>
@@ -582,9 +567,7 @@ public class AgenticLoopConfig
         ["Researcher"] = new() { Enabled = true },
         ["ProgramManager"] = new() { Enabled = true },
         ["Architect"] = new() { Enabled = true },
-        ["PrincipalEngineer"] = new() { Enabled = true },
-        ["SeniorEngineer"] = new() { Enabled = false },
-        ["JuniorEngineer"] = new() { Enabled = false },
+        ["SoftwareEngineer"] = new() { Enabled = true },
         ["TestEngineer"] = new() { Enabled = false },
     };
 

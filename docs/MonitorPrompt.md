@@ -50,7 +50,7 @@ For **every PR** that enters the pipeline, track it through ALL phases using a S
 
 ```sql
 INSERT INTO pr_monitor (pr_number, title, author, phase, status, last_checked)
-VALUES (707, 'PrincipalEngineer: Project Foundation', 'PE', 'phase1_architect', 'in_progress', datetime('now'));
+VALUES (707, 'SoftwareEngineer: Project Foundation', 'SE', 'phase1_architect', 'in_progress', datetime('now'));
 ```
 
 ### Phase 1: Architect Review
@@ -107,14 +107,14 @@ VALUES (707, 'PrincipalEngineer: Project Foundation', 'PE', 'phase1_architect', 
 
 ### Phase 4: Merge
 
-- [ ] PE checks for PRs with BOTH `pm-approved` AND `tests-added` labels
-- [ ] PE performs squash merge
+- [ ] SE checks for PRs with BOTH `pm-approved` AND `tests-added` labels
+- [ ] SE performs squash merge
 - [ ] Branch deleted after merge
 - [ ] Linked Issue auto-closed (if all PRs for that issue are done)
 
 **Failure modes to watch for:**
-- PE merges without both labels
-- PE merges before TE adds tests (old bug, should be fixed)
+- SE merges without both labels
+- SE merges before TE adds tests (old bug, should be fixed)
 - Branch not cleaned up
 
 ---
@@ -212,6 +212,6 @@ $headers = @{ Authorization = "token $token"; Accept = "application/vnd.github.v
 | 2026-04-11 | Initial version — sequential pipeline (Architect→TE→PM→merge), same-PR testing, visual evidence, multi-phase rework |
 | 2026-04-11 | Added TE build-failure notification gap (fixed: TE now sends ChangesRequestedMessage on build failure) |
 | 2026-04-11 | Added TE workspace init failure mode: git clone timeout → silent API-only fallback → no screenshots/no test execution |
-| 2026-04-11 | Added PE self-merge bug: PE was skipping own PRs in MergeTestedPRsAsync (fixed) |
+| 2026-04-11 | Added SE self-merge bug: SE was skipping own PRs in MergeTestedPRsAsync (fixed) |
 | 2026-04-13 | Updated pre-run verification with reset commands, rate limit check, dashboard startup instructions |
 | 2026-04-13 | Added dashboard architecture section: two-process model (Runner:5050 + Dashboard.Host:5051) |

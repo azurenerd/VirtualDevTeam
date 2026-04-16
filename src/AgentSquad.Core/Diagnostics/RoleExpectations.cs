@@ -26,9 +26,7 @@ public static class RoleExpectations
             AgentRole.ProgramManager => EvaluatePM(status, reason, reasonLower, assignedPr),
             AgentRole.Researcher => EvaluateResearcher(status, reason, reasonLower),
             AgentRole.Architect => EvaluateArchitect(status, reason, reasonLower, assignedPr),
-            AgentRole.PrincipalEngineer => EvaluatePE(status, reason, reasonLower, assignedPr),
-            AgentRole.SeniorEngineer or AgentRole.JuniorEngineer
-                => EvaluateEngineer(role, status, reason, reasonLower, assignedPr),
+            AgentRole.SoftwareEngineer => EvaluateSoftwareEngineer(status, reason, reasonLower, assignedPr),
             AgentRole.TestEngineer => EvaluateTestEngineer(status, reason, reasonLower, assignedPr),
             _ => Compliant("Active", "Agent is running", null)
         };
@@ -201,9 +199,9 @@ public static class RoleExpectations
 
     #endregion
 
-    #region Principal Engineer
+    #region Software Engineer
 
-    private static AgentDiagnostic EvaluatePE(
+    private static AgentDiagnostic EvaluateSoftwareEngineer(
         AgentStatus status, string reason, string reasonLower, string? assignedPr)
     {
         if (status == AgentStatus.Idle || status == AgentStatus.Online)
@@ -211,30 +209,44 @@ public static class RoleExpectations
             if (reasonLower.Contains("waiting for architecture"))
                 return Compliant(
                     "Idle — waiting for Architecture.md",
-                    "PE waits for Architecture.md and PlanningComplete signal before creating the " +
-                    "engineering plan. Per Scenario A step 6, PE activates after Architecture is ready.",
+                    "Software Engineer waits for Architecture.md and PlanningComplete signal before creating the " +
+                    "engineering plan. Per Scenario A step 6, SE activates after Architecture is ready.",
                     "Scenario A step 6");
 
             if (reasonLower.Contains("awaiting review") || reasonLower.Contains("pr #"))
                 return Compliant(
                     $"Idle — {Truncate(reason, 50)}",
-                    $"PE has submitted a PR and is waiting for PM + Architect review. " +
-                    $"Per Scenario A step 13, PE's PRs are reviewed by PM and Architect.",
+                    $"Software Engineer has submitted a PR and is waiting for PM + Architect review. " +
+                    $"Per Scenario A step 13, SE's PRs are reviewed by PM and Architect.",
                     "Scenario A step 13");
+
+            if (reasonLower.Contains("waiting for task") || reasonLower.Contains("assignment"))
+                return Compliant(
+                    "Idle — waiting for task assignment",
+                    "Software Engineer is waiting for a task to be assigned. " +
+                    "Per §7 Engineer Requirements, engineers wait for task assignment.",
+                    "§7 Engineer Requirements");
 
             if (reasonLower.Contains("ready for next task"))
                 return Compliant(
                     "Idle — ready for next task",
-                    "PE completed its current task and is looking for the next High-complexity task " +
-                    "or reviewing engineer PRs. Per Scenario A step 7, PE works on High tasks itself.",
+                    "Software Engineer completed its current task and is looking for the next task " +
+                    "or reviewing PRs. Per Scenario A step 7, SE works on assigned tasks.",
                     "Scenario A step 7");
 
-            // PE is idle but may have pending work — flag as potentially non-compliant
+            if (reasonLower.Contains("recovered"))
+                return Compliant(
+                    "Idle — recovered from restart",
+                    "Software Engineer recovered from a restart and is checking for existing work. " +
+                    "Per §14 Idempotency, engineers re-track open PRs and pending rework on restart.",
+                    "§14 Idempotency");
+
+            // SE is idle but may have pending work — flag as potentially non-compliant
             return new AgentDiagnostic
             {
                 Summary = "Idle — check for pending work",
-                Justification = $"PE is idle with reason: \"{reason}\". If there are pending High-complexity " +
-                    "tasks in the backlog, PE should be working on them. If all tasks are assigned or complete, " +
+                Justification = $"Software Engineer is idle with reason: \"{reason}\". If there are pending " +
+                    "tasks in the backlog, SE should be working on them. If all tasks are assigned or complete, " +
                     "this is correct. Check engineering-task issues for task statuses.",
                 IsCompliant = true, // Give benefit of doubt — the loop will check
                 ScenarioRef = "Scenario A step 7"
@@ -246,114 +258,65 @@ public static class RoleExpectations
             if (reasonLower.Contains("engineering plan") || reasonLower.Contains("creating"))
                 return Compliant(
                     "Working — creating engineering task issues",
-                    "PE is decomposing enhancement issues into engineering-task GitHub Issues. " +
-                    "Per Scenario A step 6, PE reads enhancement issues and creates engineering-task issues in GitHub.",
+                    "Software Engineer is decomposing enhancement issues into engineering-task GitHub Issues. " +
+                    "Per Scenario A step 6, SE reads enhancement issues and creates engineering-task issues in GitHub.",
                     "Scenario A step 6");
 
             if (reasonLower.Contains("recovered") && reasonLower.Contains("task"))
                 return Compliant(
                     "Working — recovered tasks from GitHub issues",
-                    "PE recovered existing tasks from engineering-task GitHub Issues after a restart. " +
+                    "Software Engineer recovered existing tasks from engineering-task GitHub Issues after a restart. " +
                     "Per §14 Idempotency, agents recover state from GitHub artifacts on restart.",
                     "§14 Idempotency");
 
             if (reasonLower.Contains("pr #") && reasonLower.Contains("step"))
                 return Compliant(
                     $"Working — implementing ({Truncate(reason, 40)})",
-                    $"PE is implementing a High-complexity task with incremental commits. " +
-                    $"Per Scenario A step 10, PE implements its own High tasks. Current: {reason}",
+                    $"Software Engineer is implementing a task with incremental commits. " +
+                    $"Per Scenario A step 10, SE implements tasks. Current: {reason}",
                     "Scenario A step 10");
+
+            if (reasonLower.Contains("issue #") || reasonLower.Contains("starting"))
+                return Compliant(
+                    $"Working — implementing issue",
+                    $"Software Engineer is implementing an assigned task. " +
+                    $"Per Scenario A step 8-9, engineers read the issue, create a PR, and implement.",
+                    "Scenario A steps 8-9");
 
             if (reasonLower.Contains("working on"))
                 return Compliant(
                     $"Working — {Truncate(reason, 50)}",
-                    $"PE is working on a task: {reason}. Per Scenario A step 7-10, PE works on " +
-                    "High-complexity tasks itself while assigning Medium/Low to engineers.",
+                    $"Software Engineer is working on a task: {reason}. Per Scenario A step 7-10, SE works on " +
+                    "tasks and implements features.",
                     "Scenario A steps 7-10");
 
             if (reasonLower.Contains("review"))
                 return Compliant(
-                    "Working — reviewing engineer PR",
-                    "PE is reviewing an engineer's PR for technical correctness. " +
-                    "Per Scenario A steps 11-12, PE reviews all engineer PRs alongside PM.",
+                    "Working — reviewing PR",
+                    "Software Engineer is reviewing a PR for technical correctness. " +
+                    "Per Scenario A steps 11-12, SE reviews PRs alongside PM.",
                     "Scenario A steps 11-12");
 
             if (reasonLower.Contains("assign"))
                 return Compliant(
                     "Working — assigning tasks",
-                    "PE is assigning tasks to available engineers based on complexity. " +
-                    "Per Scenario A step 7, PE assigns Low→Junior, Medium→Senior, High→self.",
+                    "Software Engineer is assigning tasks to available engineers based on complexity. " +
+                    "Per Scenario A step 7, SE assigns tasks to engineers.",
                     "Scenario A step 7");
-
-            if (reasonLower.Contains("recovering") || reasonLower.Contains("recover"))
-                return Compliant(
-                    "Working — recovery in progress",
-                    "PE is recovering from an error or restarting. " +
-                    "Per §14 Idempotency, PE recovers state from GitHub Issues and PRs.",
-                    "§14 Idempotency");
-        }
-
-        return Compliant(
-            $"{status} — {Truncate(reason, 50)}",
-            $"PE is in {status} state: {reason}.",
-            "§7 PE Requirements");
-    }
-
-    #endregion
-
-    #region Engineers (Senior/Junior)
-
-    private static AgentDiagnostic EvaluateEngineer(
-        AgentRole role, AgentStatus status, string reason, string reasonLower, string? assignedPr)
-    {
-        var roleName = role == AgentRole.SeniorEngineer ? "Senior Engineer" : "Junior Engineer";
-
-        if (status == AgentStatus.Idle || status == AgentStatus.Online)
-        {
-            if (reasonLower.Contains("waiting for task") || reasonLower.Contains("assignment"))
-                return Compliant(
-                    "Idle — waiting for task assignment",
-                    $"{roleName} is waiting for the PE to assign a task via IssueAssignmentMessage. " +
-                    $"Per §7 Engineer Requirements, engineers wait for PE to assign issues.",
-                    "§7 Engineer Requirements");
-
-            if (reasonLower.Contains("awaiting review") || reasonLower.Contains("pr #"))
-                return Compliant(
-                    $"Idle — {Truncate(reason, 50)}",
-                    $"{roleName} has submitted a PR and is waiting for PM + PE review. " +
-                    $"Per Scenario A steps 11-12, PM and PE review all engineer PRs.",
-                    "Scenario A steps 11-12");
-
-            if (reasonLower.Contains("recovered"))
-                return Compliant(
-                    "Idle — recovered from restart",
-                    $"{roleName} recovered from a restart and is checking for existing work. " +
-                    "Per §14 Idempotency, engineers re-track open PRs and pending rework on restart.",
-                    "§14 Idempotency");
-        }
-
-        if (status == AgentStatus.Working)
-        {
-            if (reasonLower.Contains("issue #") || reasonLower.Contains("starting"))
-                return Compliant(
-                    $"Working — implementing issue",
-                    $"{roleName} is implementing an assigned task from the PE. " +
-                    $"Per Scenario A step 8-9, engineers read the issue, create a PR, and implement.",
-                    "Scenario A steps 8-9");
-
-            if (reasonLower.Contains("step"))
-                return Compliant(
-                    $"Working — {Truncate(reason, 50)}",
-                    $"{roleName} is implementing with incremental commits. Current: {reason}. " +
-                    "Per §15 Code Quality, engineers commit step-by-step for traceability.",
-                    "§15 Code Quality");
 
             if (reasonLower.Contains("rework") || reasonLower.Contains("feedback"))
                 return Compliant(
                     "Working — addressing review feedback",
-                    $"{roleName} is reworking code based on reviewer feedback. " +
+                    "Software Engineer is reworking code based on reviewer feedback. " +
                     "Per Scenario J, engineers address CHANGES_REQUESTED feedback up to MaxReworkCycles.",
                     "Scenario J");
+
+            if (reasonLower.Contains("recovering") || reasonLower.Contains("recover"))
+                return Compliant(
+                    "Working — recovery in progress",
+                    "Software Engineer is recovering from an error or restarting. " +
+                    "Per §14 Idempotency, SE recovers state from GitHub Issues and PRs.",
+                    "§14 Idempotency");
         }
 
         if (status == AgentStatus.Blocked)
@@ -361,14 +324,14 @@ public static class RoleExpectations
             if (reasonLower.Contains("clarif"))
                 return Compliant(
                     "Blocked — awaiting clarification",
-                    $"{roleName} posted clarification questions on the issue and is waiting for PM response. " +
+                    "Software Engineer posted clarification questions on the issue and is waiting for PM response. " +
                     "Per Scenario B, engineers can ask questions before proceeding.",
                     "Scenario B");
         }
 
         return Compliant(
             $"{status} — {Truncate(reason, 50)}",
-            $"{roleName} is in {status} state: {reason}.",
+            $"Software Engineer is in {status} state: {reason}.",
             "§7 Engineer Requirements");
     }
 
@@ -409,7 +372,7 @@ public static class RoleExpectations
                 return Compliant(
                     $"Working — {Truncate(reason, 50)}",
                     $"Test Engineer is working on a test PR. Current: {reason}. " +
-                    "Per Scenario A step 15, TestEngineer creates test PRs reviewed by PE.",
+                    "Per Scenario A step 15, TestEngineer creates test PRs reviewed by Software Engineer.",
                     "Scenario A step 15");
         }
 

@@ -26,9 +26,7 @@ public class AgentFactory : IAgentFactory
             AgentRole.ProgramManager => CreateWithDI<ProgramManagerAgent>(identity),
             AgentRole.Researcher => CreateWithDI<ResearcherAgent>(identity),
             AgentRole.Architect => CreateWithDI<ArchitectAgent>(identity),
-            AgentRole.PrincipalEngineer => CreateWithDI<PrincipalEngineerAgent>(identity),
-            AgentRole.SeniorEngineer => CreateWithDI<SeniorEngineerAgent>(identity),
-            AgentRole.JuniorEngineer => CreateWithDI<JuniorEngineerAgent>(identity),
+            AgentRole.SoftwareEngineer => CreateWithDI<SoftwareEngineerAgent>(identity),
             AgentRole.TestEngineer => CreateWithDI<TestEngineerAgent>(identity),
             AgentRole.Custom => CreateWithDI<CustomAgent>(identity),
             _ => throw new ArgumentException($"Unknown agent role: {role}", nameof(role))

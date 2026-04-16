@@ -450,7 +450,7 @@ public class TestEngineerAgent : AgentBase
             {
                 var comments = await _github.GetPullRequestCommentsAsync(pr.Number, ct);
                 var lastPeReviewComment = comments
-                    .Where(c => c.Body.Contains("[PrincipalEngineer]", StringComparison.OrdinalIgnoreCase)
+                    .Where(c => c.Body.Contains("[SoftwareEngineer]", StringComparison.OrdinalIgnoreCase)
                              && (c.Body.Contains("APPROVED", StringComparison.OrdinalIgnoreCase)
                               || c.Body.Contains("CHANGES REQUESTED", StringComparison.OrdinalIgnoreCase)))
                     .LastOrDefault();
@@ -3949,7 +3949,7 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
                 if (pr.Labels.Contains("ready-for-review", StringComparer.OrdinalIgnoreCase))
                 {
                     // Check if PE already approved — maybe we can just wait for merge
-                    if (!await _prWorkflow.NeedsReviewFromAsync(pr.Number, "PrincipalEngineer", ct))
+                    if (!await _prWorkflow.NeedsReviewFromAsync(pr.Number, "SoftwareEngineer", ct))
                     {
                         UpdateStatus(AgentStatus.Idle, $"Test PR #{pr.Number} reviewed, awaiting merge");
                         return;

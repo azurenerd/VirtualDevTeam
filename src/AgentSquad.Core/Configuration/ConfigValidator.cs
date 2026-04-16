@@ -83,10 +83,8 @@ public static partial class ConfigValidator
             ["ProgramManager"] = agents.ProgramManager,
             ["Researcher"] = agents.Researcher,
             ["Architect"] = agents.Architect,
-            ["PrincipalEngineer"] = agents.PrincipalEngineer,
+            ["SoftwareEngineer"] = agents.SoftwareEngineer,
             ["TestEngineer"] = agents.TestEngineer,
-            ["SeniorEngineerTemplate"] = agents.SeniorEngineerTemplate,
-            ["JuniorEngineerTemplate"] = agents.JuniorEngineerTemplate,
         };
 
         foreach (var (name, agent) in agentProperties)

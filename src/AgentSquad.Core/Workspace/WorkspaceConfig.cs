@@ -9,7 +9,7 @@ public class WorkspaceConfig
 {
     /// <summary>
     /// Root directory for agent workspaces. Each agent gets a subdirectory.
-    /// Example: "C:/AgentSquadWorkspaces" → "C:/AgentSquadWorkspaces/PrincipalEngineer/{repo}"
+    /// Example: "C:/AgentSquadWorkspaces" → "C:/AgentSquadWorkspaces/SoftwareEngineer/{repo}"
     /// When null or empty, local workspace is disabled and agents use GitHub API-only mode.
     /// </summary>
     public string? RootPath { get; set; } = @"C:\Agents";

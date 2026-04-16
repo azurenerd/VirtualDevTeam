@@ -16,8 +16,8 @@
 4. [PM Agent Requirements](#4-pm-agent-requirements)
 5. [Researcher Agent Requirements](#5-researcher-agent-requirements)
 6. [Architect Agent Requirements](#6-architect-agent-requirements)
-7. [Principal Engineer Agent Requirements](#7-principal-engineer-agent-requirements)
-8. [Senior & Junior Engineer Requirements](#8-senior--junior-engineer-requirements)
+7. [Software Engineer Agent Requirements](#7-software-engineer-agent-requirements)
+8. [Software Engineer Requirements](#8-senior--software-engineer-requirements)
 9. [Test Engineer Requirements](#9-test-engineer-requirements)
 10. [Communication & Message Bus Requirements](#10-communication--message-bus-requirements)
 11. [GitHub Integration Requirements](#11-github-integration-requirements)
@@ -30,7 +30,7 @@
 18. [AI Provider Requirements](#18-ai-provider-requirements)
 19. [Code Quality & Architecture Requirements](#19-code-quality--architecture-requirements)
 20. [End-to-End Workflow Scenarios](#20-end-to-end-workflow-scenarios)
-21. [PE Integration & Branch Sync Requirements](#21-pe-integration--branch-sync-requirements)
+21. [SE Integration & Branch Sync Requirements](#21-se-integration--branch-sync-requirements)
 22. [Local Workspace & Build System Requirements](#22-local-workspace--build-system-requirements)
 23. [Multi-Tier Test Execution Requirements](#23-multi-tier-test-execution-requirements)
 24. [AI Conversation Mode Requirements](#24-ai-conversation-mode-requirements)
@@ -40,7 +40,7 @@
 28. [SME Agent System Requirements](#28-sme-agent-system-requirements)
 29. [Knowledge Pipeline Requirements](#29-knowledge-pipeline-requirements)
 30. [Prompt Externalization Requirements](#30-prompt-externalization-requirements)
-31. [PE Parallelism Enhancements Requirements](#31-pe-parallelism-enhancements-requirements)
+31. [SE Parallelism Enhancements Requirements](#31-se-parallelism-enhancements-requirements)
 32. [Decision Impact Classification & Gating Requirements](#32-decision-impact-classification--gating-requirements)
 33. [Agent Task Steps — Real-Time Workflow Visibility](#33-agent-task-steps--real-time-workflow-visibility)
 34. [Appendix: Known Bugs Fixed](#appendix-known-bugs-fixed)
@@ -55,13 +55,13 @@ AgentSquad is a multi-agent AI system where specialized agent roles collaborate 
 
 - **REQ-SYS-001**: Agents communicate through two complementary layers: an in-process message bus (real-time, <1ms, no durability) and GitHub API (durable artifacts, human oversight).
 - **REQ-SYS-002**: The message bus uses `System.Threading.Channels` with bounded capacity (1000 messages). Messages route by `ToAgentId` — set to `"*"` for broadcast, or a specific agent `Identity.Id` for targeted delivery.
-- **REQ-SYS-003**: All message bus subscriptions and routing MUST use agent `Identity.Id` (e.g., `seniorengineer-{guid}`), never `DisplayName` (e.g., `Senior Engineer 1`). DisplayName is only for GitHub PR/Issue titles.
+- **REQ-SYS-003**: All message bus subscriptions and routing MUST use agent `Identity.Id` (e.g., `SoftwareEngineer-{guid}`), never `DisplayName` (e.g., `Software Engineer 1`). DisplayName is only for GitHub PR/Issue titles.
 - **REQ-SYS-004**: The system uses .NET 8, C# 12, with nullable reference types, file-scoped namespaces, and `record` types for messages/DTOs.
 - **REQ-SYS-005**: Workflow phases progress linearly: Initialization → Research → Architecture → EngineeringPlanning → ParallelDevelopment → Testing → Review → Finalization. No backward transitions. Note: the final phase was renamed from "Completion" to "Finalization" — only final review/validation items belong there. Closed engineering tasks remain in the Development phase with closed visual indicators.
 
 **Scenario: System Startup**
 1. Runner starts, registers DI services
-2. `AgentSquadWorker` spawns core agents in phase order: PM → Researcher → Architect → PE
+2. `AgentSquadWorker` spawns core agents in phase order: PM → Researcher → Architect → SE
 3. PM performs one-time kickoff: reads project description, seeds Researcher
 4. PM restores previously-spawned engineers from TeamMembers.md
 5. `AgentSquadWorker` spawns enabled custom agents from configuration
@@ -78,17 +78,17 @@ AgentSquad is a multi-agent AI system where specialized agent roles collaborate 
 | Program Manager (PM) | premium | Project oversight, PMSpec creation, Issue creation, clarification handling, PR review |
 | Researcher | standard | Research phase, produces Research.md |
 | Architect | premium | Architecture design, produces Architecture.md |
-| Principal Engineer (PE) | premium | Engineering plan, task assignment, high-complexity implementation, PR review |
-| Senior Engineer | standard | Medium-complexity task implementation |
-| Junior Engineer | budget/local | Low-complexity task implementation |
+| Software Engineer (SE) | premium | Engineering plan, task assignment, high-complexity implementation, PR review |
+| Software Engineer | standard | Medium-complexity task implementation |
+| Software Engineer | budget/local | Low-complexity task implementation |
 | Test Engineer | standard | Test planning and execution |
 
 ### REQ-ROLE-002: Engineer Hierarchy
 
-- **REQ-ROLE-002a**: Senior and Junior engineers share identical workflow logic. They differ only in AI model tier, role display name, and minor behavioral overrides (Senior does self-review, Junior truncates context for budget models).
-- **REQ-ROLE-002b**: All three engineer types (Senior, Junior, PE) extend `EngineerAgentBase` which contains shared logic for issue-driven work, rework handling, clarification loops, and message subscriptions.
-- **REQ-ROLE-002c**: The PE has additional orchestration capabilities (planning, assignment, review, resource evaluation) on top of the base engineer functionality.
-- **REQ-ROLE-002d**: Multiple PE agents can run simultaneously via the engineer pool. The lowest-rank online PE is the "leader" (handles orchestration-only tasks); additional PEs are "workers" who pick up tasks and review PRs but do not plan, assign, or evaluate resources. See §7 for details.
+- **REQ-ROLE-002a**: Software Engineers share identical workflow logic. They differ only in AI model tier, role display name, and minor behavioral overrides (Software Engineer does self-review, Software Engineer truncates context for budget models).
+- **REQ-ROLE-002b**: All three engineer types (SE) extend `EngineerAgentBase` which contains shared logic for issue-driven work, rework handling, clarification loops, and message subscriptions.
+- **REQ-ROLE-002c**: The SE has additional orchestration capabilities (planning, assignment, review, resource evaluation) on top of the base engineer functionality.
+- **REQ-ROLE-002d**: Multiple SE agents can run simultaneously via the engineer pool. The lowest-rank online SE is the "leader" (handles orchestration-only tasks); additional PEs are "workers" who pick up tasks and review PRs but do not plan, assign, or evaluate resources. See §7 for details.
 
 ### REQ-ROLE-003: Custom Agents
 
@@ -100,10 +100,10 @@ AgentSquad is a multi-agent AI system where specialized agent roles collaborate 
 
 ### REQ-ROLE-004: SME (Subject Matter Expert) Agents
 
-- **REQ-ROLE-004a**: SME agents are dynamically created at runtime when specialist expertise is needed. They are spawned by the PM (team composition) or PE (reactive spawning) and are subject to human gate approval.
+- **REQ-ROLE-004a**: SME agents are dynamically created at runtime when specialist expertise is needed. They are spawned by the PM (team composition) or SE (reactive spawning) and are subject to human gate approval.
 - **REQ-ROLE-004b**: `SmeAgent` extends `CustomAgent` with SME-specific behavior: workflow modes (OnDemand, Continuous, OneShot), structured result reporting via `SmeResultMessage`, and graceful MCP degradation.
 - **REQ-ROLE-004c**: SME agents are defined by `SMEAgentDefinition` records with: DefinitionId, RoleName, SystemPrompt, McpServers, KnowledgeLinks, Capabilities, ModelTier, MaxInstances, WorkflowMode, SubscribeTo, and CreatedByAgentId.
-- **REQ-ROLE-004d**: Only PM and PE can spawn SME agents. SME agents cannot recursively spawn other SME agents.
+- **REQ-ROLE-004d**: Only PM and SE can spawn SME agents. SME agents cannot recursively spawn other SME agents.
 
 **Scenario: Custom Agent Startup**
 1. User configures a "SecurityAuditor" custom agent via dashboard with RoleDescription, standard tier, and an MCP server
@@ -112,12 +112,12 @@ AgentSquad is a multi-agent AI system where specialized agent roles collaborate 
 4. SecurityAuditor initializes, subscribes to message bus, enters its main loop using its RoleDescription as AI persona
 
 **Scenario: Engineer Creates PR from Issue**
-1. PE assigns GitHub Issue #42 to "Senior Engineer 1" by updating issue title and sending `IssueAssignmentMessage`
-2. Senior Engineer receives message → reads Issue #42 details from GitHub
+1. SE assigns GitHub Issue #42 to "Software Engineer 1" by updating issue title and sending `IssueAssignmentMessage`
+2. Software Engineer receives message → reads Issue #42 details from GitHub
 3. AI analyzes Issue against PMSpec + Architecture → produces understanding, acceptance criteria, planned approach
 4. If AI has questions → enters clarification loop (see §14)
-5. Engineer creates branch `agent/senior-engineer-1/issue-42-implement-auth`
-6. Engineer creates PR with title "Senior Engineer 1: Implement auth" and body containing "Closes #42" + understanding + criteria + plan
+5. Engineer creates branch `agent/software-engineer-1/issue-42-implement-auth`
+6. Engineer creates PR with title "Software Engineer 1: Implement auth" and body containing "Closes #42" + understanding + criteria + plan
 7. AI produces implementation using correct tech stack → code files parsed and committed
 8. PR marked ready-for-review → `ReviewRequestMessage` broadcast
 
@@ -136,7 +136,7 @@ Project.Description → Research.md → PMSpec.md → Architecture.md → Engine
 - **REQ-WF-001a**: Research.md is produced by the Researcher from the project description and configurable research prompt.
 - **REQ-WF-001b**: PMSpec.md is produced by the PM from Research.md + project description. Contains: Executive Summary, Business Goals, User Stories & Acceptance Criteria, Scope, Non-Functional Requirements, Success Metrics, Constraints.
 - **REQ-WF-001c**: Architecture.md is produced by the Architect from PMSpec.md + Research.md.
-- **REQ-WF-001d**: Engineering Task Issues (labeled `engineering-task`) are created by the PE from Architecture.md + PMSpec.md + Enhancement Issues. Each task is a GitHub Issue linking back to its parent Enhancement Issue. There is NO EngineeringPlan.md file — GitHub Issues are the single source of truth for task tracking.
+- **REQ-WF-001d**: Engineering Task Issues (labeled `engineering-task`) are created by the SE from Architecture.md + PMSpec.md + Enhancement Issues. Each task is a GitHub Issue linking back to its parent Enhancement Issue. There is NO EngineeringPlan.md file — GitHub Issues are the single source of truth for task tracking.
 
 ### REQ-WF-002: Phase Gating
 
@@ -144,23 +144,23 @@ Each phase has gate conditions that must be met before advancing:
 
 - Research → Architecture: `research.doc.ready` + `research.complete` signals
 - Architecture → EngineeringPlanning: `architecture.doc.ready` + `architecture.complete` signals
-- EngineeringPlanning → ParallelDevelopment: `engineering.plan.ready` + `principal.ready` signals (PE has created engineering-task issues)
+- EngineeringPlanning → ParallelDevelopment: `engineering.plan.ready` + `software-engineer.ready` signals (SE has created engineering-task issues)
 
 ### REQ-WF-003: Agent Ordering
 
 - **REQ-WF-003a**: Researcher starts work immediately after PM's kickoff TaskAssignment.
 - **REQ-WF-003b**: PM creates PMSpec.md after receiving `ResearchComplete` status update (not before).
 - **REQ-WF-003c**: Architect starts after receiving `PMSpecReady` status update from PM. Architect does NOT listen to TaskAssignment broadcasts.
-- **REQ-WF-003d**: PE starts after receiving `PlanningCompleteMessage` from PM AND Architecture.md is ready.
-- **REQ-WF-003e**: Engineers start only after PE assigns them Issues via `IssueAssignmentMessage`.
+- **REQ-WF-003d**: SE starts after receiving `PlanningCompleteMessage` from PM AND Architecture.md is ready.
+- **REQ-WF-003e**: Engineers start only after SE assigns them Issues via `IssueAssignmentMessage`.
 
 **Scenario: Full Document Pipeline**
 1. PM sends TaskAssignment to Researcher with project description
 2. Researcher produces Research.md (3 AI turns) → commits via document PR → auto-merges → sends `ResearchComplete`
 3. PM receives ResearchComplete → creates PMSpec.md (2 AI turns) → commits via document PR → auto-merges → sends `PMSpecReady`
-4. PM extracts User Stories from PMSpec → creates Enhancement Issues in GitHub → sends `PlanningCompleteMessage` to PE
+4. PM extracts User Stories from PMSpec → creates Enhancement Issues in GitHub → sends `PlanningCompleteMessage` to SE
 5. Architect receives PMSpecReady → reads PMSpec + Research → creates Architecture.md (5 AI turns) → commits → sends `ArchitectureComplete`
-6. PE receives PlanningCompleteMessage + detects Architecture.md → reads Enhancement Issues → creates engineering-task Issues in GitHub (each linked to parent Enhancement Issue) → enters development loop
+6. SE receives PlanningCompleteMessage + detects Architecture.md → reads Enhancement Issues → creates engineering-task Issues in GitHub (each linked to parent Enhancement Issue) → enters development loop
 
 ---
 
@@ -184,7 +184,7 @@ Each phase has gate conditions that must be met before advancing:
 - **REQ-PM-003a**: After PMSpec is finalized, PM uses AI to extract User Stories and creates a GitHub Issue for each one.
 - **REQ-PM-003b**: Each Issue is labeled `enhancement` and contains: User Story description (As a [role], I want...), detailed description, Acceptance Criteria checklist.
 - **REQ-PM-003c**: Each Issue must have enough detail for an engineer to implement without needing the full PMSpec.
-- **REQ-PM-003d**: Only after ALL Issues are created, PM sends `PlanningCompleteMessage` to PE.
+- **REQ-PM-003d**: Only after ALL Issues are created, PM sends `PlanningCompleteMessage` to SE.
 - **REQ-PM-003e**: Documentation-related Issues (Architecture.md, PMSpec.md, etc.) should be labeled `documentation`.
 - **REQ-PM-003f**: Idempotent: if Enhancement Issues already exist, skip creation and re-send PlanningCompleteMessage.
 
@@ -204,11 +204,11 @@ Each phase has gate conditions that must be met before advancing:
 - **REQ-PM-004e**: If PM's AI response indicates uncertainty (contains "UNSURE"), PM escalates to Executive stakeholder.
 
 **Scenario: PM Answers Engineer Question**
-1. Junior Engineer sends `ClarificationRequestMessage { IssueNumber=42, Question="Should auth support OAuth or just JWT?" }`
+1. Software Engineer sends `ClarificationRequestMessage { IssueNumber=42, Question="Should auth support OAuth or just JWT?" }`
 2. PM dequeues request → reads Issue #42 from GitHub → reads PMSpec
 3. PM sends AI prompt with Issue + PMSpec + question → AI responds: "Based on the PMSpec, the system should support JWT only for the MVP phase"
 4. PM posts comment on Issue #42: "**Program Manager** responding to clarification: Based on the PMSpec..."
-5. PM sends `ClarificationResponseMessage { IssueNumber=42, Response="..." }` to the Junior Engineer's agent Id
+5. PM sends `ClarificationResponseMessage { IssueNumber=42, Response="..." }` to the Software Engineer's agent Id
 
 ### REQ-PM-005: PR Review — Phase 3 Final Business Review
 
@@ -217,13 +217,13 @@ Each phase has gate conditions that must be met before advancing:
 - **REQ-PM-005c**: PM reviews PRs against PMSpec business requirements — but ONLY against the PR's own scope (not the entire PMSpec).
 - **REQ-PM-005d**: Review must evaluate: business goal alignment, user story coverage for THIS task, acceptance criteria fulfillment, AND visual evidence from TE screenshots/videos posted as PR comments.
 - **REQ-PM-005e**: PM gathers TE visual evidence by scanning PR comments for image URLs and video links. This evidence is included in the AI review prompt so the model can validate design and business outcomes visually.
-- **REQ-PM-005f**: On **APPROVED**: PM posts `[ProgramManager] APPROVED` comment and adds the `pm-approved` label. PM does NOT call `ApproveAndMaybeMergeAsync` — merge is handled by the PE merge gate. PM sends a `StatusUpdateMessage` to notify PE that the PR is ready for merge.
+- **REQ-PM-005f**: On **APPROVED**: PM posts `[ProgramManager] APPROVED` comment and adds the `pm-approved` label. PM does NOT call `ApproveAndMaybeMergeAsync` — merge is handled by the SE merge gate. PM sends a `StatusUpdateMessage` to notify SE that the PR is ready for merge.
 - **REQ-PM-005g**: On **CHANGES REQUESTED**: PM sends `ChangesRequestedMessage` (broadcast) so the author engineer can rework. Max `MaxPmReworkCycles` retries (default 3).
 - **REQ-PM-005h**: After completing all pending PR reviews, PM resets its status to Idle ("Monitoring team progress") so the dashboard accurately reflects current activity.
 
 ### REQ-PM-006: Resource Management
 
-- **REQ-PM-006a**: PM handles `ResourceRequestMessage` from PE — spawns new engineers via `AgentSpawnManager`.
+- **REQ-PM-006a**: PM handles `ResourceRequestMessage` from SE — spawns new engineers via `AgentSpawnManager`.
 - **REQ-PM-006b**: New engineers are tracked in TeamMembers.md for persistence across restarts.
 - **REQ-PM-006c**: If max additional engineers limit is reached, PM escalates to Executive.
 
@@ -236,7 +236,7 @@ Each phase has gate conditions that must be met before advancing:
 
 - **REQ-PM-008a**: PM periodically reviews open Enhancement Issues (`ReviewEnhancementIssueCompletionAsync`). When all sub-issues (engineering tasks) for an enhancement are closed, PM does a final AI-powered acceptance review against the original acceptance criteria.
 - **REQ-PM-008b**: If the AI review returns APPROVED, PM posts a summary comment and closes the enhancement issue. If NEEDS_MORE_WORK, PM posts the gap analysis as a comment but keeps the issue open.
-- **REQ-PM-008c**: **Orphaned Enhancement Detection:** PM MUST detect enhancement issues with zero sub-issues after the engineering phase has started. If an enhancement has been open with no linked engineering tasks for more than one full engineering loop cycle, PM should flag it with a comment noting the gap and notify the PE (rather than silently skipping it forever).
+- **REQ-PM-008c**: **Orphaned Enhancement Detection:** PM MUST detect enhancement issues with zero sub-issues after the engineering phase has started. If an enhancement has been open with no linked engineering tasks for more than one full engineering loop cycle, PM should flag it with a comment noting the gap and notify the SE (rather than silently skipping it forever).
 - **REQ-PM-008d**: PM tracks reviewed enhancements in `_reviewedEnhancementIssues` to prevent re-reviewing the same issue every loop.
 
 **Scenario: PM Closes Completed Enhancement**
@@ -246,11 +246,11 @@ Each phase has gate conditions that must be met before advancing:
 4. PM posts: "✅ PM Final Review — APPROVED. All 3 tasks delivered." → closes #53
 
 **Scenario: Orphaned Enhancement Detected**
-1. PM created Enhancement Issue #55 "Data Export" — PE's engineering plan missed it
-2. PE created tasks for all other enhancements but none referencing #55
+1. PM created Enhancement Issue #55 "Data Export" — SE's engineering plan missed it
+2. SE created tasks for all other enhancements but none referencing #55
 3. PM's enhancement review: #55 has 0 sub-issues → skipped (old behavior was silent)
-4. After engineering phase started: PM detects #55 has been orphaned → flags with comment: "⚠️ This enhancement has no linked engineering tasks. Notifying PE for resolution."
-5. PE receives notification → creates additional engineering tasks or comments with justification
+4. After engineering phase started: PM detects #55 has been orphaned → flags with comment: "⚠️ This enhancement has no linked engineering tasks. Notifying SE for resolution."
+5. SE receives notification → creates additional engineering tasks or comments with justification
 
 ### REQ-PM-009: Team Composition Pipeline
 
@@ -265,9 +265,9 @@ Each phase has gate conditions that must be met before advancing:
 **Scenario: PM Team Composition Pipeline**
 1. PM creates PMSpec.md → gathers project description + Research.md + PMSpec.md
 2. `AgentTeamComposer.BuildTeamCompositionPromptAsync()` builds prompt with agent catalog + 3 MCP servers + 2 SME templates
-3. AI proposes: 2 Senior Engineers, 1 Junior Engineer, 1 SME "DatabaseExpert" (from template), 1 SME "UIAccessibilitySpecialist" (new definition)
+3. AI proposes: 2 Software Engineers, 1 Software Engineer, 1 SME "DatabaseExpert" (from template), 1 SME "UIAccessibilitySpecialist" (new definition)
 4. PM sends `TeamCompositionProposalMessage` → human gate `AgentTeamComposition` activated
-5. Director reviews proposal → approves with modification (removes Junior Engineer)
+5. Director reviews proposal → approves with modification (removes Software Engineer)
 6. PM spawns: 2 SEs, DatabaseExpert SME (from template), UIAccessibilitySpecialist SME (new definition)
 7. PM saves `TeamComposition.md` → signals `TeamCompositionComplete`
 
@@ -313,154 +313,154 @@ Each phase has gate conditions that must be met before advancing:
 - **REQ-ARCH-002d**: On **APPROVED**: Architect adds the `architect-approved` label to the PR. Architect does NOT call `ApproveAndMaybeMergeAsync` and does NOT trigger merge — it is decoupled from merge logic entirely.
 - **REQ-ARCH-002e**: On **CHANGES REQUESTED**: Architect sends `ChangesRequestedMessage` for the author engineer to rework. Max `MaxArchitectReworkCycles` retries (default 3).
 - **REQ-ARCH-002f**: Architect skips PRs that already have the `architect-approved` label to prevent duplicate reviews.
-- **REQ-ARCH-002g**: Architect also reviews PE-authored PRs (part of the reviewer substitution when PE is the author — see REQ-REV-005).
+- **REQ-ARCH-002g**: Architect also reviews SE-authored PRs (part of the reviewer substitution when SE is the author — see REQ-REV-005).
 - **REQ-ARCH-002h**: Architect uses `NeedsReviewFromAsync` to prevent duplicate reviews across restarts.
 
 **Scenario: Architecture Phase**
 1. Architect receives PMSpecReady → reads PMSpec.md + Research.md
 2. Opens document PR → 5-turn AI conversation → produces Architecture.md
 3. Commits → auto-merges → broadcasts ArchitectureComplete
-4. Later: receives ReviewRequest for Senior's PR #35 → reads actual code files from branch + Architecture.md + PMSpec.md + linked issue → evaluates → APPROVED → adds `architect-approved` label (Phase 1 complete, TE Phase 2 can begin)
+4. Later: receives ReviewRequest for Software Engineer's PR #35 → reads actual code files from branch + Architecture.md + PMSpec.md + linked issue → evaluates → APPROVED → adds `architect-approved` label (Phase 1 complete, TE Phase 2 can begin)
 
 ---
 
-## 7. Principal Engineer Agent Requirements
+## 7. Software Engineer Agent Requirements
 
-### REQ-PE-001: Two-Phase Loop
+### REQ-SE-001: Two-Phase Loop
 
-- **REQ-PE-001a**: Phase 1: Wait for Architecture.md + PlanningCompleteMessage + Enhancement Issues → create engineering-task Issues in GitHub. **(Leader only)**
-- **REQ-PE-001b**: Phase 2: Continuous development loop with priorities: rework → assignment → own tasks → review → resource evaluation.
-- **REQ-PE-001c**: On restart, if engineering-task Issues already exist, restore task backlog from them and skip to Phase 2.
-- **REQ-PE-001d**: PE can begin working on tasks (Phase 2) even if no other engineers have been spawned yet. It assigns High-complexity tasks to itself and starts immediately.
-- **REQ-PE-001e**: Non-leader PEs entering Phase 1 sync task state from existing GitHub engineering-task issues rather than creating the plan. They wait for the leader to create tasks before entering Phase 2.
+- **REQ-SE-001a**: Phase 1: Wait for Architecture.md + PlanningCompleteMessage + Enhancement Issues → create engineering-task Issues in GitHub. **(Leader only)**
+- **REQ-SE-001b**: Phase 2: Continuous development loop with priorities: rework → assignment → own tasks → review → resource evaluation.
+- **REQ-SE-001c**: On restart, if engineering-task Issues already exist, restore task backlog from them and skip to Phase 2.
+- **REQ-SE-001d**: SE can begin working on tasks (Phase 2) even if no other engineers have been spawned yet. It assigns High-complexity tasks to itself and starts immediately.
+- **REQ-SE-001e**: Non-leader PEs entering Phase 1 sync task state from existing GitHub engineering-task issues rather than creating the plan. They wait for the leader to create tasks before entering Phase 2.
 
-### REQ-PE-002: Engineering Task Issue Creation
+### REQ-SE-002: Engineering Task Issue Creation
 
-- **REQ-PE-002a**: PE reads PMSpec.md, Architecture.md, and ALL Enhancement-labeled GitHub Issues.
-- **REQ-PE-002b**: AI maps each Enhancement Issue to engineering tasks with: ID, parent Issue number, name, description, complexity (High/Medium/Low), dependencies.
-- **REQ-PE-002c**: Each engineering task is created as a GitHub Issue labeled `engineering-task`. The issue body contains structured metadata: parent issue reference, complexity, dependencies (as issue numbers), and detailed description.
-- **REQ-PE-002d**: Task complexity mapping: High → PE, Medium → Senior Engineers, Low → Junior Engineers. When the pool is PE-only (SE=0, JE=0), all complexity levels are handled by PE agents.
-- **REQ-PE-002e**: Engineering-task issues link back to their parent Enhancement issue via `Parent: #N` in the body. This replaces the old EngineeringPlan.md file — there is no markdown plan file.
-- **REQ-PE-002f**: Dependencies between tasks are tracked as issue numbers in the body (e.g., `Dependencies: #106, #107`). A task is assignable only when all dependency issues are closed.
-- **REQ-PE-002g**: Task status is tracked by issue state: open = pending/in-progress, closed = done. The `in-progress` label indicates active work.
-- **REQ-PE-002h**: Only the leader PE creates engineering-task issues. This is idempotent — if issues already exist (e.g., from a prior run), the leader loads them instead of recreating.
-- **REQ-PE-002i**: **Foundation-First Planning:** The first engineering task (T1) MUST be a project foundation/scaffolding task with NO dependencies. All other tasks MAY depend on T1. If the AI-generated T1 is not a foundation task, the PE searches the task list for keywords (`foundation`, `scaffold`, `setup`, `structure`, `skeleton`, `template`, `infrastructure`, `project setup`) and promotes the matching task to position 0. T1's dependencies are always cleared.
-- **REQ-PE-002j**: The PE prompt includes guidance to create tasks suitable for parallel work with minimal overlap and merge conflict potential. Tasks should target different modules, directories, or components.
+- **REQ-SE-002a**: SE reads PMSpec.md, Architecture.md, and ALL Enhancement-labeled GitHub Issues.
+- **REQ-SE-002b**: AI maps each Enhancement Issue to engineering tasks with: ID, parent Issue number, name, description, complexity (High/Medium/Low), dependencies.
+- **REQ-SE-002c**: Each engineering task is created as a GitHub Issue labeled `engineering-task`. The issue body contains structured metadata: parent issue reference, complexity, dependencies (as issue numbers), and detailed description.
+- **REQ-SE-002d**: Task complexity mapping: High → SE, Medium → Software Engineers, Low → Software Engineers. When the pool is SE-only (SE=0), all complexity levels are handled by SE agents.
+- **REQ-SE-002e**: Engineering-task issues link back to their parent Enhancement issue via `Parent: #N` in the body. This replaces the old EngineeringPlan.md file — there is no markdown plan file.
+- **REQ-SE-002f**: Dependencies between tasks are tracked as issue numbers in the body (e.g., `Dependencies: #106, #107`). A task is assignable only when all dependency issues are closed.
+- **REQ-SE-002g**: Task status is tracked by issue state: open = pending/in-progress, closed = done. The `in-progress` label indicates active work.
+- **REQ-SE-002h**: Only the leader SE creates engineering-task issues. This is idempotent — if issues already exist (e.g., from a prior run), the leader loads them instead of recreating.
+- **REQ-SE-002i**: **Foundation-First Planning:** The first engineering task (T1) MUST be a project foundation/scaffolding task with NO dependencies. All other tasks MAY depend on T1. If the AI-generated T1 is not a foundation task, the SE searches the task list for keywords (`foundation`, `scaffold`, `setup`, `structure`, `skeleton`, `template`, `infrastructure`, `project setup`) and promotes the matching task to position 0. T1's dependencies are always cleared.
+- **REQ-SE-002j**: The SE prompt includes guidance to create tasks suitable for parallel work with minimal overlap and merge conflict potential. Tasks should target different modules, directories, or components.
 
 **Scenario: Foundation-First Task Ordering**
 1. AI generates engineering plan: T1="Implement auth endpoints", T2="Create project scaffold", T3="Build user CRUD"
-2. PE detects T1 is NOT a foundation task (no scaffold/setup keywords)
-3. PE finds T2 contains "scaffold" → promotes T2 to position 0, shifts T1 to position 1
+2. SE detects T1 is NOT a foundation task (no scaffold/setup keywords)
+3. SE finds T2 contains "scaffold" → promotes T2 to position 0, shifts T1 to position 1
 4. T2 (now first) has dependencies cleared → will be implemented first
 5. Result: scaffold creates the project structure; T1 and T3 build on top of it in parallel
 
-**Scenario: PE Creates Engineering Tasks as Issues**
-1. PE receives PlanningCompleteMessage + Architecture.md is ready
-2. PE fetches all Enhancement Issues (e.g., 4 Issues)
+**Scenario: SE Creates Engineering Tasks as Issues**
+1. SE receives PlanningCompleteMessage + Architecture.md is ready
+2. SE fetches all Enhancement Issues (e.g., 4 Issues)
 3. AI analyzes Issues + PMSpec + Architecture → produces TASK|ID|IssueNum|Name|Desc|Complexity|Deps lines
-4. PE parses tasks → creates GitHub Issues labeled `engineering-task` for each task, with structured body containing parent issue, complexity, dependencies
+4. SE parses tasks → creates GitHub Issues labeled `engineering-task` for each task, with structured body containing parent issue, complexity, dependencies
 5. Dependencies are resolved to issue numbers (e.g., T1 depends on nothing, T3 depends on T2's issue #107)
 6. Enters Phase 2 development loop — picks first assignable task
 
-### REQ-PE-003: Task Assignment
+### REQ-SE-003: Task Assignment
 
-- **REQ-PE-003a**: PE checks registered engineers via `AgentRegistry` (not TeamMembers.md). **(Leader only)**
-- **REQ-PE-003b**: For each free engineer (including non-leader PEs, SEs, and JEs): find next unassigned task matching their complexity tier.
-- **REQ-PE-003c**: Assignment process: update GitHub Issue title to `{EngineerName}: {TaskName}` → send `IssueAssignmentMessage` to engineer's `Identity.Id`.
-- **REQ-PE-003d**: Track assignments in `_agentAssignments` dictionary keyed by agent `Identity.Id` (not DisplayName).
-- **REQ-PE-003e**: When an assignment's Issue is closed (completed), clear the assignment so the engineer can receive new work.
-- **REQ-PE-003f**: Non-leader PEs are treated as assignable workers. The leader assigns tasks to them using the same `IssueAssignmentMessage` mechanism, with PE-appropriate complexity preferences (High → Medium → Low).
+- **REQ-SE-003a**: SE checks registered engineers via `AgentRegistry` (not TeamMembers.md). **(Leader only)**
+- **REQ-SE-003b**: For each free engineer (including non-leader PEs, SEs, and JEs): find next unassigned task matching their complexity tier.
+- **REQ-SE-003c**: Assignment process: update GitHub Issue title to `{EngineerName}: {TaskName}` → send `IssueAssignmentMessage` to engineer's `Identity.Id`.
+- **REQ-SE-003d**: Track assignments in `_agentAssignments` dictionary keyed by agent `Identity.Id` (not DisplayName).
+- **REQ-SE-003e**: When an assignment's Issue is closed (completed), clear the assignment so the engineer can receive new work.
+- **REQ-SE-003f**: Non-leader PEs are treated as assignable workers. The leader assigns tasks to them using the same `IssueAssignmentMessage` mechanism, with SE-appropriate complexity preferences (High → Medium → Low).
 
-**Scenario: PE Assigns Task to Engineer**
-1. PE loops through registered engineers → finds Senior Engineer 1 has no active assignment
-2. PE finds next Medium-complexity Pending task with met dependencies: T2 "Implement user auth" (Issue #43)
-3. PE updates Issue #43 title to "Senior Engineer 1: Implement user auth"
-4. PE sends `IssueAssignmentMessage { ToAgentId=seniorengineer-abc123, IssueNumber=43, Complexity="Medium" }`
-5. PE records `_agentAssignments["seniorengineer-abc123"] = 43` and updates task status to "Assigned"
+**Scenario: SE Assigns Task to Engineer**
+1. SE loops through registered engineers → finds Software Engineer 1 has no active assignment
+2. SE finds next Medium-complexity Pending task with met dependencies: T2 "Implement user auth" (Issue #43)
+3. SE updates Issue #43 title to "Software Engineer 1: Implement user auth"
+4. SE sends `IssueAssignmentMessage { ToAgentId=SoftwareEngineer-abc123, IssueNumber=43, Complexity="Medium" }`
+5. SE records `_agentAssignments["SoftwareEngineer-abc123"] = 43` and updates task status to "Assigned"
 
-### REQ-PE-004: Own Task Implementation
+### REQ-SE-004: Own Task Implementation
 
-- **REQ-PE-004a**: PE works on High-complexity tasks itself. Non-leader PEs work on any complexity.
-- **REQ-PE-004b**: PE assigns the Issue to itself (updates title with own DisplayName).
-- **REQ-PE-004c**: PE creates PR with detailed AI-generated description including: summary, acceptance criteria, implementation notes, testing approach.
-- **REQ-PE-004d**: PR body includes `Closes #{IssueNumber}` to auto-close the Issue on merge.
-- **REQ-PE-004e**: PE commits implementation and marks PR ready-for-review.
-- **REQ-PE-004f**: Non-leader PEs skip the "defer to spawning engineers" guard — they always seek work immediately. Only the leader PE defers non-High tasks during the spawn cooldown window.
+- **REQ-SE-004a**: SE works on High-complexity tasks itself. Non-leader PEs work on any complexity.
+- **REQ-SE-004b**: SE assigns the Issue to itself (updates title with own DisplayName).
+- **REQ-SE-004c**: SE creates PR with detailed AI-generated description including: summary, acceptance criteria, implementation notes, testing approach.
+- **REQ-SE-004d**: PR body includes `Closes #{IssueNumber}` to auto-close the Issue on merge.
+- **REQ-SE-004e**: SE commits implementation and marks PR ready-for-review.
+- **REQ-SE-004f**: Non-leader PEs skip the "defer to spawning engineers" guard — they always seek work immediately. Only the leader SE defers non-High tasks during the spawn cooldown window.
 
-### REQ-PE-005: PR Review (Technical Quality)
+### REQ-SE-005: PR Review (Technical Quality)
 
-- **REQ-PE-005a**: PE subscribes to `ReviewRequestMessage` and queues PRs for review. **(All PEs)**
-- **REQ-PE-005b**: PE skips reviewing its own PRs. PR title matching uses `{DisplayName}:` (with colon delimiter) to prevent "PrincipalEngineer" from matching "PrincipalEngineer 1:" PRs.
-- **REQ-PE-005c**: PE reviews code PRs against architecture and engineering-task issue context — scoped to the PR's task, NOT the full project.
-- **REQ-PE-005d**: Review evaluates: architecture patterns, implementation completeness for THIS task, code quality, error handling, test coverage.
-- **REQ-PE-005e**: If changes requested, PE sends `ChangesRequestedMessage` with feedback details.
-- **REQ-PE-005f**: Cross-PE review dedup: before reviewing a PR, check GitHub comments for any `[PrincipalEngineer` prefix. If any PE has already reviewed and no new rework commits exist, skip the review. This prevents multiple PEs from reviewing the same PR redundantly.
+- **REQ-SE-005a**: SE subscribes to `ReviewRequestMessage` and queues PRs for review. **(All PEs)**
+- **REQ-SE-005b**: SE skips reviewing its own PRs. PR title matching uses `{DisplayName}:` (with colon delimiter) to prevent "SoftwareEngineer" from matching "SoftwareEngineer 1:" PRs.
+- **REQ-SE-005c**: SE reviews code PRs against architecture and engineering-task issue context — scoped to the PR's task, NOT the full project.
+- **REQ-SE-005d**: Review evaluates: architecture patterns, implementation completeness for THIS task, code quality, error handling, test coverage.
+- **REQ-SE-005e**: If changes requested, SE sends `ChangesRequestedMessage` with feedback details.
+- **REQ-SE-005f**: Cross-SE review dedup: before reviewing a PR, check GitHub comments for any `[SoftwareEngineer` prefix. If any SE has already reviewed and no new rework commits exist, skip the review. This prevents multiple PEs from reviewing the same PR redundantly.
 
-### REQ-PE-006: Resource Evaluation
+### REQ-SE-006: Resource Evaluation
 
-- **REQ-PE-006a**: PE evaluates if more workers are needed based on parallelizable pending tasks vs. available workers. **(Leader only)**
-- **REQ-PE-006b**: PE sends `ResourceRequestMessage` when parallelizable tasks significantly exceed available workers.
-- **REQ-PE-006c**: Resource requests prefer PE pool first (PEs produce more robust code), falling back to SE pool then JE pool when PE pool is exhausted. The old complexity-based role selection (Low→Junior, Medium→Senior) is replaced by pool-priority ordering.
-- **REQ-PE-006d**: Pool capacity is checked against `EngineerPoolConfig` — the PE estimates remaining capacity by comparing current agent count per role against configured pool limits.
+- **REQ-SE-006a**: SE evaluates if more workers are needed based on parallelizable pending tasks vs. available workers. **(Leader only)**
+- **REQ-SE-006b**: SE sends `ResourceRequestMessage` when parallelizable tasks significantly exceed available workers.
+- **REQ-SE-006c**: Resource requests prefer SE pool first (PEs produce more robust code), falling back to SE pool when SE pool is exhausted. The old complexity-based role selection (Low→Software Engineer, Medium→Software Engineer) is replaced by pool-priority ordering.
+- **REQ-SE-006d**: Pool capacity is checked against `EngineerPoolConfig` — the SE estimates remaining capacity by comparing current agent count per role against configured pool limits.
 
-### REQ-PE-007: Multi-PE Leader Election
+### REQ-SE-007: Multi-SE Leader Election
 
-- **REQ-PE-007a**: Each PE has a `Rank` (integer, 0-based). The core PE spawned at startup has rank 0. Additional PEs from the pool have rank 1, 2, etc.
-- **REQ-PE-007b**: The leader is the lowest-rank online PE (status: Working, Idle, Online, or Initializing) as determined by querying `AgentRegistry.GetAgentsByRole(PrincipalEngineer)`.
-- **REQ-PE-007c**: Leader election is evaluated each loop iteration — it is dynamic. If the leader goes offline, the next-lowest-rank PE becomes leader automatically.
-- **REQ-PE-007d**: Leader-only responsibilities: create engineering plan (Phase 1), create integration PR, check all tasks complete, evaluate resource needs, assign tasks to other engineers, recover orphaned assignments.
-- **REQ-PE-007e**: Any PE can: pick up and implement tasks, review PRs, handle rework on own PRs, recover own in-progress PRs, process own rework feedback.
-- **REQ-PE-007f**: If no PEs are online in the registry (edge case during initialization), the current PE considers itself the leader.
+- **REQ-SE-007a**: Each SE has a `Rank` (integer, 0-based). The core SE spawned at startup has rank 0. Additional PEs from the pool have rank 1, 2, etc.
+- **REQ-SE-007b**: The leader is the lowest-rank online SE (status: Working, Idle, Online, or Initializing) as determined by querying `AgentRegistry.GetAgentsByRole(SoftwareEngineer)`.
+- **REQ-SE-007c**: Leader election is evaluated each loop iteration — it is dynamic. If the leader goes offline, the next-lowest-rank SE becomes leader automatically.
+- **REQ-SE-007d**: Leader-only responsibilities: create engineering plan (Phase 1), create integration PR, check all tasks complete, evaluate resource needs, assign tasks to other engineers, recover orphaned assignments.
+- **REQ-SE-007e**: Any SE can: pick up and implement tasks, review PRs, handle rework on own PRs, recover own in-progress PRs, process own rework feedback.
+- **REQ-SE-007f**: If no PEs are online in the registry (edge case during initialization), the current SE considers itself the leader.
 
-### REQ-PE-008: Engineer Pool Configuration
+### REQ-SE-008: Engineer Pool Configuration
 
-- **REQ-PE-008a**: `EngineerPoolConfig` defines per-role pool limits: `PrincipalEngineerPool` (default 2), `SeniorEngineerPool` (default 0), `JuniorEngineerPool` (default 0).
-- **REQ-PE-008b**: Pool sizes define how many *additional* agents of each role can be dynamically spawned beyond core agents. The core PE (rank 0) is always spawned — the PE pool defines how many extra PEs can be added.
-- **REQ-PE-008c**: `MaxAdditionalEngineers` is a computed property (sum of all pool sizes) for backward compatibility.
-- **REQ-PE-008d**: Default configuration (PE=2, SE=0, JE=0) means only additional PE agents are spawned — no Senior or Junior engineers. This is the recommended configuration because PE-tier prompts produce more robust code.
-- **REQ-PE-008e**: Alternative configuration example: PE=0, SE=2, JE=1 allows up to 2 Senior Engineers and 1 Junior Engineer to be spawned (classic behavior), with no additional PEs.
-- **REQ-PE-008f**: The `AgentSpawnManager` enforces per-role limits independently. It tracks `_spawnedPEs`, `_spawnedSEs`, `_spawnedJEs` separately and checks the correct pool for each spawn request.
+- **REQ-SE-008a**: `EngineerPoolConfig` defines per-role pool limits: `SoftwareEngineerPool` (default 2), `SoftwareEngineerPool` (default 0), `SoftwareEngineerPool` (default 0).
+- **REQ-SE-008b**: Pool sizes define how many *additional* agents of each role can be dynamically spawned beyond core agents. The core SE (rank 0) is always spawned — the SE pool defines how many extra PEs can be added.
+- **REQ-SE-008c**: `MaxAdditionalEngineers` is a computed property (sum of all pool sizes) for backward compatibility.
+- **REQ-SE-008d**: Default configuration (SE=2) means only additional SE agents are spawned — only additional Software Engineers. This is the recommended configuration because SE-tier prompts produce more robust code.
+- **REQ-SE-008e**: Alternative configuration example: SE=0, SE=2, SE=1 allows up to 2 Software Engineers and 1 Software Engineer to be spawned (classic behavior), with no additional PEs.
+- **REQ-SE-008f**: The `AgentSpawnManager` enforces per-role limits independently. It tracks `_spawnedPEs`, `_spawnedSEs`, `_spawnedJEs` separately and checks the correct pool for each spawn request.
 
-### REQ-PE-009: Enhancement Coverage Validation
+### REQ-SE-009: Enhancement Coverage Validation
 
-- **REQ-PE-009a**: After the PE finalizes the engineering plan (all engineering-task issues created), it MUST validate that every open PM Enhancement issue has at least one linked engineering-task.
-- **REQ-PE-009b**: For each enhancement with zero engineering tasks: PE asks AI whether the enhancement was intentionally covered by other tasks (e.g., "JSON data layer is fully addressed by tasks T3 and T7") or was genuinely missed.
-- **REQ-PE-009c**: If the enhancement was missed: PE creates additional engineering tasks and links them as sub-issues of the enhancement.
-- **REQ-PE-009d**: If the enhancement was intentionally not given dedicated tasks (covered by other tasks): PE adds a comment on the enhancement issue explaining the justification (e.g., "This user story is fully addressed by engineering tasks T3 (#458) and T7 (#462) which implement the data models, service layer, and template file specified in the acceptance criteria.").
-- **REQ-PE-009e**: This validation prevents orphaned enhancement issues that can never be closed by the PM's `ReviewEnhancementIssueCompletionAsync` (which requires at least one sub-issue to evaluate completion).
+- **REQ-SE-009a**: After the SE finalizes the engineering plan (all engineering-task issues created), it MUST validate that every open PM Enhancement issue has at least one linked engineering-task.
+- **REQ-SE-009b**: For each enhancement with zero engineering tasks: SE asks AI whether the enhancement was intentionally covered by other tasks (e.g., "JSON data layer is fully addressed by tasks T3 and T7") or was genuinely missed.
+- **REQ-SE-009c**: If the enhancement was missed: SE creates additional engineering tasks and links them as sub-issues of the enhancement.
+- **REQ-SE-009d**: If the enhancement was intentionally not given dedicated tasks (covered by other tasks): SE adds a comment on the enhancement issue explaining the justification (e.g., "This user story is fully addressed by engineering tasks T3 (#458) and T7 (#462) which implement the data models, service layer, and template file specified in the acceptance criteria.").
+- **REQ-SE-009e**: This validation prevents orphaned enhancement issues that can never be closed by the PM's `ReviewEnhancementIssueCompletionAsync` (which requires at least one sub-issue to evaluate completion).
 
-**Scenario: PE Catches Missing Enhancement Coverage**
+**Scenario: SE Catches Missing Enhancement Coverage**
 1. PM creates 10 Enhancement Issues (#447-#456)
-2. PE creates engineering plan: 9 tasks covering #447-#452, #454, #456 — but #453 and #455 missed
-3. PE validation pass: iterates all 10 enhancements → finds #453 has 0 linked tasks, #455 has 0
-4. AI analysis for #453: "This user story's requirements are fully addressed by T2 (data models) and T5 (service layer)" → PE posts justification comment on #453
-5. AI analysis for #455: "This user story was missed — needs a dedicated task for report theming" → PE creates new task T10 linked to #455
+2. SE creates engineering plan: 9 tasks covering #447-#452, #454, #456 — but #453 and #455 missed
+3. SE validation pass: iterates all 10 enhancements → finds #453 has 0 linked tasks, #455 has 0
+4. AI analysis for #453: "This user story's requirements are fully addressed by T2 (data models) and T5 (service layer)" → SE posts justification comment on #453
+5. AI analysis for #455: "This user story was missed — needs a dedicated task for report theming" → SE creates new task T10 linked to #455
 6. Result: all enhancements have either engineering tasks or documented justification
 
-### REQ-PE-010: Reactive SME Spawning
+### REQ-SE-010: Reactive SME Spawning
 
-- **REQ-PE-010a**: During the development phase, the PE can reactively spawn SME agents when encountering tasks that require specialist expertise beyond the current team's capabilities.
-- **REQ-PE-010b**: `RequestSmeIfNeededAsync(taskDescription, additionalContext, ct)` uses AI assessment to determine whether an SME is needed for a given task. The AI evaluates the task description and context against the current team's capabilities.
-- **REQ-PE-010c**: If the AI determines an SME is needed: capability keywords are extracted from the task, and the system checks for existing matching templates via `SmeDefinitionGenerator.FindMatchingTemplateAsync`.
-- **REQ-PE-010d**: If no matching template exists, the AI generates a new SME definition via `BuildDefinitionGenerationPrompt` → `ParseDefinition`, creating a tailored specialist agent definition.
-- **REQ-PE-010e**: The SME agent is spawned via `AgentSpawnManager.SpawnSmeAgentAsync(definition, assignToIssue?, ct)`, which enforces `MaxInstances` per definition and `MaxTotalSmeAgents` globally. Spawning is subject to the `SmeAgentSpawn` human gate.
-- **REQ-PE-010f**: Only the PM and PE can trigger SME agent spawning. SME agents cannot recursively spawn other SME agents.
-- **REQ-PE-010g**: The PE sends `SpawnSmeAgentMessage` to request spawning, which is processed by the `AgentSpawnManager`.
+- **REQ-SE-010a**: During the development phase, the SE can reactively spawn SME agents when encountering tasks that require specialist expertise beyond the current team's capabilities.
+- **REQ-SE-010b**: `RequestSmeIfNeededAsync(taskDescription, additionalContext, ct)` uses AI assessment to determine whether an SME is needed for a given task. The AI evaluates the task description and context against the current team's capabilities.
+- **REQ-SE-010c**: If the AI determines an SME is needed: capability keywords are extracted from the task, and the system checks for existing matching templates via `SmeDefinitionGenerator.FindMatchingTemplateAsync`.
+- **REQ-SE-010d**: If no matching template exists, the AI generates a new SME definition via `BuildDefinitionGenerationPrompt` → `ParseDefinition`, creating a tailored specialist agent definition.
+- **REQ-SE-010e**: The SME agent is spawned via `AgentSpawnManager.SpawnSmeAgentAsync(definition, assignToIssue?, ct)`, which enforces `MaxInstances` per definition and `MaxTotalSmeAgents` globally. Spawning is subject to the `SmeAgentSpawn` human gate.
+- **REQ-SE-010f**: Only the PM and SE can trigger SME agent spawning. SME agents cannot recursively spawn other SME agents.
+- **REQ-SE-010g**: The SE sends `SpawnSmeAgentMessage` to request spawning, which is processed by the `AgentSpawnManager`.
 
-**Scenario: PE Reactively Spawns SME Agent**
-1. PE encounters engineering task T7 "Implement GraphQL federation gateway" — requires specialist knowledge
-2. PE calls `RequestSmeIfNeededAsync("Implement GraphQL federation gateway", taskContext, ct)`
+**Scenario: SE Reactively Spawns SME Agent**
+1. SE encounters engineering task T7 "Implement GraphQL federation gateway" — requires specialist knowledge
+2. SE calls `RequestSmeIfNeededAsync("Implement GraphQL federation gateway", taskContext, ct)`
 3. AI assessment: "YES — this task requires GraphQL federation expertise not present in the current team"
-4. PE extracts capabilities: ["graphql", "federation", "gateway", "api-gateway"]
+4. SE extracts capabilities: ["graphql", "federation", "gateway", "api-gateway"]
 5. `FindMatchingTemplateAsync` → no matching template found
 6. AI generates new definition: RoleName="GraphQLFederationExpert", SystemPrompt="You are a GraphQL federation specialist...", ModelTier=standard
-7. PE calls `SpawnSmeAgentAsync(definition, issueNumber: 107, ct)` → human gate `SmeAgentSpawn` activated
+7. SE calls `SpawnSmeAgentAsync(definition, issueNumber: 107, ct)` → human gate `SmeAgentSpawn` activated
 8. Director approves → SME agent "GraphQLFederationExpert" spawned → works on task → reports findings via `SmeResultMessage`
-9. PE incorporates SME findings into the implementation
+9. SE incorporates SME findings into the implementation
 
 ---
 
-## 8. Senior & Junior Engineer Requirements
+## 8. Software Engineer Requirements
 
 ### REQ-ENG-001: Issue-Driven Work
 
@@ -468,7 +468,7 @@ Each phase has gate conditions that must be met before advancing:
 - **REQ-ENG-001b**: On receiving assignment: read the full GitHub Issue, read PMSpec and Architecture for context.
 - **REQ-ENG-001c**: AI analyzes the Issue and produces: understanding summary, acceptance criteria, high-level task plan, and any questions.
 - **REQ-ENG-001d**: If AI has questions (no "NO_QUESTIONS" in output), enter clarification loop (§14).
-- **REQ-ENG-001e**: Engineer creates its OWN PR (PE no longer creates PRs for other engineers).
+- **REQ-ENG-001e**: Engineer creates its OWN PR (SE no longer creates PRs for other engineers).
 
 ### REQ-ENG-002: PR Creation by Engineers
 
@@ -485,24 +485,24 @@ Each phase has gate conditions that must be met before advancing:
 - **REQ-ENG-003d**: If code file parsing fails, raw output is committed as a fallback (but this indicates a problem).
 - **REQ-ENG-003e**: After commit, engineer marks PR ready-for-review and broadcasts `ReviewRequestMessage`.
 
-### REQ-ENG-004: Senior-Specific
+### REQ-ENG-004: Software Engineer Self-Review
 
-- **REQ-ENG-004a**: Senior Engineer does an extra self-review AI turn before committing (reviews own implementation for quality).
+- **REQ-ENG-004a**: Software Engineer does an extra self-review AI turn before committing (reviews own implementation for quality).
 
-### REQ-ENG-005: Junior-Specific
+### REQ-ENG-005: Software Engineer Escalation
 
-- **REQ-ENG-005a**: Junior Engineer truncates PMSpec and Architecture context for budget models (4000 chars max).
-- **REQ-ENG-005b**: Junior can escalate complexity to PE if a task seems too complex.
+- **REQ-ENG-005a**: Software Engineer truncates PMSpec and Architecture context for budget models (4000 chars max).
+- **REQ-ENG-005b**: Software Engineer can escalate complexity to SE if a task seems too complex.
 
-**Scenario: Senior Engineer Implements Feature**
+**Scenario: Software Engineer Implements Feature**
 1. Receives `IssueAssignmentMessage { IssueNumber=43, IssueTitle="Implement user auth" }`
 2. Reads Issue #43 from GitHub → reads PMSpec (full) + Architecture (full)
 3. AI analyzes → produces plan with NO_QUESTIONS → skips clarification
-4. Creates branch `agent/senior-engineer-1/issue-43-implement-user-auth`
-5. Creates PR "Senior Engineer 1: Implement user auth" with body: "Closes #43\n\n## Understanding\n...\n## Acceptance Criteria\n...\n## Planned Approach\n..."
+4. Creates branch `agent/software-engineer-1/issue-43-implement-user-auth`
+5. Creates PR "Software Engineer 1: Implement user auth" with body: "Closes #43\n\n## Understanding\n...\n## Acceptance Criteria\n...\n## Planned Approach\n..."
 6. AI produces implementation in C# .NET 8 → outputs 5 files using FILE: format
 7. CodeFileParser extracts files → committed to PR branch
-8. Senior does self-review AI turn → may produce improved version → committed
+8. Software Engineer does self-review AI turn → may produce improved version → committed
 9. PR marked ready-for-review → `ReviewRequestMessage` broadcast
 10. Waits for review (keeps CurrentPrNumber set so rework messages can reach it)
 
@@ -588,7 +588,7 @@ Each phase has gate conditions that must be met before advancing:
 - **REQ-TEST-010f**: The `AppStartCommand` from config (e.g., `dotnet run --project ... --urls http://localhost:5100`) has its port rewritten via `RewritePort()` to match the derived unique port.
 
 **Scenario: UI Test Port Isolation**
-1. TE starts UI tests for PR #35 in workspace `/agents/senior-engineer-1/ws`
+1. TE starts UI tests for PR #35 in workspace `/agents/software-engineer-1/ws`
 2. `DeriveUniquePort` hashes workspace path → port 5490
 3. `PatchHardcodedPortBindings` scans `Program.cs` → finds `app.Urls.Add("http://localhost:5050")` → comments it out
 4. Deletes `bin/` and `obj/` → forces full recompilation
@@ -636,13 +636,13 @@ Each phase has gate conditions that must be met before advancing:
 |-------------|------|-----|---------|
 | `TaskAssignmentMessage` | PM | Researcher/Agents | Initial task assignment (legacy, used for research kickoff) |
 | `StatusUpdateMessage` | Any | Broadcast (*) | Status changes, phase signals (ResearchComplete, PMSpecReady, etc.) |
-| `PlanningCompleteMessage` | PM | PE (broadcast) | All User Story Issues created, PE can start planning |
-| `IssueAssignmentMessage` | PE | Specific Engineer (by Id) | Assign a GitHub Issue to an engineer |
+| `PlanningCompleteMessage` | PM | SE (broadcast) | All User Story Issues created, SE can start planning |
+| `IssueAssignmentMessage` | SE | Specific Engineer (by Id) | Assign a GitHub Issue to an engineer |
 | `ClarificationRequestMessage` | Engineer | PM (broadcast) | Engineer has questions about an Issue |
 | `ClarificationResponseMessage` | PM | Specific Engineer (by Id) | PM answers engineer's question |
 | `ReviewRequestMessage` | Engineer | Broadcast (*) | PR ready for review |
-| `ChangesRequestedMessage` | PM/PE | Broadcast (*) | Reviewer requests changes on PR |
-| `ResourceRequestMessage` | PE | PM (broadcast) | Request additional engineer |
+| `ChangesRequestedMessage` | PM/SE | Broadcast (*) | Reviewer requests changes on PR |
+| `ResourceRequestMessage` | SE | PM (broadcast) | Request additional engineer |
 | `HelpRequestMessage` | Any | PM | Request help/escalation |
 
 ### REQ-MSG-002: Routing Rules
@@ -678,7 +678,7 @@ Each phase has gate conditions that must be met before advancing:
 - **REQ-GH-002d**: Executive escalation Issues are labeled `executive-request`.
 - **REQ-GH-002e**: Blocker Issues are labeled `blocker` + `agent-stuck`.
 - **REQ-GH-002f**: Resource request Issues are labeled `resource-request` + `executive-request`.
-- **REQ-GH-002g**: Engineering Task Issues (created by PE) are labeled `engineering-task`. They also carry complexity labels (`complexity:high`, `complexity:medium`, `complexity:low`) and status labels (`in-progress`) as appropriate.
+- **REQ-GH-002g**: Engineering Task Issues (created by SE) are labeled `engineering-task`. They also carry complexity labels (`complexity:high`, `complexity:medium`, `complexity:low`) and status labels (`in-progress`) as appropriate.
 
 ### REQ-GH-003: Document PRs
 
@@ -704,7 +704,7 @@ Code PRs go through a **sequential three-phase** review pipeline. Each phase has
 - **REQ-REV-001a**: **Phase 1 — Architect Review:** Architect is the first reviewer for all engineer-authored PRs. On approval, Architect adds the `architect-approved` label to the PR. Architect does NOT trigger merge. On changes requested, Architect sends `ChangesRequestedMessage` for the author to rework (max `MaxArchitectReworkCycles` retries, default 3).
 - **REQ-REV-001b**: **Phase 2 — Test Engineer:** TE scans for open PRs with the `architect-approved` label (not `approved`). TE adds tests to the **same PR branch** as the author engineer (not a separate test PR). After tests pass and visual evidence (screenshots/videos) is posted, TE adds the `tests-added` label.
 - **REQ-REV-001c**: **Phase 3 — PM Final Review:** PM only reviews PRs that have the `tests-added` label. PM proactively scans each cycle for PRs with `tests-added` but without `pm-approved`. PM validates: business alignment with PMSpec, acceptance criteria, AND visual evidence from TE screenshots/videos. On approval, PM posts `[ProgramManager] APPROVED` comment and adds `pm-approved` label. On changes requested, PM sends `ChangesRequestedMessage` (max `MaxPmReworkCycles` retries, default 3).
-- **REQ-REV-001d**: **Merge Gate:** PE's `MergeTestedPRsAsync` merges PRs ONLY when both `pm-approved` AND `tests-added` labels are present. All merges use squash-and-merge (`PullRequestMergeMethod.Squash`). Head branch is deleted after merge.
+- **REQ-REV-001d**: **Merge Gate:** SE's `MergeTestedPRsAsync` merges PRs ONLY when both `pm-approved` AND `tests-added` labels are present. All merges use squash-and-merge (`PullRequestMergeMethod.Squash`). Head branch is deleted after merge.
 - **REQ-REV-001e**: The three review labels (`architect-approved`, `tests-added`, `pm-approved`) are defined as constants in `PullRequestWorkflow.Labels`.
 
 ### REQ-REV-002: Review Scope
@@ -721,7 +721,7 @@ Code PRs go through a **sequential three-phase** review pipeline. Each phase has
 - **REQ-REV-002.5c**: Each reviewer reads the context documents appropriate to their expertise:
   - **Architect** (Phase 1): Architecture.md + PMSpec.md + linked issue + code files
   - **PM** (Phase 3): PMSpec.md + linked issue + code files + TE visual evidence (screenshots/videos from PR comments)
-  - **PE** (code review): Architecture.md + PMSpec.md + linked issue + code files
+  - **SE** (code review): Architecture.md + PMSpec.md + linked issue + code files
 - **REQ-REV-002.5d**: The AI review prompt MUST explicitly instruct the model to evaluate the actual code, not just the PR description.
 - **REQ-REV-002.5e**: Code files are read from the PR's head branch and truncated per-file at 8,000 characters to stay within token budgets. Non-code files (images, binary) are excluded.
 - **REQ-REV-002.5f**: `PullRequestWorkflow.GetPRCodeContextAsync(prNumber, headBranch)` is the shared helper for building code context. It reads changed files, filters to code extensions, and formats them for AI prompts.
@@ -742,21 +742,21 @@ Code PRs go through a **sequential three-phase** review pipeline. Each phase has
 - **REQ-REV-004d**: Architect MUST call `NeedsReviewFromAsync` before reviewing to prevent duplicate reviews across restarts. The in-memory `_reviewedPrNumbers` is lost on restart; `NeedsReviewFromAsync` checks GitHub comments as source of truth.
 - **REQ-REV-004e**: Architect skips PRs that already have the `architect-approved` label (prevents re-reviewing already-approved PRs).
 
-### REQ-REV-005: PE-Authored PR Reviewer Substitution
+### REQ-REV-005: SE-Authored PR Reviewer Substitution
 
-- **REQ-REV-005a**: When the PE authors a PR, it cannot review its own work. The required reviewers are dynamically substituted: PM + Architect (instead of the default PM + PE).
-- **REQ-REV-005b**: `GetRequiredReviewers(prAuthorRole)` returns `["ProgramManager", "Architect"]` when the author is PrincipalEngineer.
-- **REQ-REV-005c**: The Architect agent subscribes to `ReviewRequestMessage` and reviews PRs alongside the PM when the PE is the author.
+- **REQ-REV-005a**: When the SE authors a PR, it cannot review its own work. The required reviewers are dynamically substituted: PM + Architect (instead of the default PM + SE).
+- **REQ-REV-005b**: `GetRequiredReviewers(prAuthorRole)` returns `["ProgramManager", "Architect"]` when the author is SoftwareEngineer.
+- **REQ-REV-005c**: The Architect agent subscribes to `ReviewRequestMessage` and reviews PRs alongside the PM when the SE is the author.
 
 ### REQ-REV-006: PM Visual Validation
 
 - **REQ-REV-006a**: During Phase 3 review, PM gathers TE visual evidence (screenshots and videos) from PR comments by scanning for image URLs and video links.
 - **REQ-REV-006b**: PM's AI prompt includes this visual evidence alongside the PMSpec, linked issue, and code files to validate whether the PR meets design and business outcome expectations.
-- **REQ-REV-006c**: After approval, PM sends a `StatusUpdateMessage` to notify the PE that the PR is ready for merge.
+- **REQ-REV-006c**: After approval, PM sends a `StatusUpdateMessage` to notify the SE that the PR is ready for merge.
 
 ### REQ-REV-007: Vision-Based Screenshot Review
 
-- **REQ-REV-007a**: All reviewers (PM, Architect, PE) that evaluate screenshots MUST download actual image bytes from PR comment URLs and include them as `ImageContent` items in the AI prompt — not just pass URLs as text.
+- **REQ-REV-007a**: All reviewers (PM, Architect, SE) that evaluate screenshots MUST download actual image bytes from PR comment URLs and include them as `ImageContent` items in the AI prompt — not just pass URLs as text.
 - **REQ-REV-007b**: `PullRequestWorkflow.GetPRScreenshotImagesAsync` downloads images with: max 5 images per PR, max 2MB per image, 15-second timeout per download.
 - **REQ-REV-007c**: Images are embedded as base64 data URIs in the CopilotCli prompt via `AppendMessageContent` helper.
 - **REQ-REV-007d**: If image download fails, reviewers fall back to URL-only text context (`GetPRScreenshotContextAsync`) — degraded but not broken.
@@ -773,8 +773,8 @@ Code PRs go through a **sequential three-phase** review pipeline. Each phase has
 1. Engineer marks PR #35 ready-for-review → broadcasts `ReviewRequestMessage`
 2. **Phase 1**: Architect receives → reads actual code files + Architecture.md + PMSpec.md + linked issue → AI evaluates architecture alignment → APPROVED → posts comment, adds `architect-approved` label
 3. **Phase 2**: TE scans open PRs → finds PR #35 with `architect-approved` → adds tests to the same PR branch → runs unit/integration/UI tests → posts screenshots/videos as PR comments → adds `tests-added` label
-4. **Phase 3**: PM scans PRs → finds PR #35 with `tests-added` but no `pm-approved` → reads code + linked issue + PMSpec + TE screenshots/videos → AI validates business alignment + visual evidence → APPROVED → posts comment, adds `pm-approved` label → notifies PE
-5. PE's `MergeTestedPRsAsync` → sees `pm-approved` + `tests-added` → squash merge → delete branch → Issue auto-closes
+4. **Phase 3**: PM scans PRs → finds PR #35 with `tests-added` but no `pm-approved` → reads code + linked issue + PMSpec + TE screenshots/videos → AI validates business alignment + visual evidence → APPROVED → posts comment, adds `pm-approved` label → notifies SE
+5. SE's `MergeTestedPRsAsync` → sees `pm-approved` + `tests-added` → squash merge → delete branch → Issue auto-closes
 
 **Scenario: Architect Requests Changes (Phase 1 Rework)**
 1. Engineer marks PR #35 ready-for-review
@@ -829,7 +829,7 @@ Each phase of the sequential pipeline has its **own independent retry limit**:
 2. **Phase 1 rework**: Architect reviews → CHANGES REQUESTED ("missing interface from Architecture §4.2") → Engineer reworks → Architect re-reviews → APPROVED → adds `architect-approved`
 3. **Phase 2**: TE picks up PR #35 → adds tests → tests pass → posts screenshots → adds `tests-added`
 4. **Phase 3 rework**: PM reviews → CHANGES REQUESTED ("acceptance criteria #3 not met per screenshot") → Engineer reworks → TE re-runs tests → PM re-reviews → APPROVED → adds `pm-approved`
-5. PE merges PR #35 (both `pm-approved` + `tests-added` present)
+5. SE merges PR #35 (both `pm-approved` + `tests-added` present)
 
 ---
 
@@ -854,15 +854,15 @@ Each phase of the sequential pipeline has its **own independent retry limit**:
 - **REQ-CLAR-002d**: When Executive responds, PM relays the clarification back to the engineer's Issue and sends `ClarificationResponseMessage`.
 
 **Scenario: Clarification with Executive Escalation**
-1. Junior Engineer reads Issue #44 → AI produces questions: "Should the report export support PDF, Excel, or both?"
-2. Junior posts comment on Issue #44: "**Junior Engineer 1** has questions: Should the report export support PDF, Excel, or both?"
-3. Junior sends `ClarificationRequestMessage { IssueNumber=44, Question="..." }` → status = Blocked
+1. Software Engineer reads Issue #44 → AI produces questions: "Should the report export support PDF, Excel, or both?"
+2. Software Engineer posts comment on Issue #44: "**Software Engineer 1** has questions: Should the report export support PDF, Excel, or both?"
+3. Software Engineer sends `ClarificationRequestMessage { IssueNumber=44, Question="..." }` → status = Blocked
 4. PM dequeues request → AI analyzes but responds with "UNSURE — the PMSpec mentions 'export functionality' but doesn't specify format"
 5. PM creates Issue "Executive Request: Clarification needed for Issue #44 — Report Export Format" with label `executive-request`, body references Issue #44
 6. PM monitors Issue → Executive (@azurenerd) comments: "Both PDF and Excel. PDF for printing, Excel for data analysis."
 7. PM reads response → posts on Issue #44: "**Program Manager** clarification: The Executive has confirmed both PDF and Excel export are required..."
-8. PM sends `ClarificationResponseMessage { IssueNumber=44, Response="..." }` to Junior's agent Id
-9. Junior receives response → AI re-evaluates → NO_QUESTIONS → proceeds with implementation
+8. PM sends `ClarificationResponseMessage { IssueNumber=44, Response="..." }` to Software Engineer's agent Id
+9. Software Engineer receives response → AI re-evaluates → NO_QUESTIONS → proceeds with implementation
 
 ---
 
@@ -906,15 +906,15 @@ Each phase of the sequential pipeline has its **own independent retry limit**:
 
 ### REQ-CFG-005: Engineer Pool Configuration
 
-- **REQ-CFG-005a**: `EngineerPoolConfig` section defines initial pool composition: `SeniorEngineerCount` (default: 2), `JuniorEngineerCount` (default: 1), `PrincipalEngineerCount` (default: 1).
-- **REQ-CFG-005b**: Multi-PE mode: when `PrincipalEngineerCount > 1`, the first PE is the leader (creates engineering plan), additional PEs are workers (skip to Phase 2).
+- **REQ-CFG-005a**: `EngineerPoolConfig` section defines initial pool composition: `SoftwareEngineerCount` (default: 2), `SoftwareEngineerCount` (default: 1), `SoftwareEngineerCount` (default: 1).
+- **REQ-CFG-005b**: Multi-SE mode: when `SoftwareEngineerCount > 1`, the first SE is the leader (creates engineering plan), additional PEs are workers (skip to Phase 2).
 - **REQ-CFG-005c**: Leader/worker role assignment is based on spawn order. Non-leader PEs sync task state from existing GitHub engineering-task issues.
 
 ### REQ-CFG-006: AI Conversation Mode Configuration
 
 - **REQ-CFG-006a**: `FastMode` (default: false) — when true, collapses multi-turn AI conversations to a single prompt. Reduces latency and cost at the expense of nuance.
 - **REQ-CFG-006b**: `SinglePassMode` (default: false) — independent of `FastMode`. When true, flattens multi-turn conversation sequences (e.g., Researcher 3-turn, Architect 5-turn) into a single prompt per agent. Can be combined with any model tier.
-- **REQ-CFG-006c**: Agents that support multi-turn conversations: Researcher (3 turns), Architect (5 turns), PM, Principal Engineer (2 turns). Each checks `SinglePassMode` to decide whether to collapse turns.
+- **REQ-CFG-006c**: Agents that support multi-turn conversations: Researcher (3 turns), Architect (5 turns), PM, Software Engineer (2 turns). Each checks `SinglePassMode` to decide whether to collapse turns.
 - **REQ-CFG-006d**: `SinglePassMode` decouples from `FastMode` so users can use premium models (high quality) with single-pass execution (lower cost/latency) — two independent axes.
 
 ### REQ-CFG-007: Per-Agent Role Customization
@@ -937,7 +937,7 @@ Each phase of the sequential pipeline has its **own independent retry limit**:
 
 - **REQ-CFG-009a**: SME system configuration lives under `AgentSquad:SmeAgents` section, bound to `SmeAgentsConfig`. Key properties: `Enabled` (default true), `MaxTotalSmeAgents` (default 5), `AllowAgentCreatedDefinitions` (default true), `PersistDefinitions` (default true), `DefinitionsPath` (default `sme-definitions.json`).
 - **REQ-CFG-009b**: SME templates are configured under `SmeAgentsConfig.Templates` as a list of `SMEAgentDefinition` records. Templates provide pre-built specialist roles that can be instantly spawned without AI generation.
-- **REQ-CFG-009c**: Custom SME definitions (created at runtime by PM or PE) are persisted to `sme-definitions.json` when `PersistDefinitions` is true. `SMEAgentDefinitionService` provides CRUD operations with JSON file persistence.
+- **REQ-CFG-009c**: Custom SME definitions (created at runtime by PM or SE) are persisted to `sme-definitions.json` when `PersistDefinitions` is true. `SMEAgentDefinitionService` provides CRUD operations with JSON file persistence.
 - **REQ-CFG-009d**: `SMEAgentDefinitionService` supports template lookup by name and capability-based search across both templates and custom definitions.
 
 ---
@@ -963,12 +963,12 @@ Each phase of the sequential pipeline has its **own independent retry limit**:
 ### REQ-IDEM-004: Restart Recovery
 
 - **REQ-IDEM-004a**: PM restores previously-spawned engineers from TeamMembers.md on startup.
-- **REQ-IDEM-004b**: PE restores task backlog from existing engineering-task GitHub Issues (`GetIssuesByLabelAsync("engineering-task")`) and skips to development loop. There is no EngineeringPlan.md to parse.
+- **REQ-IDEM-004b**: SE restores task backlog from existing engineering-task GitHub Issues (`GetIssuesByLabelAsync("engineering-task")`) and skips to development loop. There is no EngineeringPlan.md to parse.
 - **REQ-IDEM-004c**: Engineers recover open PRs: `in-progress` PRs get re-implemented; `ready-for-review` PRs are tracked for rework but not re-implemented.
-- **REQ-IDEM-004d**: When PE restarts, `_agentAssignments` is empty — PE must re-check which engineers are free and re-assign unfinished tasks.
-- **REQ-IDEM-004e**: PE recovery for own PRs MUST check GitHub comments for unaddressed feedback (CHANGES_REQUESTED) using `GetPendingChangesRequestedAsync`, not just labels. If feedback exists, populate the ReworkQueue directly. If all reviewers approved, auto-merge. Only re-broadcast ReviewRequestMessage if no reviews exist at all.
+- **REQ-IDEM-004d**: When SE restarts, `_agentAssignments` is empty — SE must re-check which engineers are free and re-assign unfinished tasks.
+- **REQ-IDEM-004e**: SE recovery for own PRs MUST check GitHub comments for unaddressed feedback (CHANGES_REQUESTED) using `GetPendingChangesRequestedAsync`, not just labels. If feedback exists, populate the ReworkQueue directly. If all reviewers approved, auto-merge. Only re-broadcast ReviewRequestMessage if no reviews exist at all.
 - **REQ-IDEM-004f**: The in-process message bus (`InProcessMessageBus`) is volatile — ALL messages are lost on restart. Recovery logic MUST use GitHub API (comments, labels, PR state) as the source of truth, never depend on bus message replay.
-- **REQ-IDEM-004g**: PE reconciles task statuses against merged PRs on startup. Tasks whose PRs are already merged are marked Done (issue closed) using `GetMergedPullRequestsAsync`.
+- **REQ-IDEM-004g**: SE reconciles task statuses against merged PRs on startup. Tasks whose PRs are already merged are marked Done (issue closed) using `GetMergedPullRequestsAsync`.
 - **REQ-IDEM-004h**: Test Engineer recovery: scans for open PRs with `architect-approved` label, checks GitHub comments for unaddressed feedback, re-requests review for PRs with no reviews. Uses `tested` label on source PRs as persistent dedup marker.
 - **REQ-IDEM-004i**: CLI session IDs (`_prSessionIds`) MUST be persisted to the SQLite database (`cli_sessions` table) so that after a runner restart, agents resume the same Copilot CLI session for each PR. This preserves the AI's full conversation history (implementation context, prior rework feedback) across restarts, enabling higher-quality rework responses. Both `EngineerAgentBase` and `TestEngineerAgent` restore their session mappings from the database during `OnInitializeAsync`.
 
@@ -982,12 +982,12 @@ Each phase of the sequential pipeline has its **own independent retry limit**:
 - **REQ-IDEM-005f**: After a fresh reset, the runner starts from the Initialization phase with no prior state — identical to a first-ever run.
 
 **Scenario: System Restart Recovery**
-1. System crashes while Senior Engineer 1 has PR #35 (ready-for-review) and Junior Engineer 1 has PR #36 (in-progress)
-2. On restart: PM reads TeamMembers.md → restores Senior Engineer 1 and Junior Engineer 1
-3. PE loads engineering-task issues from GitHub → restores task backlog → enters development loop
-4. Senior Engineer 1 starts → restores CLI session mapping from DB → CurrentPrNumber is null → finds PR #35 with "ready-for-review" → re-tracks it (CurrentPrNumber = 35) but does NOT re-implement → rework uses restored CLI session so AI has full prior context
-5. Junior Engineer 1 starts → restores CLI session mapping from DB → CurrentPrNumber is null → finds PR #36 with "in-progress" → calls `WorkOnExistingPrAsync` → re-implements using restored CLI session
-6. PE loop: finds Senior Engineer 1 not in `_agentAssignments` → checks if their Issue is still open → Issue #43 is open → re-assigns to them
+1. System crashes while Software Engineer 1 has PR #35 (ready-for-review) and Software Engineer 1 has PR #36 (in-progress)
+2. On restart: PM reads TeamMembers.md → restores Software Engineer 1 and Software Engineer 1
+3. SE loads engineering-task issues from GitHub → restores task backlog → enters development loop
+4. Software Engineer 1 starts → restores CLI session mapping from DB → CurrentPrNumber is null → finds PR #35 with "ready-for-review" → re-tracks it (CurrentPrNumber = 35) but does NOT re-implement → rework uses restored CLI session so AI has full prior context
+5. Software Engineer 1 starts → restores CLI session mapping from DB → CurrentPrNumber is null → finds PR #36 with "in-progress" → calls `WorkOnExistingPrAsync` → re-implements using restored CLI session
+6. SE loop: finds Software Engineer 1 not in `_agentAssignments` → checks if their Issue is still open → Issue #43 is open → re-assigns to them
 
 ---
 
@@ -1043,7 +1043,7 @@ Each phase of the sequential pipeline has its **own independent retry limit**:
 2. Filters by label "engineering-task" → sees only engineering work items
 3. Sorts by "Most commented" → sees the most-discussed issues first
 4. Clicks "Closed" tab → sees completed work with closed dates
-5. Filters by assignee "senior-engineer-1" → sees only that agent's assigned issues
+5. Filters by assignee "software-engineer-1" → sees only that agent's assigned issues
 
 ### REQ-DASH-008: Dashboard Process Separation (Standalone Mode)
 
@@ -1056,7 +1056,7 @@ Each phase of the sequential pipeline has its **own independent retry limit**:
 
 **Scenario: Dashboard Separation — UI Iteration Without Agent Disruption**
 ```
-1. Runner starts on port 5050 with 7 agents actively working (PE implementing T3, Senior on T4)
+1. Runner starts on port 5050 with 7 agents actively working (SE implementing T3, Software Engineer on T4)
 2. Developer needs to tweak the Timeline page layout
 3. Developer stops Dashboard.Host (port 5051) → edits Razor page → rebuilds Dashboard.Host → restarts
 4. Runner and all agents continue uninterrupted — no state loss, no agent restarts
@@ -1093,13 +1093,13 @@ Each phase of the sequential pipeline has its **own independent retry limit**:
 - **REQ-DASH-011b**: The Dashboard Configuration page includes an "SME Templates" section showing configured SME agent templates. Each template card displays: role name, system prompt preview, model tier, workflow mode, and associated capabilities.
 - **REQ-DASH-011c**: Toggle controls are provided for: SME system enable/disable (`SmeAgents.Enabled`), agent-created definitions (`AllowAgentCreatedDefinitions`), and definition persistence (`PersistDefinitions`).
 - **REQ-DASH-011d**: The Dashboard Configuration page has a "Custom Agents" section with add/remove functionality, name input field, and full per-agent accordion configuration (role description textarea, MCP server multi-select, knowledge link list with add/remove).
-- **REQ-DASH-011e**: Per-agent role customization is displayed in an accordion layout. Each core agent role (PM, Researcher, Architect, PE, SE, JE, TE) has a collapsible section with: RoleDescription textarea, MCP server assignment list, and KnowledgeLinks URL list with add/remove controls.
+- **REQ-DASH-011e**: Per-agent role customization is displayed in an accordion layout. Each core agent role (PM, Researcher, Architect, SE, TE) has a collapsible section with: RoleDescription textarea, MCP server assignment list, and KnowledgeLinks URL list with add/remove controls.
 
 **Scenario: Dashboard SME Configuration**
 1. User navigates to Configuration page → scrolls to "MCP Servers" section
 2. Sees 3 MCP server cards: "github-search" (Stdio, capabilities: code-search, repo-browse), "jira-sync" (Http, capabilities: issue-tracking), "docs-reader" (Sse, capabilities: documentation)
 3. Scrolls to "SME Templates" → sees 2 templates: "DatabaseExpert" (standard tier, OnDemand) and "SecurityAuditor" (premium tier, Continuous)
-4. Toggles "Allow agent-created definitions" OFF → PE can no longer generate new SME definitions at runtime
+4. Toggles "Allow agent-created definitions" OFF → SE can no longer generate new SME definitions at runtime
 5. Scrolls to "Custom Agents" → clicks "Add Custom Agent" → enters "APIDesigner" → configures role description and assigns "docs-reader" MCP server
 
 ---
@@ -1173,95 +1173,95 @@ Each phase of the sequential pipeline has its **own independent retry limit**:
 3. PM receives ResearchComplete → creates PMSpec.md (2 turns) → document PR → auto-merge → broadcasts PMSpecReady
 4. PM extracts 6 User Stories → creates 6 Enhancement Issues → sends PlanningCompleteMessage
 5. Architect receives PMSpecReady → creates Architecture.md (5 turns) → document PR → auto-merge
-6. PE receives PlanningComplete + Architecture.md → reads 6 Enhancement Issues → creates 14 engineering-task Issues in GitHub
-7. PE starts T1 (High) itself (no engineers spawned yet), assigns T2 (Medium) to Senior Engineer when available
-8. Senior reads Issue → creates PR → implements → marks ready-for-review → ReviewRequestMessage broadcast
+6. SE receives PlanningComplete + Architecture.md → reads 6 Enhancement Issues → creates 14 engineering-task Issues in GitHub
+7. SE starts T1 (High) itself (no engineers spawned yet), assigns T2 (Medium) to Software Engineer when available
+8. Software Engineer reads Issue → creates PR → implements → marks ready-for-review → ReviewRequestMessage broadcast
 9. Phase 1: Architect receives ReviewRequest → reads code + Architecture + PMSpec + linked issue → APPROVED → adds `architect-approved` label
-10. Phase 2: TE scans for architect-approved PRs → finds Senior's PR → adds tests to same branch → runs tests → posts screenshots → adds `tests-added` label
-11. Phase 3: PM scans for tests-added PRs → finds Senior's PR → reads code + PMSpec + linked issue + TE screenshots → APPROVED → adds `pm-approved` label → notifies PE
-12. PE's MergeTestedPRsAsync → sees `pm-approved` + `tests-added` → squash merge → branch deleted → Issue auto-closed
-13. PE's PR: PM + Architect review (PE can't self-review) → Architect Phase 1 → TE Phase 2 → PM Phase 3 → merge
-14. T1 complete (issue closed) → T4 depends on T1 → dependency met → PE assigns T4 to Junior
-15. All engineering-task issues closed → PE creates integration PR → PM + Architect review → merge → Finalization phase
+10. Phase 2: TE scans for architect-approved PRs → finds Software Engineer's PR → adds tests to same branch → runs tests → posts screenshots → adds `tests-added` label
+11. Phase 3: PM scans for tests-added PRs → finds Software Engineer's PR → reads code + PMSpec + linked issue + TE screenshots → APPROVED → adds `pm-approved` label → notifies SE
+12. SE's MergeTestedPRsAsync → sees `pm-approved` + `tests-added` → squash merge → branch deleted → Issue auto-closed
+13. SE's PR: PM + Architect review (SE can't self-review) → Architect Phase 1 → TE Phase 2 → PM Phase 3 → merge
+14. T1 complete (issue closed) → T4 depends on T1 → dependency met → SE assigns T4 to Software Engineer
+15. All engineering-task issues closed → SE creates integration PR → PM + Architect review → merge → Finalization phase
 ```
 
 ### Scenario B: Clarification Loop with Multiple Rounds
 
 ```
-1. PE assigns Issue #44 "Export reports" to Junior Engineer
-2. Junior reads Issue → AI has 2 questions → posts on Issue → sends ClarificationRequest
-3. Junior status = Blocked → polls ClarificationResponses
+1. SE assigns Issue #44 "Export reports" to Software Engineer
+2. Software Engineer reads Issue → AI has 2 questions → posts on Issue → sends ClarificationRequest
+3. Software Engineer status = Blocked → polls ClarificationResponses
 4. PM dequeues → AI answers question 1 clearly, unsure about question 2
 5. PM posts answer for Q1 on Issue → creates Executive Request for Q2
-6. PM sends partial ClarificationResponse → Junior receives → AI still has Q2 → round 2
+6. PM sends partial ClarificationResponse → Software Engineer receives → AI still has Q2 → round 2
 7. Executive responds on executive-request Issue → PM relays to Issue #44
-8. PM sends ClarificationResponse for Q2 → Junior receives → NO_QUESTIONS → proceeds
-9. Junior creates PR → implements → review cycle
+8. PM sends ClarificationResponse for Q2 → Software Engineer receives → NO_QUESTIONS → proceeds
+9. Software Engineer creates PR → implements → review cycle
 ```
 
 ### Scenario C: Multi-Phase Rework Feedback Loop
 
 ```
-1. Senior creates PR #35 → implements → marks ready-for-review
-2. Phase 1: Architect reviews → CHANGES REQUESTED ("missing shared interface") → Senior reworks → re-submits
+1. Software Engineer creates PR #35 → implements → marks ready-for-review
+2. Phase 1: Architect reviews → CHANGES REQUESTED ("missing shared interface") → Software Engineer reworks → re-submits
 3. Architect re-reviews → APPROVED → adds `architect-approved` label
 4. Phase 2: TE picks up PR #35 → adds tests + screenshots → adds `tests-added` label
 5. Phase 3: PM reviews (code + screenshots + PMSpec) → CHANGES REQUESTED ("acceptance criteria #2 not met per screenshot")
-6. Senior reworks → commits fixes → TE re-runs tests → updates screenshots → PM re-reviews
-7. PM re-reviews → APPROVED → adds `pm-approved` label → notifies PE
-8. PE merges → squash merge → branch deleted → Issue auto-closed
+6. Software Engineer reworks → commits fixes → TE re-runs tests → updates screenshots → PM re-reviews
+7. PM re-reviews → APPROVED → adds `pm-approved` label → notifies SE
+8. SE merges → squash merge → branch deleted → Issue auto-closed
 ```
 
 ### Scenario D: System Restart Mid-Work
 
 ```
-1. State before crash: PE has 5 engineering-task issues, T1 assigned to Junior (PR #36 in-progress),
-   T2 assigned to Senior (PR #35 ready-for-review, PM CHANGES_REQUESTED), T3 PE working (PR #37 in-progress)
-2. System restarts → PM reads TeamMembers.md → spawns Junior + Senior
-3. PE loads engineering-task issues from GitHub → restores 5 tasks → reconciles against merged PRs → enters dev loop
-4. Junior starts → finds PR #36 (in-progress, no ready-for-review label) → calls WorkOnExistingPrAsync → re-implements
-5. Senior starts → finds PR #35 (ready-for-review) → re-tracks it (CurrentPrNumber=35) → waits for rework/new assignment
-6. PE starts → recovers own PRs: finds PR #37 (in-progress) → continues work on it
-7. PE recovers ready-for-review PRs: checks PR #35 GitHub comments → finds PM CHANGES_REQUESTED →
-   populates ReworkQueue (does NOT re-broadcast ReviewRequest) → Senior picks up rework
-8. PE loop: _agentAssignments empty → re-checks which engineers are free → re-assigns unfinished tasks
+1. State before crash: SE has 5 engineering-task issues, T1 assigned to Software Engineer (PR #36 in-progress),
+   T2 assigned to Software Engineer (PR #35 ready-for-review, PM CHANGES_REQUESTED), T3 SE working (PR #37 in-progress)
+2. System restarts → PM reads TeamMembers.md → spawns Software Engineer + Software Engineer
+3. SE loads engineering-task issues from GitHub → restores 5 tasks → reconciles against merged PRs → enters dev loop
+4. Software Engineer starts → finds PR #36 (in-progress, no ready-for-review label) → calls WorkOnExistingPrAsync → re-implements
+5. Software Engineer starts → finds PR #35 (ready-for-review) → re-tracks it (CurrentPrNumber=35) → waits for rework/new assignment
+6. SE starts → recovers own PRs: finds PR #37 (in-progress) → continues work on it
+7. SE recovers ready-for-review PRs: checks PR #35 GitHub comments → finds PM CHANGES_REQUESTED →
+   populates ReworkQueue (does NOT re-broadcast ReviewRequest) → Software Engineer picks up rework
+8. SE loop: _agentAssignments empty → re-checks which engineers are free → re-assigns unfinished tasks
 9. Test Engineer starts → _testedPRs empty → checks source PRs for "tested" label → repopulates dedup set
-10. Test Engineer finds its own open test PR #38 → checks comments → no reviews → re-requests PE review
+10. Test Engineer finds its own open test PR #38 → checks comments → no reviews → re-requests SE review
 ```
 
-### Scenario D2: Restart After PE's Own PR Gets CHANGES_REQUESTED
+### Scenario D2: Restart After SE's Own PR Gets CHANGES_REQUESTED
 
 ```
-1. State before crash: PE has PR #37 (ready-for-review), PM posted CHANGES_REQUESTED, Architect APPROVED
+1. State before crash: SE has PR #37 (ready-for-review), PM posted CHANGES_REQUESTED, Architect APPROVED
 2. Bus message (ChangesRequestedMessage) is lost — in-memory only, no durability
-3. System restarts → PE's ReworkQueue is empty (lost)
-4. PE recovery: finds PR #37 with ready-for-review label → calls GetPendingChangesRequestedAsync
+3. System restarts → SE's ReworkQueue is empty (lost)
+4. SE recovery: finds PR #37 with ready-for-review label → calls GetPendingChangesRequestedAsync
 5. Reads GitHub comments → finds PM's unaddressed CHANGES_REQUESTED → populates ReworkQueue directly
-6. PE processes rework: reads feedback → AI fixes → commits → re-marks ready-for-review → re-broadcasts ReviewRequestMessage
+6. SE processes rework: reads feedback → AI fixes → commits → re-marks ready-for-review → re-broadcasts ReviewRequestMessage
 7. PM receives ReviewRequest → re-reviews → APPROVE
-8. Both reviewers approved → PE auto-merges own PR
+8. Both reviewers approved → SE auto-merges own PR
 ```
 
 ### Scenario E: Resource Scaling Under Load
 
 ```
-1. PE creates engineering-task issues: 8 tasks (2 High, 3 Medium, 3 Low)
-2. Initial team: PE only (no engineers yet)
-3. PE starts T1 (High) itself — works solo even without engineers
-4. PE evaluates: 5 parallelizable tasks remaining, 0 free engineers → sends ResourceRequest for Junior
-5. PM approves → spawns Junior Engineer 1 → updates TeamMembers.md
-6. PE detects new Junior in registry → assigns T4(Low) to Junior 2
-7. Still 3 parallelizable tasks, 0 free → PE sends ResourceRequest for Senior
-8. PM approves → spawns Senior Engineer 2
-9. PE assigns T5(Medium) to Senior 2
-10. T1 completes → Junior 1 is free → PE assigns T6(Low) to Junior 1
+1. SE creates engineering-task issues: 8 tasks (2 High, 3 Medium, 3 Low)
+2. Initial team: SE only (no engineers yet)
+3. SE starts T1 (High) itself — works solo even without engineers
+4. SE evaluates: 5 parallelizable tasks remaining, 0 free engineers → sends ResourceRequest for Software Engineer
+5. PM approves → spawns Software Engineer 1 → updates TeamMembers.md
+6. SE detects new Software Engineer in registry → assigns T4(Low) to Software Engineer 2
+7. Still 3 parallelizable tasks, 0 free → SE sends ResourceRequest for Software Engineer
+8. PM approves → spawns Software Engineer 2
+9. SE assigns T5(Medium) to Software Engineer 2
+10. T1 completes → Software Engineer 1 is free → SE assigns T6(Low) to Software Engineer 1
 11. All tasks eventually assigned and completed through the review cycle
 ```
 
 ### Scenario F: Test Engineer Phase 2 — Same-PR Testing with Visual Evidence
 
 ```
-1. Architect approves Senior's PR #35 (Issue #43 "Export reports") → adds `architect-approved` label
+1. Architect approves Software Engineer's PR #35 (Issue #43 "Export reports") → adds `architect-approved` label
 2. TE scans open PRs → finds PR #35 with `architect-approved` and 4 testable .ts files → not in _testedPRs, no "tested" label
 3. TE parses "Closes #43" from PR body → fetches Issue #43 (acceptance criteria: "supports PDF and Excel export")
 4. TE reads PMSpec.md (business requirements) and Architecture.md (tech patterns)
@@ -1283,27 +1283,27 @@ Each phase of the sequential pipeline has its **own independent retry limit**:
 5. Engineer reworks code → TE re-tests → TE updates screenshots → PM re-reviews → APPROVED
 ```
 
-### Scenario H: PE-Authored PR Review (Sequential Pipeline with Reviewer Substitution)
+### Scenario H: SE-Authored PR Review (Sequential Pipeline with Reviewer Substitution)
 
 ```
-1. PE implements T3 (High complexity) → creates PR #37 "PrincipalEngineer: Implement content schema"
-2. PE marks PR #37 ready-for-review → broadcasts ReviewRequestMessage
-3. GetRequiredReviewers("PrincipalEngineer") returns ["ProgramManager", "Architect"] (not PE + PM)
+1. SE implements T3 (High complexity) → creates PR #37 "SoftwareEngineer: Implement content schema"
+2. SE marks PR #37 ready-for-review → broadcasts ReviewRequestMessage
+3. GetRequiredReviewers("SoftwareEngineer") returns ["ProgramManager", "Architect"] (not SE + PM)
 4. Phase 1: Architect receives ReviewRequest → reads PR #37 code files, linked issue, Architecture.md + PMSpec → AI reviews → REWORK ("component should use shared interface from Architecture §4.2")
-5. PE receives ChangesRequestedMessage → enqueues rework → AI fixes → commits → re-marks ready
+5. SE receives ChangesRequestedMessage → enqueues rework → AI fixes → commits → re-marks ready
 6. Architect re-reviews → APPROVED → adds `architect-approved` label
 7. Phase 2: TE picks up PR #37 → adds tests → runs locally → posts screenshots → adds `tests-added` label
 8. Phase 3: PM reviews → reads code + PMSpec + screenshots → APPROVED → adds `pm-approved` label
-9. PE's MergeTestedPRsAsync → sees `pm-approved` + `tests-added` → squash merge
+9. SE's MergeTestedPRsAsync → sees `pm-approved` + `tests-added` → squash merge
 ```
 
 ### Scenario I: Network Outage / Hibernate Recovery
 
 ```
-1. PE is in middle of AI call generating code (copilot CLI process in-flight)
+1. SE is in middle of AI call generating code (copilot CLI process in-flight)
 2. User hibernates laptop → network drops → SSL/DNS errors
 3. In-flight copilot CLI process dies → AI call throws HttpRequestException
-4. PE catches exception → logs warning → retries after 5-second backoff → more SSL errors
+4. SE catches exception → logs warning → retries after 5-second backoff → more SSL errors
 5. User resumes laptop → network restored → retries succeed
 6. BUT: any bus messages published during outage were delivered to dead agent threads
 7. HealthMonitor detects agents stuck for >60 minutes → logs warnings
@@ -1313,21 +1313,21 @@ Each phase of the sequential pipeline has its **own independent retry limit**:
 ### Scenario J: Force-Approval After Max Rework Cycles (Per Phase)
 
 ```
-1. Phase 1: Architect reviews Senior's PR #35 → CHANGES REQUESTED (round 1)
-2. Senior reworks → re-submits → Architect reviews → CHANGES REQUESTED (round 2)
-3. Senior reworks → re-submits → Architect reviews → CHANGES REQUESTED (round 3 = MaxArchitectReworkCycles)
+1. Phase 1: Architect reviews Software Engineer's PR #35 → CHANGES REQUESTED (round 1)
+2. Software Engineer reworks → re-submits → Architect reviews → CHANGES REQUESTED (round 2)
+3. Software Engineer reworks → re-submits → Architect reviews → CHANGES REQUESTED (round 3 = MaxArchitectReworkCycles)
 4. Force-approval triggered → Architect adds `architect-approved` label with note
 5. Phase 2: TE adds tests → adds `tests-added` label
 6. Phase 3: PM reviews → CHANGES REQUESTED (round 1)
-7. Senior reworks → TE re-tests → PM re-reviews → CHANGES REQUESTED (round 2)
-8. Senior reworks → TE re-tests → PM re-reviews → CHANGES REQUESTED (round 3 = MaxPmReworkCycles)
-9. Force-approval triggered → PM adds `pm-approved` label with note → PE merges
+7. Software Engineer reworks → TE re-tests → PM re-reviews → CHANGES REQUESTED (round 2)
+8. Software Engineer reworks → TE re-tests → PM re-reviews → CHANGES REQUESTED (round 3 = MaxPmReworkCycles)
+9. Force-approval triggered → PM adds `pm-approved` label with note → SE merges
 ```
 
 ### Scenario K: Incremental Multi-Step Implementation
 
 ```
-1. Senior Engineer reads Issue → AI produces implementation plan with 3 steps:
+1. Software Engineer reads Issue → AI produces implementation plan with 3 steps:
    Step 1: "Create data models and DTOs" → Step 2: "Implement service layer" → Step 3: "Add controller endpoints"
 2. For each step: AI generates code → CodeFileParser extracts files → BatchCommitFilesAsync commits all files
    in a single atomic commit per step (not one commit per file)
@@ -1344,28 +1344,28 @@ Each phase of the sequential pipeline has its **own independent retry limit**:
 3. PM checks PMSpec.md → has content → skips PMSpec creation → still broadcasts PMSpecReady
 4. PM checks Enhancement Issues → exist → skips Issue creation → re-sends PlanningCompleteMessage
 5. Architect checks Architecture.md → has content → skips design → enters review mode
-6. PE checks for existing engineering-task issues → found → restores task backlog → enters development loop
+6. SE checks for existing engineering-task issues → found → restores task backlog → enters development loop
 7. ALL downstream signals are still sent even when skipping creation, so dependent agents proceed
 ```
 
 ### Scenario K: Dashboard Standalone Iteration Cycle
 
 ```
-1. Runner is running on port 5050 with PE implementing T5 (High complexity) and Senior on T6
+1. Runner is running on port 5050 with SE implementing T5 (High complexity) and Software Engineer on T6
 2. Developer notices the Timeline page has a layout bug on the Engineering view
 3. Developer stops only Dashboard.Host (port 5051) → edits Timeline.razor → rebuilds → restarts Dashboard.Host
-4. Runner continues unaffected — PE commits code to PR #48, Senior receives ReviewRequestMessage
+4. Runner continues unaffected — SE commits code to PR #48, Software Engineer receives ReviewRequestMessage
 5. Dashboard.Host reconnects to Runner's REST API at /api/dashboard/* → Timeline page shows updated layout
 6. Total agent downtime: zero. Total state loss: zero.
 ```
 
 ---
 
-## 21. PE Integration & Branch Sync Requirements
+## 21. SE Integration & Branch Sync Requirements
 
-### REQ-INTEG-001: PE Integration PR (Final Glue Phase)
+### REQ-INTEG-001: SE Integration PR (Final Glue Phase)
 
-- **REQ-INTEG-001a**: When the PE detects ALL engineering-task issues are closed (PRs merged), it creates a final integration PR that verifies the combined result works as a whole.
+- **REQ-INTEG-001a**: When the SE detects ALL engineering-task issues are closed (PRs merged), it creates a final integration PR that verifies the combined result works as a whole.
 - **REQ-INTEG-001b**: The integration PR is created from a new branch off latest main.
 - **REQ-INTEG-001c**: AI reviews the full codebase against PMSpec + Architecture + all merged PRs and generates integration fixes: missing wiring, broken imports, config/route registration, cross-module references.
 - **REQ-INTEG-001d**: The integration PR goes through the normal review cycle (PM + Architect review and approve).
@@ -1380,10 +1380,10 @@ Each phase of the sequential pipeline has its **own independent retry limit**:
 
 **Scenario: Integration PR After All Tasks Complete**
 ```
-1. PE has 6 engineering-task issues (T1-T6). All assigned, implemented, reviewed, and merged (issues closed).
-2. PE detects all engineering-task issues are closed → creates integration branch from latest main
+1. SE has 6 engineering-task issues (T1-T6). All assigned, implemented, reviewed, and merged (issues closed).
+2. SE detects all engineering-task issues are closed → creates integration branch from latest main
 3. AI reads full codebase + PMSpec + Architecture → finds: missing route registration for T3's controller, T5 imports a module from T2 using wrong path
-4. AI generates fixes → commits to integration branch → creates PR "PrincipalEngineer: Integration — Final Assembly"
+4. AI generates fixes → commits to integration branch → creates PR "SoftwareEngineer: Integration — Final Assembly"
 5. PM reviews integration PR → APPROVE (all user stories covered)
 6. Architect reviews → APPROVE (no architectural violations)
 7. Squash merge → signal testing.integration.complete → Finalization phase
@@ -1399,7 +1399,7 @@ Each phase of the sequential pipeline has its **own independent retry limit**:
 - **REQ-WS-001b**: On assignment, the agent clones fresh or pulls latest main. For existing workspaces, `git pull origin main` syncs to HEAD before starting work.
 - **REQ-WS-001c**: Agents create feature branches locally, commit code, and push to origin for PR creation.
 - **REQ-WS-001d**: `RootPath` (default: `C:\Agents`) is auto-created at startup if it doesn't exist.
-- **REQ-WS-001e**: After the last Issue is closed and the project is complete, the PE sends notifications to all agents to delete their local repositories, cleaning up disk space.
+- **REQ-WS-001e**: After the last Issue is closed and the project is complete, the SE sends notifications to all agents to delete their local repositories, cleaning up disk space.
 
 ### REQ-WS-002: Build & Test Runner
 
@@ -1420,25 +1420,25 @@ Each phase of the sequential pipeline has its **own independent retry limit**:
 - **REQ-WS-004a**: All generated code projects MUST have proper `.csproj` (or equivalent project file for the configured tech stack) and a `.sln` solution file at the repository root. Code without project files cannot be built or tested.
 - **REQ-WS-004b**: After AI code generation, agents MUST validate that project files exist. If `.cs` files are present but no `.csproj` exists in the same directory, auto-scaffold a minimal `.csproj` with appropriate SDK, target framework, and package references inferred from the code (similar to the TE's `EnsureTestProjectExists()` pattern).
 - **REQ-WS-004c**: If no `.sln` file exists at the repository root, auto-scaffold one referencing all `.csproj` files in the tree.
-- **REQ-WS-004d**: PE's foundation task (T1) SHOULD include project scaffolding as part of its scope. Downstream tasks inherit the project structure from T1 rather than each creating their own.
+- **REQ-WS-004d**: SE's foundation task (T1) SHOULD include project scaffolding as part of its scope. Downstream tasks inherit the project structure from T1 rather than each creating their own.
 
 ### REQ-WS-005: Port Isolation for App Under Test
 
-- **REQ-WS-005a**: Each agent MUST use a unique port when starting the application under test. Multiple agents (PE screenshots, TE UI tests) may run simultaneously, and shared ports cause silent bind failures.
+- **REQ-WS-005a**: Each agent MUST use a unique port when starting the application under test. Multiple agents (SE screenshots, TE UI tests) may run simultaneously, and shared ports cause silent bind failures.
 - **REQ-WS-005b**: Port derivation uses a deterministic hash of the workspace path, mapped to a safe range (5100–5899). This ensures the same agent always gets the same port across restarts.
 - **REQ-WS-005c**: Port rewriting applies to: the `--urls` argument in the app start command, the `ASPNETCORE_URLS` environment variable, and the `BASE_URL` env var passed to test processes.
 - **REQ-WS-005d**: The original `config.AppStartCommand` is temporarily overridden during test/screenshot execution and restored in the `finally` block to avoid side effects.
 - **REQ-WS-005e**: If the app reports a different listening URL via stdout ("Now listening on: ..."), the detected URL takes precedence over the derived port (handles cases where the app ignores `--urls`).
 
 **Scenario: Agent Workspace Lifecycle**
-1. PE assigns Issue #45 to Senior Engineer 1
-2. Senior Engineer 1 clones repo to `C:\Agents\senior-engineer-1\` (or pulls latest if exists)
-3. Creates branch `agent/senior-engineer-1/issue-45-implement-auth`
+1. SE assigns Issue #45 to Software Engineer 1
+2. Software Engineer 1 clones repo to `C:\Agents\software-engineer-1\` (or pulls latest if exists)
+3. Creates branch `agent/software-engineer-1/issue-45-implement-auth`
 4. AI generates code → files written to local workspace
 5. `dotnet restore` → `dotnet build` → success → `dotnet test` → 3 failures
 6. Build/test output fed back to AI → AI fixes the 3 test failures → re-test → all pass
 7. Commits and pushes → creates PR
-8. After project completion, PE sends cleanup notification → workspace deleted
+8. After project completion, SE sends cleanup notification → workspace deleted
 
 ---
 
@@ -1518,7 +1518,7 @@ Each phase of the sequential pipeline has its **own independent retry limit**:
 1. 7 agents poll every 30s. Each agent calls GetOpenIssuesAsync + GetOpenPullRequestsAsync = 14 API calls/cycle.
 2. Without cache: 14 API calls × 2 cycles/minute = 28 calls/minute for list endpoints alone.
 3. With 30s TTL cache: first agent's call hits GitHub API, next 6 agents get cached response = 2 API calls/cycle.
-4. Senior Engineer merges PR → InvalidateListCaches() called → next read hits GitHub API → fresh data.
+4. Software Engineer merges PR → InvalidateListCaches() called → next read hits GitHub API → fresh data.
 5. Net result: ~90% reduction in list-endpoint API calls.
 ```
 
@@ -1548,7 +1548,7 @@ Each phase of the sequential pipeline has its **own independent retry limit**:
 
 - **REQ-GATE-001a**: The `FinalPRApproval` gate MUST be checked on EVERY code path that can result in a PR merge. Both the direct merge path (`ApproveAndMaybeMergeAsync`) and the Phase 3 merge path (`MergeTestedPRsAsync`) must check `_gateCheck.RequiresHuman(GateIds.FinalPRApproval)`.
 - **REQ-GATE-001b**: When a gate requires human approval and returns `WaitingForHuman`, the merge MUST be deferred (not silently skipped). The `deferMerge` parameter on `ApproveAndMaybeMergeAsync` returns `ReadyToMerge` status instead of executing the merge.
-- **REQ-GATE-001c**: Gate rejection results (from `AssessGateApprovalAsync`) MUST be checked. If `GateDecision.Rejected`, the PE MUST send a `ChangesRequestedMessage` with the human's feedback and trigger a rework cycle.
+- **REQ-GATE-001c**: Gate rejection results (from `AssessGateApprovalAsync`) MUST be checked. If `GateDecision.Rejected`, the SE MUST send a `ChangesRequestedMessage` with the human's feedback and trigger a rework cycle.
 - **REQ-GATE-001d**: Human-initiated rework via gate rejection uses "HumanReviewer" as the `ReviewerAgent` field in `ChangesRequestedMessage`. There is NO limit on human review rework cycles — humans can request as many rounds as needed.
 
 ### REQ-GATE-002: Gate Configuration Hot-Reload
@@ -1557,26 +1557,26 @@ Each phase of the sequential pipeline has its **own independent retry limit**:
 - **REQ-GATE-002b**: The `Config` property reads `_configMonitor.CurrentValue.HumanInteraction` on every gate check call, ensuring the latest config is always used.
 
 **Scenario: Human Gate Blocks Direct Merge**
-1. PE reviews PR #40 authored by Senior Engineer 1 → APPROVED via AI review
-2. PE calls `ApproveAndMaybeMergeAsync(40, deferMerge: true)` — method approves PR on GitHub but returns `ReadyToMerge` instead of merging
-3. PE checks `_gateCheck.RequiresHuman(GateIds.FinalPRApproval)` → returns true
-4. PE calls `_gateCheck.CheckGateAsync("FinalPRApproval", ...)` → posts gate comment on PR, adds `awaiting-human-review` label → returns `WaitingForHuman`
-5. PE skips merge, moves to next task
+1. SE reviews PR #40 authored by Software Engineer 1 → APPROVED via AI review
+2. SE calls `ApproveAndMaybeMergeAsync(40, deferMerge: true)` — method approves PR on GitHub but returns `ReadyToMerge` instead of merging
+3. SE checks `_gateCheck.RequiresHuman(GateIds.FinalPRApproval)` → returns true
+4. SE calls `_gateCheck.CheckGateAsync("FinalPRApproval", ...)` → posts gate comment on PR, adds `awaiting-human-review` label → returns `WaitingForHuman`
+5. SE skips merge, moves to next task
 6. Human reviews PR on GitHub → posts "approved" comment
-7. Next PE loop: `AssessGateApprovalAsync` → AI classifies comment as APPROVED → PE merges PR
+7. Next SE loop: `AssessGateApprovalAsync` → AI classifies comment as APPROVED → SE merges PR
 
 **Scenario: Human Rejects at Gate**
-1. PE calls `AssessGateApprovalAsync("FinalPRApproval", prNumber)` → human posted "Not approved — the color scheme doesn't match the design spec"
+1. SE calls `AssessGateApprovalAsync("FinalPRApproval", prNumber)` → human posted "Not approved — the color scheme doesn't match the design spec"
 2. AI classifies as REJECTED with feedback: "the color scheme doesn't match the design spec"
-3. PE sends `ChangesRequestedMessage { ReviewerAgent="HumanReviewer", Feedback="..." }`
+3. SE sends `ChangesRequestedMessage { ReviewerAgent="HumanReviewer", Feedback="..." }`
 4. Engineer receives rework → fixes colors → re-marks ready-for-review
 5. Full review pipeline repeats → eventually reaches human gate again → human approves → merge
 
 ### REQ-GATE-003: SmeAgentSpawn Gate
 
-- **REQ-GATE-003a**: The `SmeAgentSpawn` gate MUST be checked before any SME agent is spawned. Both PM-initiated spawning (team composition) and PE-initiated spawning (reactive) are subject to this gate.
+- **REQ-GATE-003a**: The `SmeAgentSpawn` gate MUST be checked before any SME agent is spawned. Both PM-initiated spawning (team composition) and SE-initiated spawning (reactive) are subject to this gate.
 - **REQ-GATE-003b**: When the gate is in human mode, the spawn request is posted as a gate comment on the relevant GitHub Issue or PR. The comment includes the SME definition details: role name, system prompt summary, capabilities, model tier, and workflow mode.
-- **REQ-GATE-003c**: The director can approve or reject the spawn. On rejection, the spawning agent (PM or PE) receives the rejection feedback and proceeds without the SME agent.
+- **REQ-GATE-003c**: The director can approve or reject the spawn. On rejection, the spawning agent (PM or SE) receives the rejection feedback and proceeds without the SME agent.
 - **REQ-GATE-003d**: When the gate is in auto mode, SME agents are spawned immediately without human review. Agent status messages MUST NOT show "⏳ Awaiting human approval..." when auto mode is active.
 
 ### REQ-GATE-004: AgentTeamComposition Gate
@@ -1587,16 +1587,16 @@ Each phase of the sequential pipeline has its **own independent retry limit**:
 - **REQ-GATE-004d**: When the gate is in auto mode, the team composition proposal is executed immediately.
 
 **Scenario: Human Gate Blocks SME Spawn**
-1. PE encounters task requiring Kubernetes expertise → AI assessment says YES → generates SME definition
-2. PE calls `SpawnSmeAgentAsync(k8sExpert, issueNumber: 115, ct)`
+1. SE encounters task requiring Kubernetes expertise → AI assessment says YES → generates SME definition
+2. SE calls `SpawnSmeAgentAsync(k8sExpert, issueNumber: 115, ct)`
 3. `AgentSpawnManager` checks `_gateCheck.RequiresHuman(GateIds.SmeAgentSpawn)` → returns true
 4. Gate comment posted on Issue #115: "🤖 SME Agent Spawn Request: KubernetesExpert (standard tier, OnDemand, capabilities: k8s, helm, container-orchestration)"
 5. Director reviews → approves → SME agent spawned
-6. Alternative: Director rejects "Use existing PE for this task" → PE proceeds without SME
+6. Alternative: Director rejects "Use existing SE for this task" → SE proceeds without SME
 
 **Scenario: Team Composition Gate with Modification**
-1. PM proposes team: 3 SEs, 1 JE, 2 SMEs (DatabaseExpert, UIAccessibility)
-2. Gate activated → director reviews → rejects with feedback: "Remove JE, use only 2 SEs, approve both SMEs"
+1. PM proposes team: 3 SEs, 1 SE, 2 SMEs (DatabaseExpert, UIAccessibility)
+2. Gate activated → director reviews → rejects with feedback: "Remove SE, use only 2 SEs, approve both SMEs"
 3. PM re-generates proposal incorporating feedback → 2 SEs, 2 SMEs
 4. Gate re-activated → director approves → PM spawns agents
 
@@ -1651,8 +1651,8 @@ Each phase of the sequential pipeline has its **own independent retry limit**:
 - **REQ-MCP-004d**: The `mcp.json` file is written to the copilot CLI configuration directory. Format follows the copilot CLI MCP configuration schema.
 
 **Scenario: Agent Uses MCP Server via Copilot CLI**
-1. PE agent config has `McpServers: ["github-search"]`
-2. PE makes AI call → `CopilotCliChatCompletionService` builds command: `copilot --allow-all --no-ask-user --mcp-server github-search --model claude-opus-4.6`
+1. SE agent config has `McpServers: ["github-search"]`
+2. SE makes AI call → `CopilotCliChatCompletionService` builds command: `copilot --allow-all --no-ask-user --mcp-server github-search --model claude-opus-4.6`
 3. Copilot CLI loads github-search MCP server → AI can use code search tools during generation
 4. AI response includes tool calls to github-search → results incorporated into code generation
 
@@ -1673,7 +1673,7 @@ Each phase of the sequential pipeline has its **own independent retry limit**:
   - **OnDemand**: Agent is spawned for a specific task, works on it, then waits for more work or retires.
   - **Continuous**: Agent runs a polling loop similar to core agents, continuously looking for work matching its capabilities.
   - **OneShot**: Agent performs a single task and then retires automatically.
-- **REQ-SME-002c**: `ReportFindingsAsync` broadcasts structured `SmeResultMessage` containing the agent's analysis, recommendations, and any generated artifacts. The spawning agent (PM or PE) receives and incorporates these findings.
+- **REQ-SME-002c**: `ReportFindingsAsync` broadcasts structured `SmeResultMessage` containing the agent's analysis, recommendations, and any generated artifacts. The spawning agent (PM or SE) receives and incorporates these findings.
 - **REQ-SME-002d**: Graceful MCP degradation: if MCP server initialization fails (e.g., server unavailable, runtime missing), the SME agent continues without tools rather than failing entirely. The failure is logged and tracked in `SmeMetrics`.
 
 ### REQ-SME-003: SME Metrics Tracking
@@ -1694,12 +1694,12 @@ Each phase of the sequential pipeline has its **own independent retry limit**:
 3. AI proposes: 2 PEs (for parallel high-complexity work), 2 SEs, 1 DatabaseExpert SME (from template), 1 PaymentIntegrationExpert SME (new definition)
 4. `ParseProposal()` converts JSON → `TeamCompositionProposal`
 5. Human gate `AgentTeamComposition` → director reviews → approves
-6. PM spawns: additional PE (rank 1), 2 SEs, DatabaseExpert SME, generates and spawns PaymentIntegrationExpert SME
-7. Saves `TeamComposition.md` → signals `TeamCompositionComplete` → PE begins engineering planning
+6. PM spawns: additional SE (rank 1), 2 SEs, DatabaseExpert SME, generates and spawns PaymentIntegrationExpert SME
+7. Saves `TeamComposition.md` → signals `TeamCompositionComplete` → SE begins engineering planning
 
-### REQ-SME-005: PE Reactive SME Spawning
+### REQ-SME-005: SE Reactive SME Spawning
 
-- **REQ-SME-005a**: During ParallelDevelopment phase, PE can reactively spawn SME agents when a task requires specialist knowledge not available in the current team.
+- **REQ-SME-005a**: During ParallelDevelopment phaSE can reactively spawn SME agents when a task requires specialist knowledge not available in the current team.
 - **REQ-SME-005b**: `RequestSmeIfNeededAsync(taskDescription, additionalContext, ct)` uses AI assessment to evaluate whether an SME is needed. The AI considers: task complexity, required domain knowledge, current team capabilities, and available SME templates.
 - **REQ-SME-005c**: If an SME is needed: (1) Extract capability keywords from task, (2) Check existing templates via `SmeDefinitionGenerator.FindMatchingTemplateAsync`, (3) If no template matches, AI generates new definition via `BuildDefinitionGenerationPrompt` → `ParseDefinition`, (4) Spawn via `SpawnSmeAgentAsync`.
 - **REQ-SME-005d**: `SmeDefinitionGenerator` encapsulates the AI-powered definition generation: builds a prompt with task context + existing definitions + capability requirements, then parses the AI response into a valid `SMEAgentDefinition`.
@@ -1709,19 +1709,19 @@ Each phase of the sequential pipeline has its **own independent retry limit**:
 - **REQ-SME-006a**: `AgentSpawnManager.SpawnSmeAgentAsync(definition, assignToIssue?, ct)` enforces three limits: `MaxInstances` per definition (prevents over-spawning of the same specialist), `MaxTotalSmeAgents` globally (default 5), and the `SmeAgentSpawn` human gate.
 - **REQ-SME-006b**: `AgentSpawnManager.RetireSmeAgentAsync(agentId, ct)` performs graceful retirement: stops the agent's main loop, unregisters from `AgentRegistry`, decrements spawn counters, and disposes resources.
 - **REQ-SME-006c**: OneShot SME agents self-retire after completing their single task. OnDemand agents retire after a configurable idle timeout. Continuous agents run until explicitly retired or the system shuts down.
-- **REQ-SME-006d**: Only PM and PE can spawn SME agents. If an SME agent attempts to spawn another SME (detected by `CreatedByAgentId` chain), the request is rejected with a logged warning.
+- **REQ-SME-006d**: Only PM and SE can spawn SME agents. If an SME agent attempts to spawn another SME (detected by `CreatedByAgentId` chain), the request is rejected with a logged warning.
 
 **Scenario: SME Agent OneShot Lifecycle**
-1. PE spawns "CryptoExpert" SME (OneShot mode) to analyze encryption requirements for task T5
+1. SE spawns "CryptoExpert" SME (OneShot mode) to analyze encryption requirements for task T5
 2. CryptoExpert initializes → fetches knowledge links → subscribes to message bus
 3. CryptoExpert receives task context → AI analyzes encryption requirements → produces structured findings
 4. `ReportFindingsAsync` broadcasts `SmeResultMessage` with: recommended algorithms, key sizes, implementation patterns
-5. PE receives findings → incorporates into T5 implementation
+5. SE receives findings → incorporates into T5 implementation
 6. CryptoExpert self-retires: stops loop → unregisters → `SmeMetrics.RecordRetirement()`
 
 ### REQ-SME-007: SME Message Types
 
-- **REQ-SME-007a**: `SpawnSmeAgentMessage` — sent by PM or PE to request SME agent spawning. Contains: `SMEAgentDefinition`, optional `AssignToIssueNumber`, and `RequestReason`.
+- **REQ-SME-007a**: `SpawnSmeAgentMessage` — sent by PM or SE to request SME agent spawning. Contains: `SMEAgentDefinition`, optional `AssignToIssueNumber`, and `RequestReason`.
 - **REQ-SME-007b**: `SmeResultMessage` — broadcast by SME agents when they complete work. Contains: `DefinitionId`, `AgentId`, `Findings` (structured text), `Recommendations` (list), `Artifacts` (generated file paths), and `Confidence` (High/Medium/Low).
 - **REQ-SME-007c**: `TeamCompositionProposalMessage` — broadcast by PM when a team composition proposal is ready for review. Contains the full `TeamCompositionProposal`.
 - **REQ-SME-007d**: `TeamCompositionApprovalMessage` — sent when the human gate decision is made. Contains: `Approved` (bool), `Feedback` (text), and the original proposal reference.
@@ -1729,7 +1729,7 @@ Each phase of the sequential pipeline has its **own independent retry limit**:
 ### REQ-SME-008: SME System Safety
 
 - **REQ-SME-008a**: `MaxTotalSmeAgents` (default 5) is a hard cap on the total number of concurrent SME agents. This prevents runaway agent spawning from consuming excessive resources.
-- **REQ-SME-008b**: `AllowAgentCreatedDefinitions` (default true) controls whether PM and PE can generate new SME definitions at runtime. When false, only pre-configured templates can be spawned.
+- **REQ-SME-008b**: `AllowAgentCreatedDefinitions` (default true) controls whether PM and SE can generate new SME definitions at runtime. When false, only pre-configured templates can be spawned.
 - **REQ-SME-008c**: All SME spawn requests are audited: `SmeMetrics` records the spawning agent, definition used, timestamp, and eventual retirement time.
 - **REQ-SME-008d**: If an SME agent encounters a fatal error during its main loop, it logs the error, reports partial findings if available, and self-retires rather than crashing the system.
 
@@ -1745,11 +1745,11 @@ Each phase of the sequential pipeline has its **own independent retry limit**:
 - **REQ-KNOW-001d**: HTTP fetching uses configurable timeouts and respects robots.txt where possible. Failed fetches are logged as warnings and skipped (graceful degradation — agent continues without that knowledge source).
 
 **Scenario: Knowledge Link Processing**
-1. PE agent config has `KnowledgeLinks: ["https://docs.example.com/api-guide", "https://raw.github.com/org/repo/main/ARCHITECTURE.md"]`
+1. SE agent config has `KnowledgeLinks: ["https://docs.example.com/api-guide", "https://raw.github.com/org/repo/main/ARCHITECTURE.md"]`
 2. `RoleContextProvider` fetches first URL → response Content-Type: text/html → `HtmlContentExtractor` extracts 12,000 chars
 3. Content exceeds budget (standard tier = 4000 chars) → `AiKnowledgeSummarizer` summarizes to 3,800 chars
 4. Fetches second URL → Content-Type: text/markdown → `MarkdownContentExtractor` extracts 2,100 chars → within budget, no summarization needed
-5. Both knowledge chunks injected as `[ROLE KNOWLEDGE]` section in PE's system prompt
+5. Both knowledge chunks injected as `[ROLE KNOWLEDGE]` section in SE's system prompt
 
 ### REQ-KNOW-002: Knowledge Budget Enforcement
 
@@ -1772,11 +1772,11 @@ Each phase of the sequential pipeline has its **own independent retry limit**:
 - **REQ-KNOW-004d**: Cache is in-memory only — not persisted across restarts. First loop iteration after restart incurs the full fetch+extract+summarize cost.
 
 **Scenario: Knowledge Cache Lifecycle**
-1. PE initializes → `RoleContextProvider` fetches 2 knowledge links → extracts → summarizes → caches
-2. PE loop iteration 2 → cache hit → knowledge injected from cache (no HTTP fetch)
+1. SE initializes → `RoleContextProvider` fetches 2 knowledge links → extracts → summarizes → caches
+2. SE loop iteration 2 → cache hit → knowledge injected from cache (no HTTP fetch)
 3. 45 minutes later → cache still valid (TTL=1h) → cache hit
 4. 65 minutes later → cache expired → re-fetch → re-extract → re-summarize → update cache
-5. User changes PE model tier from standard to premium via dashboard → cache invalidated (budget changed from 4000 to 8000) → re-process with larger budget
+5. User changes SE model tier from standard to premium via dashboard → cache invalidated (budget changed from 4000 to 8000) → re-process with larger budget
 
 ---
 
@@ -1792,26 +1792,26 @@ Each phase of the sequential pipeline has its **own independent retry limit**:
 
 ### REQ-PROMPT-002: Template Organization
 
-- **REQ-PROMPT-002a**: Templates are organized by agent role: `prompts/researcher/`, `prompts/pm/`, `prompts/architect/`, `prompts/engineer-base/`, `prompts/senior-engineer/`, `prompts/junior-engineer/`, `prompts/principal-engineer/`, `prompts/test-engineer/`, `prompts/custom/`.
+- **REQ-PROMPT-002a**: Templates are organized by agent role: `prompts/researcher/`, `prompts/pm/`, `prompts/architect/`, `prompts/engineer-base/`, `prompts/software-engineer/`, `prompts/software-engineer/`, `prompts/software-engineer/`, `prompts/test-engineer/`, `prompts/custom/`.
 - **REQ-PROMPT-002b**: Shared templates used by multiple engineer types live in `prompts/engineer-base/`. Role-specific overrides live in role-specific directories.
 - **REQ-PROMPT-002c**: Variable names use snake_case (e.g., `{{tech_stack}}`, `{{pm_spec}}`). Whitespace inside braces is trimmed.
 
 ### REQ-PROMPT-003: Agent Integration
 
-- **REQ-PROMPT-003a**: All 8 agent types (Researcher, PM, Architect, PE, Senior/Junior Engineer, TE, Custom) inject `IPromptTemplateService` via constructor and use templates for prompt generation.
+- **REQ-PROMPT-003a**: All 8 agent types (Researcher, PM, Architect, SE, Software Engineer/Software Engineer, TE, Custom) inject `IPromptTemplateService` via constructor and use templates for prompt generation.
 - **REQ-PROMPT-003b**: Every template call preserves the original hardcoded prompt as a `??` null-coalescing fallback, ensuring agents function even if template files are missing or corrupted.
 - **REQ-PROMPT-003c**: Template variables include all dynamic values that were previously embedded via string interpolation (tech stack, document content, issue details, etc.).
 
 ---
 
-## 31. PE Parallelism Enhancements Requirements
+## 31. SE Parallelism Enhancements Requirements
 
-These requirements govern how the Principal Engineer validates and optimizes task parallelism during engineering planning.
+These requirements govern how the Software Engineer validates and optimizes task parallelism during engineering planning.
 
-### REQ-PE-PAR-01: File Overlap Enforcement
+### REQ-SE-PAR-01: File Overlap Enforcement
 
-- **Requirement**: The Principal Engineer MUST validate that no two engineering tasks in the same wave own overlapping files (except explicitly SHARED files).
-- **Workflow**: After AI generates tasks, PE runs `DetectFileOverlaps()` which compares OwnedFiles across tasks in the same wave. Non-shared overlaps trigger AI-assisted repair via `ValidateAndRepairTaskPlanAsync()`.
+- **Requirement**: The Software Engineer MUST validate that no two engineering tasks in the same wave own overlapping files (except explicitly SHARED files).
+- **Workflow**: After AI generates tasks, SE runs `DetectFileOverlaps()` which compares OwnedFiles across tasks in the same wave. Non-shared overlaps trigger AI-assisted repair via `ValidateAndRepairTaskPlanAsync()`.
 - **Validation**: File overlap count logged via `LogParallelismMetrics()`. Post-repair overlaps should be 0.
 
 **Scenario: File Overlap Detected and Repaired**
@@ -1821,7 +1821,7 @@ These requirements govern how the Principal Engineer validates and optimizes tas
 4. Post-repair `DetectFileOverlaps()` returns overlap count = 0
 5. `LogParallelismMetrics()` logs the final overlap count
 
-### REQ-PE-PAR-02: Wave Scheduling Validation
+### REQ-SE-PAR-02: Wave Scheduling Validation
 
 - **Requirement**: Tasks MUST be assigned to waves (W1, W2, W3+) based on dependency chains. At least 60% of non-foundation tasks should be in W1 for maximum parallelism.
 - **Workflow**: `ValidateWaves()` checks that task wave assignments are consistent with their dependencies. Tasks depending only on T1 must be in W1.
@@ -1833,7 +1833,7 @@ These requirements govern how the Principal Engineer validates and optimizes tas
 3. W1 percentage = 3/5 non-foundation tasks = 60% — meets threshold
 4. Metrics logged: total=6, W1=3, W1%=60%
 
-### REQ-PE-PAR-03: Typed Dependencies
+### REQ-SE-PAR-03: Typed Dependencies
 
 - **Requirement**: Task dependencies SHOULD include dependency type annotations (e.g., `T1(files)`, `T3(api)`) to indicate the nature of the coupling.
 - **Workflow**: `ParseTypedDependencies()` extracts both plain dependency IDs and type annotations from the TASK line format.
@@ -1844,9 +1844,9 @@ These requirements govern how the Principal Engineer validates and optimizes tas
 2. `ParseTypedDependencies()` extracts: T1 with type "files", T3 with type "api"
 3. `EngineeringTask.DependencyTypes` contains: `{ "T1": "files", "T3": "api" }`
 
-### REQ-PE-PAR-04: Parallelism Assessment
+### REQ-SE-PAR-04: Parallelism Assessment
 
-- **Requirement**: The PE MUST log parallelism metrics after task planning: total tasks, W1 count, W1 percentage, overlap count, shared file count.
+- **Requirement**: The SE MUST log parallelism metrics after task planning: total tasks, W1 count, W1 percentage, overlap count, shared file count.
 - **Workflow**: `LogParallelismMetrics()` computes and logs metrics. `AssessParallelismScore()` provides a qualitative assessment (Excellent/Good/Fair/Poor).
 - **Validation**: Metrics visible in agent logs. Score based on W1% and overlap count.
 
@@ -1856,16 +1856,16 @@ These requirements govern how the Principal Engineer validates and optimizes tas
 3. `AssessParallelismScore()` returns "Excellent" (W1% > 70% and 0 overlaps)
 4. All metrics logged in structured format for dashboard consumption
 
-### REQ-PE-PAR-05: Wave-Aware Scaling
+### REQ-SE-PAR-05: Wave-Aware Scaling
 
-- **Requirement**: When requesting additional engineers, the PE SHOULD consider wave boundaries. Engineers spawned for W2 tasks should only start after W1 tasks complete.
+- **Requirement**: When requesting additional engineers, the SE SHOULD consider wave boundaries. Engineers spawned for W2 tasks should only start after W1 tasks complete.
 - **Workflow**: `GetWaveReadyTasks()` returns tasks whose wave prerequisites are met. The assignment loop prioritizes wave-ready tasks.
 
 **Scenario: Wave-Aware Task Assignment**
-1. PE has 3 W1 tasks and 2 W2 tasks
-2. PE spawns 3 engineers for W1 tasks
+1. SE has 3 W1 tasks and 2 W2 tasks
+2. SE spawns 3 engineers for W1 tasks
 3. W1 tasks complete; `GetWaveReadyTasks()` now returns W2 tasks
-4. PE assigns W2 tasks to available engineers
+4. SE assigns W2 tasks to available engineers
 
 ---
 
@@ -1961,14 +1961,14 @@ These requirements govern how agents classify decisions by impact level and gate
 - **Requirement**: Decision gating MUST be integrated at key decision points across agents:
   - **PM Agent**: Team composition decisions (category: TeamComposition)
   - **Architect Agent**: Architecture design decisions (category: Architecture)
-  - **Principal Engineer**: Task decomposition and wave scheduling (category: TaskPlanning)
-  - **Senior/Junior Engineers**: Available via `DecisionGate` protected field in `EngineerAgentBase`
+  - **Software Engineer**: Task decomposition and wave scheduling (category: TaskPlanning)
+  - **Software Engineers**: Available via `DecisionGate` protected field in `EngineerAgentBase`
   - **Test Engineer**: Constructor wired, available for test strategy decisions
 - **Workflow**: Each agent checks `_decisionGate != null` before calling. Optional parameter ensures backward compatibility.
 - **Validation**: All 428 existing tests pass with no regressions. Agents without `DecisionGateService` in DI continue to work unchanged.
 
 **Scenario: Agent Decision Integration**
-1. PM decides team needs 3 Senior Engineers — calls `ClassifyAndGateDecisionAsync()` with category "TeamComposition"
+1. PM decides team needs 3 Software Engineers — calls `ClassifyAndGateDecisionAsync()` with category "TeamComposition"
 2. AI classifies as "M" — below "L" gate threshold, auto-approved
 3. Architect proposes microservices architecture — calls with category "Architecture"
 4. AI classifies as "XL" — gate triggered, Architect blocks until human approves
@@ -2005,13 +2005,13 @@ These requirements govern how agents classify decisions by impact level and gate
 
 ### REQ-STEP-003: Step Templates Per Agent Role
 
-- **REQ-STEP-003a**: `AgentStepTemplates` static class provides expected step names for each of the 7 agent roles (Researcher, PM, Architect, PE, Senior Engineer, Junior Engineer, Test Engineer).
+- **REQ-STEP-003a**: `AgentStepTemplates` static class provides expected step names for each of the 7 agent roles (Researcher, PM, Architect, SE, Software Engineer, Software Engineer, Test Engineer).
 - **REQ-STEP-003b**: Templates are used by the UI to show expected future steps (greyed out / pending state) alongside completed and in-progress steps, giving users a sense of overall progress without requiring agents to pre-compute their execution plan.
 - **REQ-STEP-003c**: Templates are informational, not prescriptive — agents may skip steps or execute additional steps not in the template. The UI handles this gracefully.
 
 ### REQ-STEP-004: Agent Instrumentation
 
-- **REQ-STEP-004a**: All 7 core agent types report step progress: Researcher, PM, Architect, PE, Senior Engineer (via EngineerAgentBase), Junior Engineer (via EngineerAgentBase), Test Engineer.
+- **REQ-STEP-004a**: All 7 core agent types report step progress: Researcher, PM, Architect, SE, Software Engineer (via EngineerAgentBase), Software Engineer (via EngineerAgentBase), Test Engineer.
 - **REQ-STEP-004b**: Step names are descriptive and consistent per role (e.g., Researcher: "Gathering Sources", "Analyzing Documentation", "Synthesizing Research"; PM: "Reading Project Description", "Creating PMSpec", "Generating User Stories").
 - **REQ-STEP-004c**: Engineers share common step instrumentation via `EngineerAgentBase` for shared workflows (issue pickup, implementation, build/test, PR creation) with role-specific steps added in subclasses.
 
@@ -2058,31 +2058,31 @@ These bugs were discovered during scenario analysis and fixed. Listed here as re
 |-----|----------|--------------|------------|-----|
 | Message routing by DisplayName | CRITICAL | IssueAssignmentMessage never delivered to engineers | ToAgentId used DisplayName, engineers subscribe by Identity.Id | Route by Identity.Id via EngineerInfo.AgentId |
 | Assignment tracking key mismatch | CRITICAL | Engineers never freed for new work | _agentAssignments keyed by DisplayName, StatusUpdate uses agent Id | Key by Identity.Id |
-| Task completion not tracked | MODERATE | PE tasks never marked Complete in backlog | Matched CurrentTask (issue title) against task.Id | Match by Name with Id fallback |
+| Task completion not tracked | MODERATE | SE tasks never marked Complete in backlog | Matched CurrentTask (issue title) against task.Id | Match by Name with Id fallback |
 | CurrentPrNumber cleared too early | MODERATE | Rework feedback never matched to engineer | Cleared immediately after commit, before review | Keep until PR merged/closed |
 | Review spam from repeated polling | MODERATE | Duplicate review comments created | HasAgentApprovedAsync returned false for CHANGES_REQUESTED | Added HasAgentReviewedAsync |
 | Tech stack ignored in prompts | MODERATE | Generated code was markdown instead of C# | TechStack not incorporated into agent prompts | Added TechStack to all prompts |
 | Architect duplicate reviews on restart | MODERATE | Same PR reviewed twice after restart | `_reviewedPrNumbers` in-memory only, lost on restart | Added `NeedsReviewFromAsync` check before reviewing |
-| PE stuck after CHANGES_REQUESTED + restart | CRITICAL | PE waits forever for review that already happened | `ChangesRequestedMessage` lost on restart, recovery only checked labels not comments | `RecoverReadyForReviewPRsAsync` now reads GitHub comments via `GetPendingChangesRequestedAsync` |
+| SE stuck after CHANGES_REQUESTED + restart | CRITICAL | SE waits forever for review that already happened | `ChangesRequestedMessage` lost on restart, recovery only checked labels not comments | `RecoverReadyForReviewPRsAsync` now reads GitHub comments via `GetPendingChangesRequestedAsync` |
 | TestEngineer re-scans stale PRs every cycle | MODERATE | Tries to read files from old merged PRs, fails, never marks tested | `_testedPRs` in-memory only, never applies "tested" label, doesn't skip files-missing PRs | Apply "tested" label after generation, mark stale PRs as tested |
 | TestEngineer tests have no business context | MODERATE | Tests only validate code structure, not acceptance criteria | AI prompt only included source code + PR description, no issue/PMSpec/Architecture context | Added full context gathering: linked issue + PMSpec + Architecture |
 | Reviewers don't read actual code | CRITICAL | Reviews based on PR description only, not the committed code | AI prompts only included PR title/body, not file contents from the branch | All reviewers now read actual code files via `GetPRCodeContextAsync` |
 | PM review missing linked issue | MODERATE | PM couldn't validate acceptance criteria | No issue lookup in PM review prompt | Added `ParseLinkedIssueNumber` + `GetIssueAsync` to PM review |
 | Architect review missing PMSpec | MODERATE | Architect couldn't validate business alignment | Only Architecture.md included in prompt | Added PMSpec.md + linked issue to Architect review |
-| PE task reconciliation crash | MODERATE | Used non-existent method | Called `GetClosedPullRequestsAsync` which didn't exist | Changed to `GetMergedPullRequestsAsync` |
+| SE task reconciliation crash | MODERATE | Used non-existent method | Called `GetClosedPullRequestsAsync` which didn't exist | Changed to `GetMergedPullRequestsAsync` |
 | Octokit UpdateIssue NullRef | CRITICAL | `UpdateIssueAsync` crashes on every call | `IssueUpdate.Labels` is null by default; calling `.Clear()` throws NullRef | Use `ClearLabels()` + `AddLabel()` which safely initializes the collection |
-| PE spawn cooldown blocks solo work | CRITICAL | PE sits idle despite pending tasks when no engineers exist | When `allEngineers.Count == 0` and spawn requested, PE deferred ALL tasks | Only defer when engineers exist but are busy; PE takes tasks itself when solo |
+| SE spawn cooldown blocks solo work | CRITICAL | SE sits idle despite pending tasks when no engineers exist | When `allEngineers.Count == 0` and spawn requested, SE deferred ALL tasks | Only defer when engineers exist but are busy; SE takes tasks itself when solo |
 | PM stale dashboard status | MODERATE | PM shows "Reviewing PR #X" for already-merged PR | `ReviewPullRequestsAsync` sets Working status but never resets after reviews complete | Added `UpdateStatus(AgentStatus.Idle, "Monitoring team progress")` after review foreach loop |
 | TE Playwright scaffold swapped args | CRITICAL | TE crashes with IOException: path contains URL (`C:\Agents\...\http:\localhost:5000\tests`) | `GeneratePlaywrightTestScaffold()` called with projectName and testProjectDir arguments swapped — URL passed as directory path | Fixed argument order: `GetSourceProjectName()` as projectName, `"tests/UITests"` as testProjectDir |
 | TE infinite retry on failed PRs | MODERATE | TE retries failed PR creation every scan cycle, flooding logs | Failed test PRs not added to `_testedPRs` set — dedup check never triggered for failed attempts | Add PR to `_testedPRs` in catch block to prevent infinite retry loops |
 | TE missing .csproj scaffolding | MODERATE | AI-generated test code has no .csproj, build fails | Test Engineer AI sometimes omits .csproj file in generated output | Added auto-scaffolding: detect .cs files without .csproj → generate test .csproj with xUnit + Playwright packages |
-| PE misses PM enhancements | MODERATE | Enhancement issues stay open forever with no engineering tasks | PE's AI-generated engineering plan doesn't always cover all PM enhancement issues; PM's completion review skips enhancements with 0 sub-issues | TODO: Add PE enhancement coverage validation pass + PM orphaned enhancement detection |
+| SE misses PM enhancements | MODERATE | Enhancement issues stay open forever with no engineering tasks | SE's AI-generated engineering plan doesn't always cover all PM enhancement issues; PM's completion review skips enhancements with 0 sub-issues | TODO: Add SE enhancement coverage validation pass + PM orphaned enhancement detection |
 | RateLimitManager never wired into GitHubService | CRITICAL | Rate limit handling existed in code but was completely inactive — all 76 API calls bypassed it | `RateLimitManager` was registered in DI as singleton but never injected into `GitHubService` constructor; all `_client` calls went directly to Octokit with no throttling | Added constructor injection of `RateLimitManager`, wrapped all 42 public methods with `_rl.ExecuteAsync()`, added `TrackRateLimit()` after each API call |
 | Reviewers can't see screenshots | CRITICAL | AI reviewers received screenshot URLs as text, approved broken UIs without seeing them | `GetPRScreenshotContextAsync` passed URLs as plain text to AI prompt — models can't view images from URLs | Added `GetPRScreenshotImagesAsync` to download actual bytes, embedded as base64 `ImageContent` in AI prompts |
-| Human gate bypassed on direct merge | CRITICAL | PRs merged without human approval despite FinalPRApproval gate enabled | Two merge paths in PE: direct and Phase 3. Only Phase 3 had gate check. Gate rejection results silently discarded. | Added `deferMerge` parameter, gate check on both paths, rejection handling with rework cycle |
+| Human gate bypassed on direct merge | CRITICAL | PRs merged without human approval despite FinalPRApproval gate enabled | Two merge paths in SE: direct and Phase 3. Only Phase 3 had gate check. Gate rejection results silently discarded. | Added `deferMerge` parameter, gate check on both paths, rejection handling with rework cycle |
 | Gate config not hot-reloadable | MODERATE | Changing gate settings required runner restart | `GateCheckService` used `IOptions` (snapshot at construction) | Changed to `IOptionsMonitor` with `Config` property reading current value |
 | Config page gate CSS missing | MODERATE | Human Interaction section on Configuration page showed unstyled raw HTML | CSS classes `.config-gate-*` and `.config-preset-*` were not in dashboard.css | Added full CSS for preset buttons, gate grid, gate items, phase titles, badges |
 | Standalone dashboard PR links 404 | MODERATE | PR links in agent cards went to github.com/standalone/not-connected/pull/N | `NullGitHubService.RepositoryFullName` returns placeholder in standalone mode | Added `/api/dashboard/repo-info` endpoint, `HttpDashboardDataService` fetches real name |
-| TE/PE port conflict on app start | CRITICAL | TE UI tests fail with "App did not respond at http://localhost:5100 within 90s" | All agents share the same `AppBaseUrl` port (5100). When PE and TE start apps simultaneously, second process can't bind the port. | Added `DeriveUniquePort(workspacePath)` — hashes workspace path to unique port in 5100–5899 range. Applied in both `RunUITestsAsync` and `CaptureAppScreenshotAsync`. |
+| TE/SE port conflict on app start | CRITICAL | TE UI tests fail with "App did not respond at http://localhost:5100 within 90s" | All agents share the same `AppBaseUrl` port (5100). When SE and TE start apps simultaneously, second process can't bind the port. | Added `DeriveUniquePort(workspacePath)` — hashes workspace path to unique port in 5100–5899 range. Applied in both `RunUITestsAsync` and `CaptureAppScreenshotAsync`. |
 | Standalone dashboard shows no agents | CRITICAL | Dashboard on port 5051 shows empty agent list | Dashboard creates its own empty SQLite DB instead of reading Runner's DB. `agent_state` table is always empty (agents never persist checkpoints). | Fixed DB path to Runner's directory. Hydrate from `ai_usage` + `activity_log` tables. Added boot time filtering via `run_metadata.last_boot_utc`. |
 | Dashboard shows duplicate agents from old runs | MODERATE | Dashboard shows 48 agents instead of 8 — includes agents from all previous restarts | SQLite DB accumulates agent records across restarts. Each restart creates new agent GUIDs. | Added `RecordBoot()` to write `last_boot_utc` on each startup. Dashboard filters agents to only those with activity after boot time. |

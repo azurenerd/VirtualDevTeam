@@ -152,7 +152,7 @@ public class AgentTeamComposer
         prompt.AppendLine("```");
         prompt.AppendLine();
         prompt.AppendLine("IMPORTANT: Only propose SME agents when the project genuinely requires specialist expertise ");
-        prompt.AppendLine("beyond what the built-in agents provide. The built-in team (PM, Researcher, Architect, PE, SE, JE, TE) ");
+        prompt.AppendLine("beyond what the built-in agents provide. The built-in team (PM, Researcher, Architect, Software Engineer, TE) ");
         prompt.AppendLine("handles most standard software development projects well. Only add SME agents for domains like ");
         prompt.AppendLine("security auditing, specialized databases, ML/AI, compliance, etc.");
 
@@ -268,9 +268,7 @@ public class AgentTeamComposer
         | ProgramManager | Project coordination, PMSpec creation, user story decomposition, PR reviews, stakeholder communication | premium |
         | Researcher | Technical research, technology evaluation, competitive analysis, feasibility assessment | standard |
         | Architect | System design, architecture documents, technology decisions, API design, data modeling | premium |
-        | PrincipalEngineer | Engineering plan creation, task decomposition, code review, technical leadership, quality standards | premium |
-        | SeniorEngineer | Feature implementation, complex coding tasks, PR creation, code optimization | standard |
-        | JuniorEngineer | Straightforward coding tasks, bug fixes, documentation, simple features | budget |
+        | SoftwareEngineer | Engineering plan creation, task decomposition, feature implementation, code review, technical leadership, quality standards | premium |
         | TestEngineer | Test strategy, test implementation, E2E testing, quality assurance, test automation | standard |
         """;
     }

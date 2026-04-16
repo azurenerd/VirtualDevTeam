@@ -17,7 +17,7 @@ using Microsoft.SemanticKernel.ChatCompletion;
 namespace AgentSquad.Agents;
 
 /// <summary>
-/// Base class for all engineering agents (Senior, Junior, Principal Engineer).
+/// Base class for all engineering agents (Software Engineer).
 /// Contains shared logic for issue-driven work, rework handling, clarification loop,
 /// PR lifecycle, and message bus interaction. Subclasses override behavior
 /// via virtual/abstract methods for role-specific AI prompts and capabilities.
@@ -2005,7 +2005,7 @@ public abstract class EngineerAgentBase : AgentBase
 
     #region Virtual Extension Points
 
-    /// <summary>Display name for prompts, e.g., "Senior Engineer", "Junior Engineer".</summary>
+    /// <summary>Display name for prompts, e.g., "Software Engineer".</summary>
     protected abstract string GetRoleDisplayName();
 
     /// <summary>System prompt for the implementation AI call.</summary>

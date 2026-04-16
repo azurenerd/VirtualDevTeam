@@ -499,7 +499,7 @@ public sealed class ConfigurationService : IConfigurationService
                 AgentRole.ProgramManager,
                 AgentRole.Researcher,
                 AgentRole.Architect,
-                AgentRole.PrincipalEngineer,
+                AgentRole.SoftwareEngineer,
                 AgentRole.TestEngineer
             };
 

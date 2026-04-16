@@ -507,32 +507,20 @@ else if (_config is not null)
             @if (_poolExpanded)
             {
                 <div class="config-card-body">
-                    <p class="config-hint" style="margin-bottom: 12px;" title="Controls how many ADDITIONAL engineers can be dynamically spawned beyond the core PE. The core PE (rank 0) is always created.">
-                        Configure the pool of additional engineers that can be spawned for parallel development. The core PE is always active.
+                    <p class="config-hint" style="margin-bottom: 12px;" title="Controls how many ADDITIONAL Software Engineers can be dynamically spawned beyond the core SWE. The core SWE (rank 0) is always created.">
+                        Configure the pool of additional engineers that can be spawned for parallel development. The core Software Engineer is always active.
                     </p>
                     <div class="config-field-row">
                         <div class="config-field">
-                            <label title="Additional Principal Engineers beyond the core PE. PEs handle high-complexity tasks requiring architectural awareness. Uses premium tier.">Principal Engineers</label>
-                            <input type="number" @bind="_config.Limits.EngineerPool.PrincipalEngineerPool" class="config-input config-input-number" min="0" max="10"
-                                title="Number of ADDITIONAL PEs to spawn (the core PE always exists). Each uses premium-tier AI. Recommended: 1-3 for large projects." />
-                            <span class="config-hint">Additional PEs (premium tier)</span>
-                        </div>
-                        <div class="config-field">
-                            <label title="Additional Senior Engineers for standard-complexity tasks. Good balance of quality and cost. Uses standard tier.">Senior Engineers</label>
-                            <input type="number" @bind="_config.Limits.EngineerPool.SeniorEngineerPool" class="config-input config-input-number" min="0" max="10"
-                                title="Senior Engineers handle moderate-complexity tasks. Each uses standard-tier AI. Set to 0 to disable SE spawning." />
-                            <span class="config-hint">Additional SEs (standard tier)</span>
-                        </div>
-                        <div class="config-field">
-                            <label title="Additional Junior Engineers for simple, well-defined tasks. Cheapest option. Uses budget or local tier.">Junior Engineers</label>
-                            <input type="number" @bind="_config.Limits.EngineerPool.JuniorEngineerPool" class="config-input config-input-number" min="0" max="10"
-                                title="Junior Engineers handle simple tasks (boilerplate, scaffolding). Uses budget/local-tier AI. Set to 0 to disable JE spawning." />
-                            <span class="config-hint">Additional JEs (budget/local tier)</span>
+                            <label title="Additional Software Engineers beyond the core SWE. SWEs handle coding tasks across all complexity levels.">Software Engineers</label>
+                            <input type="number" @bind="_config.Limits.EngineerPool.SoftwareEngineerPool" class="config-input config-input-number" min="0" max="10"
+                                title="Number of ADDITIONAL SWEs to spawn (the core SWE always exists). Recommended: 1-3 for large projects." />
+                            <span class="config-hint">Additional SWEs</span>
                         </div>
                     </div>
                     <div class="config-pool-summary">
-                        Total additional engineers: <strong>@(_config.Limits.EngineerPool.PrincipalEngineerPool + _config.Limits.EngineerPool.SeniorEngineerPool + _config.Limits.EngineerPool.JuniorEngineerPool)</strong>
-                        (+ 1 core PE always active)
+                        Total additional engineers: <strong>@(_config.Limits.EngineerPool.SoftwareEngineerPool)</strong>
+                        (+ 1 core SWE always active)
                     </div>
                 </div>
             }
@@ -1635,10 +1623,8 @@ else if (_config is not null)
         new("Program Manager", _config!.Agents.ProgramManager),
         new("Researcher", _config.Agents.Researcher),
         new("Architect", _config.Agents.Architect),
-        new("Principal Engineer", _config.Agents.PrincipalEngineer),
+        new("Software Engineer", _config.Agents.SoftwareEngineer),
         new("Test Engineer", _config.Agents.TestEngineer),
-        new("Senior Engineer (Template)", _config.Agents.SeniorEngineerTemplate),
-        new("Junior Engineer (Template)", _config.Agents.JuniorEngineerTemplate),
     };
 
     private sealed record AgentEntry(string Name, AgentConfig Config);
@@ -1730,10 +1716,8 @@ else if (_config is not null)
         "Program Manager" => "Coordinates the entire project. Creates the PMSpec.md from research, breaks work into issues, assigns tasks, reviews PRs, and manages the workflow pipeline. Quality-critical — use premium tier.",
         "Researcher" => "Gathers technical context at project start. Analyzes the project description, explores existing code/docs, and produces Research.md that all downstream agents reference.",
         "Architect" => "Designs the system architecture. Reads PMSpec.md and Research.md, produces Architecture.md with component diagrams, API contracts, and technology decisions. Quality-critical.",
-        "Principal Engineer" => "The core engineer responsible for high-complexity tasks. Creates the EngineeringPlan.md, handles the most architecturally significant code, and reviews other engineers' PRs.",
+        "Software Engineer" => "The core engineer responsible for coding tasks across all complexity levels. Creates the EngineeringPlan.md, implements features, and reviews other engineers' PRs.",
         "Test Engineer" => "Generates and runs tests (unit, integration, UI) for every PR. Analyzes code changes to determine which test tiers are needed. Creates test PRs with passing test suites.",
-        "Senior Engineer (Template)" => "Template for dynamically spawned Senior Engineers. SEs handle standard-complexity coding tasks. Each spawned SE gets a unique ID and assigned issues.",
-        "Junior Engineer (Template)" => "Template for dynamically spawned Junior Engineers. JEs handle simple, well-defined tasks like boilerplate and scaffolding. Uses cheaper model tiers.",
         _ => agentName
     };
 
@@ -1911,10 +1895,8 @@ else if (_config is not null)
         "architect" => "Prompts that control the Architect agent's behavior: architecture document generation (multi-turn and single-pass), PR review criteria, revision handling, and design reference formatting. Changes here affect how Architecture.md is created and how PRs are evaluated for architectural alignment.",
         "pm" => "Prompts for the Program Manager agent: PMSpec generation, story extraction and review, clarification dialogs, blocker triage, PR review from a product perspective, screenshot analysis, and the rubber-duck critique pass. These shape how requirements are specified and how the PM evaluates deliverables.",
         "researcher" => "Prompts for the Researcher agent: technology research generation (multi-turn with sub-questions, deep-dive, and synthesis), revision handling, and design reference context. These control the depth and focus of Research.md.",
-        "engineer-base" => "Shared prompts inherited by ALL engineer agents (Senior, Junior, Principal): implementation planning, step-by-step execution, rework handling, build/test fix attempts, clarification follow-ups, and code regeneration. Changes here affect every engineer role.",
-        "senior-engineer" => "Senior Engineer-specific prompts: implementation system prompt (defines coding standards, quality expectations) and self-review instructions. These layer on top of engineer-base prompts.",
-        "junior-engineer" => "Junior Engineer-specific prompt: implementation system prompt emphasizing clean code, good comments, and straightforward patterns. Layers on top of engineer-base prompts.",
-        "principal-engineer" => "Principal Engineer prompts: high-complexity implementation, engineering plan generation, enhancement coverage evaluation, integration review, code review analysis, PR description writing, visual validation, and SME assessment. PEs handle the hardest tasks.",
+        "engineer-base" => "Shared prompts inherited by ALL engineer agents: implementation planning, step-by-step execution, rework handling, build/test fix attempts, clarification follow-ups, and code regeneration. Changes here affect every engineer role.",
+        "software-engineer" => "Software Engineer prompts: implementation, engineering plan generation, enhancement coverage evaluation, integration review, code review analysis, PR description writing, visual validation, and SME assessment.",
         "test-engineer" => "Test Engineer prompts: test generation across tiers (unit, integration, UI/E2E), testability assessment, Blazor-specific guidance, build/test failure classification and fixing, test removal decisions, and rework handling. Controls test quality and coverage strategy.",
         "custom" => "Prompts for user-defined custom agents: generic task execution and issue processing templates. These provide the base behavior for any custom agent you create.",
         _ => $"Prompts for the {role} agent role. Edit these to customize how the agent thinks, responds, and makes decisions."

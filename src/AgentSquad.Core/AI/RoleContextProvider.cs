@@ -184,10 +184,8 @@ public class RoleContextProvider
             AgentRole.ProgramManager => agents.ProgramManager,
             AgentRole.Researcher => agents.Researcher,
             AgentRole.Architect => agents.Architect,
-            AgentRole.PrincipalEngineer => agents.PrincipalEngineer,
+            AgentRole.SoftwareEngineer => agents.SoftwareEngineer,
             AgentRole.TestEngineer => agents.TestEngineer,
-            AgentRole.SeniorEngineer => agents.SeniorEngineerTemplate,
-            AgentRole.JuniorEngineer => agents.JuniorEngineerTemplate,
             _ => new AgentConfig()
         };
     }

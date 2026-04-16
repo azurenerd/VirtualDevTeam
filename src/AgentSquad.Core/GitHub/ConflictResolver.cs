@@ -153,7 +153,7 @@ public class ConflictResolver
     }
 
     /// <summary>
-    /// Escalate persistent conflicts to the Principal Engineer by creating an issue.
+    /// Escalate persistent conflicts to the Software Engineer by creating an issue.
     /// </summary>
     public async Task EscalateConflictAsync(
         int prNumber, string agentName, string conflictDetails, CancellationToken ct = default)
@@ -183,7 +183,7 @@ public class ConflictResolver
 
                 ## Context
                 The agent `{agentName}` was unable to resolve merge conflicts automatically after a rebase attempt.
-                Manual intervention is required from the Principal Engineer.
+                Manual intervention is required from the Software Engineer.
 
                 ## Suggested Actions
                 1. Review the conflicting files listed above
@@ -200,7 +200,7 @@ public class ConflictResolver
             // Also comment on the PR that it's been escalated
             await _github.AddPullRequestCommentAsync(
                 prNumber,
-                $"🚨 **Conflict Escalated** — An issue has been created for Principal Engineer review. " +
+                $"🚨 **Conflict Escalated** — An issue has been created for Software Engineer review. " +
                 $"Agent `{agentName}` was unable to resolve the merge conflicts automatically.",
                 ct);
 

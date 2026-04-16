@@ -78,8 +78,8 @@ AgentSquad requires at least one AI provider and a GitHub Personal Access Token.
 3. Copy the key (starts with `sk-ant-`)
 
 **Recommended models:**
-- `claude-opus-4-20250514` — Premium tier (PM, Architect, Principal Engineer)
-- `claude-sonnet-4-20250514` — Standard tier (Researcher, Senior Engineer, Test Engineer)
+- `claude-opus-4-20250514` — Premium tier (PM, Architect, Software Engineer)
+- `claude-sonnet-4-20250514` — Standard tier (Researcher, Software Engineer, Test Engineer)
 
 ### OpenAI API Key
 
@@ -89,7 +89,7 @@ AgentSquad requires at least one AI provider and a GitHub Personal Access Token.
 
 **Recommended models:**
 - `gpt-4o` — Standard tier
-- `gpt-4o-mini` — Budget tier (Junior Engineer)
+- `gpt-4o-mini` — Budget tier (Software Engineer)
 
 ### Azure OpenAI (Optional)
 
@@ -232,15 +232,15 @@ Assign model tiers to each agent role:
     "ProgramManager":    { "ModelTier": "premium",  "MaxTokensPerCycle": 8192 },
     "Researcher":        { "ModelTier": "standard", "MaxTokensPerCycle": 4096 },
     "Architect":         { "ModelTier": "premium",  "MaxTokensPerCycle": 8192 },
-    "PrincipalEngineer": { "ModelTier": "premium",  "MaxTokensPerCycle": 8192 },
+    "SoftwareEngineer": { "ModelTier": "premium",  "MaxTokensPerCycle": 8192 },
     "TestEngineer":      { "ModelTier": "standard", "MaxTokensPerCycle": 4096 },
-    "SeniorEngineerTemplate": { "ModelTier": "standard", "MaxTokensPerCycle": 4096 },
-    "JuniorEngineerTemplate": { "ModelTier": "budget",   "MaxTokensPerCycle": 4096 }
+    "SoftwareEngineerTemplate": { "ModelTier": "standard", "MaxTokensPerCycle": 4096 },
+    "SoftwareEngineerTemplate": { "ModelTier": "budget",   "MaxTokensPerCycle": 4096 }
   }
 }
 ```
 
-> **Templates:** Senior and Junior Engineer configs are templates — new instances spawned at runtime inherit these settings.
+> **Templates:** Software Engineer and Software Engineer configs are templates — new instances spawned at runtime inherit these settings.
 
 ### Operational Limits
 
@@ -258,7 +258,7 @@ Assign model tiers to each agent role:
 
 | Field | Description | Default |
 |-------|-------------|---------|
-| `MaxAdditionalEngineers` | Max Senior + Junior Engineers the PM can spawn beyond core team | `3` |
+| `MaxAdditionalEngineers` | Max Software Engineers the PM can spawn beyond core team | `3` |
 | `MaxDailyTokenBudget` | Combined daily token limit across all models | `1000000` |
 | `GitHubPollIntervalSeconds` | How often agents poll GitHub for updates | `30` |
 | `AgentTimeoutMinutes` | Agent is flagged as "stuck" if working longer than this | `15` |
@@ -305,7 +305,7 @@ dotnet run
 ### What Happens on First Run
 
 1. **Bootstrap** — The `AgentSquadWorker` spawns the 5 core agents in order:
-   - Program Manager → Researcher → Architect → Principal Engineer → Test Engineer
+   - Program Manager → Researcher → Architect → Software Engineer → Test Engineer
 2. **Initialization** — Each agent transitions through: `Requested → Initializing → Online`
 3. **Workflow begins** — The workflow state machine starts in `Initialization` phase
 4. **PM takes over** — The Program Manager begins orchestrating the team, creating TeamMembers.md, and monitoring progress
