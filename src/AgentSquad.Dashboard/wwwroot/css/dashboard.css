@@ -7885,3 +7885,398 @@ a.ntl-detail-pr-num:hover { text-decoration: underline; color: #79c0ff; }
     font-style: italic;
     letter-spacing: 0.02em;
 }
+
+/* ══════════════════════════════════════════════════════════════
+   Pipelines Page
+   ══════════════════════════════════════════════════════════════ */
+
+/* Provider tab bar */
+.pipe-provider-bar {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+    padding: 0.5rem;
+    background: rgba(255, 255, 255, 0.02);
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    overflow-x: auto;
+}
+
+.pipe-provider-tab {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.6rem 1.2rem;
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 8px;
+    color: #8b949e;
+    cursor: pointer;
+    font-size: 0.85rem;
+    white-space: nowrap;
+    transition: all 0.2s ease;
+}
+
+.pipe-provider-tab:hover {
+    background: rgba(255, 255, 255, 0.04);
+    color: #e6edf3;
+}
+
+.pipe-provider-tab.active {
+    background: rgba(56, 139, 253, 0.12);
+    border-color: rgba(56, 139, 253, 0.3);
+    color: #58a6ff;
+}
+
+.pipe-provider-icon {
+    font-size: 1.1rem;
+}
+
+.pipe-provider-badge {
+    font-size: 0.6rem;
+    margin-left: 0.2rem;
+}
+
+.pipe-provider-badge.connected { color: #3fb950; }
+.pipe-provider-badge.disconnected { color: #8b949e; }
+
+.pipe-add-provider {
+    border-style: dashed;
+    color: #484f58;
+}
+
+.pipe-add-provider:hover {
+    color: #8b949e;
+    border-color: rgba(255, 255, 255, 0.12);
+}
+
+/* Toolbar */
+.pipe-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1rem;
+    flex-wrap: wrap;
+}
+
+.pipe-search-input {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 6px;
+    color: #e6edf3;
+    padding: 0.5rem 0.8rem;
+    font-size: 0.85rem;
+    width: 260px;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+.pipe-search-input:focus {
+    border-color: rgba(56, 139, 253, 0.4);
+}
+
+.pipe-search-input::placeholder {
+    color: #484f58;
+}
+
+.pipe-filters {
+    display: flex;
+    gap: 0.25rem;
+}
+
+.pipe-filter-btn {
+    padding: 0.4rem 0.8rem;
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 6px;
+    color: #8b949e;
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.pipe-filter-btn:hover { background: rgba(255, 255, 255, 0.04); color: #e6edf3; }
+.pipe-filter-btn.active { background: rgba(56, 139, 253, 0.12); border-color: rgba(56, 139, 253, 0.3); color: #58a6ff; }
+
+.pipe-action-btn {
+    padding: 0.4rem 0.8rem;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 6px;
+    color: #8b949e;
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.pipe-action-btn:hover { background: rgba(255, 255, 255, 0.08); color: #e6edf3; }
+
+/* Pipeline cards */
+.pipe-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.pipe-card {
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 10px;
+    padding: 1rem 1.25rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    border-left: 3px solid transparent;
+}
+
+.pipe-card:hover {
+    background: rgba(255, 255, 255, 0.04);
+    border-color: rgba(255, 255, 255, 0.1);
+}
+
+.pipe-card.pipe-succeeded { border-left-color: #3fb950; }
+.pipe-card.pipe-failed { border-left-color: #f85149; }
+.pipe-card.pipe-running { border-left-color: #d29922; }
+
+.pipe-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.pipe-card-left {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.pipe-status-icon {
+    font-size: 1.3rem;
+}
+
+.pipe-card-name {
+    font-weight: 600;
+    color: #e6edf3;
+    font-size: 0.95rem;
+}
+
+.pipe-card-meta {
+    display: flex;
+    gap: 0.75rem;
+    margin-top: 0.2rem;
+    font-size: 0.78rem;
+    color: #8b949e;
+}
+
+.pipe-card-branch {
+    color: #58a6ff;
+}
+
+.pipe-card-right {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    font-size: 0.82rem;
+    color: #8b949e;
+}
+
+.pipe-card-duration {
+    color: #e6edf3;
+    font-variant-numeric: tabular-nums;
+}
+
+.pipe-card-run-num {
+    color: #484f58;
+    font-variant-numeric: tabular-nums;
+}
+
+.pipe-rerun-btn {
+    padding: 0.3rem 0.6rem;
+    background: rgba(56, 139, 253, 0.1);
+    border: 1px solid rgba(56, 139, 253, 0.2);
+    border-radius: 6px;
+    color: #58a6ff;
+    font-size: 0.75rem;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.pipe-rerun-btn:hover {
+    background: rgba(56, 139, 253, 0.2);
+}
+
+/* Expanded card */
+.pipe-card-expanded {
+    margin-top: 1rem;
+    padding-top: 1rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+/* Stage pipeline visualization */
+.pipe-stages {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    margin-bottom: 1rem;
+    overflow-x: auto;
+    padding: 0.5rem 0;
+}
+
+.pipe-stage {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.6rem 1rem;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 8px;
+    min-width: 100px;
+    transition: all 0.2s;
+}
+
+.pipe-stage.stage-succeeded { border-color: rgba(63, 185, 80, 0.3); background: rgba(63, 185, 80, 0.05); }
+.pipe-stage.stage-failed { border-color: rgba(248, 81, 73, 0.3); background: rgba(248, 81, 73, 0.05); }
+.pipe-stage.stage-running { border-color: rgba(210, 153, 34, 0.3); background: rgba(210, 153, 34, 0.05); animation: stagePulse 2s ease-in-out infinite; }
+.pipe-stage.stage-queued { opacity: 0.4; }
+.pipe-stage.stage-skipped { opacity: 0.3; }
+
+@keyframes stagePulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(210, 153, 34, 0); }
+    50% { box-shadow: 0 0 12px 2px rgba(210, 153, 34, 0.15); }
+}
+
+.pipe-stage-icon { font-size: 1.1rem; }
+.pipe-stage-name { font-size: 0.78rem; color: #e6edf3; font-weight: 500; }
+.pipe-stage-duration { font-size: 0.7rem; color: #8b949e; font-variant-numeric: tabular-nums; }
+
+.pipe-stage-connector {
+    color: rgba(255, 255, 255, 0.15);
+    font-size: 1rem;
+    padding: 0 0.3rem;
+    flex-shrink: 0;
+}
+
+/* Run history dots */
+.pipe-recent-runs {
+    margin-bottom: 1rem;
+}
+
+.pipe-section-label {
+    font-size: 0.75rem;
+    color: #8b949e;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 0.4rem;
+}
+
+.pipe-run-history {
+    display: flex;
+    gap: 3px;
+    align-items: center;
+}
+
+.pipe-run-dot {
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: transform 0.15s;
+}
+
+.pipe-run-dot:hover {
+    transform: scaleY(1.5);
+}
+
+.pipe-run-dot.dot-succeeded { background: #3fb950; }
+.pipe-run-dot.dot-failed { background: #f85149; }
+
+/* Commit info */
+.pipe-commit-info {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    font-size: 0.8rem;
+    color: #8b949e;
+    margin-bottom: 1rem;
+    padding: 0.5rem 0.75rem;
+    background: rgba(255, 255, 255, 0.02);
+    border-radius: 6px;
+}
+
+.pipe-commit-sha {
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    color: #58a6ff;
+    background: rgba(56, 139, 253, 0.08);
+    padding: 0.15rem 0.4rem;
+    border-radius: 4px;
+    font-size: 0.75rem;
+}
+
+.pipe-commit-msg {
+    color: #e6edf3;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.pipe-commit-author { color: #8b949e; }
+
+/* Action bar */
+.pipe-actions {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.pipe-action-danger {
+    color: #f85149 !important;
+    border-color: rgba(248, 81, 73, 0.2) !important;
+}
+
+.pipe-action-danger:hover {
+    background: rgba(248, 81, 73, 0.1) !important;
+}
+
+/* Coming soon banner */
+.pipe-coming-soon {
+    display: flex;
+    align-items: center;
+    gap: 1.25rem;
+    margin-top: 1.5rem;
+    padding: 1.25rem 1.5rem;
+    background: linear-gradient(135deg, rgba(56, 139, 253, 0.06), rgba(163, 113, 247, 0.06));
+    border: 1px solid rgba(56, 139, 253, 0.15);
+    border-radius: 12px;
+}
+
+.pipe-coming-soon-icon {
+    font-size: 2rem;
+}
+
+.pipe-coming-soon-text strong {
+    color: #e6edf3;
+    font-size: 0.95rem;
+}
+
+.pipe-coming-soon-text p {
+    color: #8b949e;
+    font-size: 0.82rem;
+    margin: 0.4rem 0 0.6rem;
+    line-height: 1.5;
+}
+
+.pipe-coming-soon-features {
+    display: flex;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+}
+
+.pipe-feature-tag {
+    padding: 0.2rem 0.6rem;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+    color: #8b949e;
+    font-size: 0.72rem;
+}

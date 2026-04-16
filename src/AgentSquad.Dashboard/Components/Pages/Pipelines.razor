@@ -1,0 +1,392 @@
+@page "/pipelines"
+@rendermode InteractiveServer
+@implements IDisposable
+
+<PageTitle>AgentSquad — Pipelines</PageTitle>
+
+<div class="dashboard-header">
+    <h1>Pipelines</h1>
+    <div class="header-badges">
+        <span class="header-badge healthy">✅ @_pipelines.Count(p => p.LastStatus == "succeeded") Passing</span>
+        <span class="header-badge warning">⏳ @_pipelines.Count(p => p.LastStatus == "running") Running</span>
+        <span class="header-badge critical">❌ @_pipelines.Count(p => p.LastStatus == "failed") Failed</span>
+    </div>
+</div>
+
+@* Provider tabs *@
+<div class="pipe-provider-bar">
+    @foreach (var prov in _providers)
+    {
+        <button class="pipe-provider-tab @(prov.Id == _activeProvider ? "active" : "")"
+                @onclick="() => SetProvider(prov.Id)">
+            <span class="pipe-provider-icon">@prov.Icon</span>
+            @prov.Name
+            @if (!prov.Connected)
+            {
+                <span class="pipe-provider-badge disconnected" title="Not connected">●</span>
+            }
+            else
+            {
+                <span class="pipe-provider-badge connected" title="Connected">●</span>
+            }
+        </button>
+    }
+    <button class="pipe-provider-tab pipe-add-provider" title="Connect a new CI/CD provider">
+        <span class="pipe-provider-icon">➕</span> Add Provider
+    </button>
+</div>
+
+@* Toolbar *@
+<div class="pipe-toolbar">
+    <div class="pipe-search">
+        <input type="text" placeholder="Filter pipelines..." @bind="_searchFilter" @bind:event="oninput" class="pipe-search-input" />
+    </div>
+    <div class="pipe-filters">
+        <button class="pipe-filter-btn @(_statusFilter == "all" ? "active" : "")" @onclick='() => _statusFilter = "all"'>All</button>
+        <button class="pipe-filter-btn @(_statusFilter == "running" ? "active" : "")" @onclick='() => _statusFilter = "running"'>Running</button>
+        <button class="pipe-filter-btn @(_statusFilter == "failed" ? "active" : "")" @onclick='() => _statusFilter = "failed"'>Failed</button>
+        <button class="pipe-filter-btn @(_statusFilter == "succeeded" ? "active" : "")" @onclick='() => _statusFilter = "succeeded"'>Passed</button>
+    </div>
+    <button class="pipe-action-btn" title="Refresh all pipelines">🔄 Refresh</button>
+</div>
+
+@{
+    var filtered = GetFilteredPipelines();
+}
+
+@if (!filtered.Any())
+{
+    <div class="empty-state">
+        <div class="empty-icon">🔧</div>
+        <div class="empty-text">No pipelines match your filter</div>
+        <div class="empty-sub">Try adjusting your search or status filter</div>
+    </div>
+}
+else
+{
+    <div class="pipe-list">
+        @foreach (var pipe in filtered)
+        {
+            <div class="pipe-card @($"pipe-{pipe.LastStatus}")" @onclick="() => ToggleExpand(pipe.Id)">
+                <div class="pipe-card-header">
+                    <div class="pipe-card-left">
+                        <span class="pipe-status-icon">@StatusIcon(pipe.LastStatus)</span>
+                        <div class="pipe-card-info">
+                            <div class="pipe-card-name">@pipe.Name</div>
+                            <div class="pipe-card-meta">
+                                <span class="pipe-card-branch">🌿 @pipe.Branch</span>
+                                <span class="pipe-card-trigger">@pipe.Trigger</span>
+                                <span class="pipe-card-time">@pipe.LastRunTime</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="pipe-card-right">
+                        <span class="pipe-card-duration">⏱ @pipe.Duration</span>
+                        <span class="pipe-card-run-num">#@pipe.RunNumber</span>
+                        <button class="pipe-rerun-btn" title="Re-run pipeline" @onclick:stopPropagation="true">▶ Re-run</button>
+                    </div>
+                </div>
+
+                @if (_expandedPipeline == pipe.Id)
+                {
+                    <div class="pipe-card-expanded">
+                        @* Stage visualization *@
+                        <div class="pipe-stages">
+                            @foreach (var stage in pipe.Stages)
+                            {
+                                <div class="pipe-stage @($"stage-{stage.Status}")">
+                                    <div class="pipe-stage-icon">@StatusIcon(stage.Status)</div>
+                                    <div class="pipe-stage-name">@stage.Name</div>
+                                    <div class="pipe-stage-duration">@stage.Duration</div>
+                                </div>
+                                @if (stage != pipe.Stages.Last())
+                                {
+                                    <div class="pipe-stage-connector">→</div>
+                                }
+                            }
+                        </div>
+
+                        @* Recent runs *@
+                        <div class="pipe-recent-runs">
+                            <div class="pipe-section-label">Recent Runs</div>
+                            <div class="pipe-run-history">
+                                @foreach (var run in pipe.RecentRuns)
+                                {
+                                    <div class="pipe-run-dot @($"dot-{run.Status}")" title="Run #@run.Number — @run.Status (@run.Duration)">
+                                    </div>
+                                }
+                            </div>
+                        </div>
+
+                        @* Commit info *@
+                        <div class="pipe-commit-info">
+                            <span class="pipe-commit-sha">@pipe.CommitSha</span>
+                            <span class="pipe-commit-msg">@pipe.CommitMessage</span>
+                            <span class="pipe-commit-author">by @pipe.Author</span>
+                        </div>
+
+                        @* Action buttons *@
+                        <div class="pipe-actions">
+                            <button class="pipe-action-btn">📋 View Logs</button>
+                            <button class="pipe-action-btn">🔁 Re-run Failed</button>
+                            <button class="pipe-action-btn">⚙️ Settings</button>
+                            <button class="pipe-action-btn pipe-action-danger">🚫 Cancel</button>
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+    </div>
+}
+
+@* Coming soon banner *@
+<div class="pipe-coming-soon">
+    <div class="pipe-coming-soon-icon">🚀</div>
+    <div class="pipe-coming-soon-text">
+        <strong>Pipeline Integration — Preview</strong>
+        <p>This is a preview of the unified pipeline management view. Connect your CI/CD providers to manage builds, deployments, and releases without leaving the dashboard.</p>
+        <div class="pipe-coming-soon-features">
+            <span class="pipe-feature-tag">GitHub Actions</span>
+            <span class="pipe-feature-tag">Azure DevOps</span>
+            <span class="pipe-feature-tag">Jenkins</span>
+            <span class="pipe-feature-tag">GitLab CI</span>
+            <span class="pipe-feature-tag">CircleCI</span>
+            <span class="pipe-feature-tag">JIRA Automation</span>
+        </div>
+    </div>
+</div>
+
+@code {
+    private string _activeProvider = "github";
+    private string _searchFilter = "";
+    private string _statusFilter = "all";
+    private string? _expandedPipeline;
+    private System.Threading.Timer? _timer;
+
+    private List<PipelineProvider> _providers = new()
+    {
+        new("github", "GitHub Actions", "🐙", true),
+        new("ado", "Azure DevOps", "🔷", false),
+        new("jenkins", "Jenkins", "🏗️", false),
+        new("gitlab", "GitLab CI", "🦊", false),
+    };
+
+    private List<MockPipeline> _pipelines = new();
+
+    protected override void OnInitialized()
+    {
+        _pipelines = GenerateMockPipelines();
+        _timer = new System.Threading.Timer(async _ =>
+        {
+            SimulateRunningPipelines();
+            await InvokeAsync(StateHasChanged);
+        }, null, 5000, 5000);
+    }
+
+    private void SetProvider(string id)
+    {
+        _activeProvider = id;
+        _pipelines = GenerateMockPipelines();
+        _expandedPipeline = null;
+    }
+
+    private void ToggleExpand(string id)
+    {
+        _expandedPipeline = _expandedPipeline == id ? null : id;
+    }
+
+    private IEnumerable<MockPipeline> GetFilteredPipelines()
+    {
+        var q = _pipelines.AsEnumerable();
+        if (_statusFilter != "all")
+            q = q.Where(p => p.LastStatus == _statusFilter);
+        if (!string.IsNullOrWhiteSpace(_searchFilter))
+            q = q.Where(p => p.Name.Contains(_searchFilter, StringComparison.OrdinalIgnoreCase)
+                          || p.Branch.Contains(_searchFilter, StringComparison.OrdinalIgnoreCase));
+        return q;
+    }
+
+    private void SimulateRunningPipelines()
+    {
+        foreach (var p in _pipelines.Where(p => p.LastStatus == "running"))
+        {
+            var activeStage = p.Stages.FirstOrDefault(s => s.Status == "running");
+            if (activeStage != null)
+            {
+                var idx = p.Stages.IndexOf(activeStage);
+                // Randomly complete stage
+                if (Random.Shared.NextDouble() > 0.6)
+                {
+                    activeStage.Status = "succeeded";
+                    activeStage.Duration = $"{Random.Shared.Next(10, 90)}s";
+                    if (idx + 1 < p.Stages.Count)
+                        p.Stages[idx + 1].Status = "running";
+                    else
+                    {
+                        p.LastStatus = "succeeded";
+                        p.Duration = $"{Random.Shared.Next(2, 8)}m {Random.Shared.Next(10, 59)}s";
+                    }
+                }
+            }
+        }
+    }
+
+    private static string StatusIcon(string status) => status switch
+    {
+        "succeeded" => "✅",
+        "failed" => "❌",
+        "running" => "⏳",
+        "skipped" => "⏭️",
+        "queued" => "🕐",
+        "cancelled" => "🚫",
+        _ => "❓"
+    };
+
+    private List<MockPipeline> GenerateMockPipelines() => _activeProvider switch
+    {
+        "github" => new List<MockPipeline>
+        {
+            new("gh-1", "CI — Build & Test", "main", "push", "succeeded", "3m 42s", 127,
+                "abc1234", "feat: add dashboard metrics endpoint", "SE Agent 1",
+                new() {
+                    new("Checkout", "succeeded", "4s"),
+                    new("Restore", "succeeded", "18s"),
+                    new("Build", "succeeded", "1m 12s"),
+                    new("Test", "succeeded", "1m 48s"),
+                    new("Upload Artifacts", "succeeded", "20s"),
+                },
+                GenerateRunHistory(20, 0.85)),
+            new("gh-2", "Deploy — Staging", "main", "workflow_dispatch", "running", "1m 20s", 64,
+                "def5678", "fix: resolve auth token refresh", "Architect",
+                new() {
+                    new("Build Image", "succeeded", "45s"),
+                    new("Push to ACR", "succeeded", "22s"),
+                    new("Deploy Staging", "running", "..."),
+                    new("Smoke Tests", "queued", "—"),
+                    new("Notify", "queued", "—"),
+                },
+                GenerateRunHistory(15, 0.73)),
+            new("gh-3", "PR Validation", "feature/auth-module", "pull_request", "failed", "2m 10s", 312,
+                "789abcd", "feat: implement JWT authentication", "SE Agent 2",
+                new() {
+                    new("Lint", "succeeded", "12s"),
+                    new("Build", "succeeded", "1m 02s"),
+                    new("Unit Tests", "failed", "48s"),
+                    new("Integration Tests", "skipped", "—"),
+                    new("Coverage", "skipped", "—"),
+                },
+                GenerateRunHistory(25, 0.68)),
+            new("gh-4", "Nightly E2E", "main", "schedule", "succeeded", "12m 05s", 89,
+                "e1f2a3b", "chore: update Playwright to 1.42", "Test Engineer",
+                new() {
+                    new("Setup", "succeeded", "30s"),
+                    new("Install Browsers", "succeeded", "1m 15s"),
+                    new("E2E Suite", "succeeded", "9m 40s"),
+                    new("Report", "succeeded", "40s"),
+                },
+                GenerateRunHistory(12, 0.92)),
+            new("gh-5", "CodeQL Analysis", "main", "schedule", "succeeded", "8m 33s", 45,
+                "c4d5e6f", "security: weekly code analysis", "System",
+                new() {
+                    new("Initialize", "succeeded", "15s"),
+                    new("Autobuild", "succeeded", "2m 40s"),
+                    new("Analyze", "succeeded", "5m 18s"),
+                    new("Upload SARIF", "succeeded", "20s"),
+                },
+                GenerateRunHistory(8, 0.95)),
+            new("gh-6", "Release — Production", "release/v2.1", "release", "succeeded", "6m 12s", 18,
+                "a1b2c3d", "release: v2.1.0 reporting dashboard", "PM Agent",
+                new() {
+                    new("Build", "succeeded", "1m 30s"),
+                    new("Test", "succeeded", "2m 10s"),
+                    new("Docker Push", "succeeded", "48s"),
+                    new("Deploy Prod", "succeeded", "1m 04s"),
+                    new("Health Check", "succeeded", "40s"),
+                },
+                GenerateRunHistory(18, 0.89)),
+        },
+        "ado" => new List<MockPipeline>
+        {
+            new("ado-1", "Build Pipeline", "main", "CI", "succeeded", "4m 15s", 203,
+                "ff1122", "update: pipeline YAML for multi-stage", "DevOps",
+                new() {
+                    new("Restore", "succeeded", "20s"),
+                    new("Build", "succeeded", "2m 05s"),
+                    new("Test", "succeeded", "1m 30s"),
+                    new("Publish", "succeeded", "20s"),
+                },
+                GenerateRunHistory(20, 0.88)),
+            new("ado-2", "Release Pipeline", "main", "Artifact", "running", "2m 00s", 87,
+                "aa3344", "deploy: staging environment update", "Release Manager",
+                new() {
+                    new("Dev", "succeeded", "1m 10s"),
+                    new("QA", "running", "..."),
+                    new("Staging", "queued", "—"),
+                    new("Prod", "queued", "—"),
+                },
+                GenerateRunHistory(15, 0.80)),
+        },
+        _ => new List<MockPipeline>
+        {
+            new("other-1", "Sample Pipeline", "main", "push", "succeeded", "2m 00s", 10,
+                "000111", "initial setup", "System",
+                new() { new("Build", "succeeded", "1m"), new("Deploy", "succeeded", "1m") },
+                GenerateRunHistory(5, 0.90)),
+        }
+    };
+
+    private static List<RunDot> GenerateRunHistory(int count, double successRate)
+    {
+        var runs = new List<RunDot>();
+        for (int i = count; i >= 1; i--)
+        {
+            var status = Random.Shared.NextDouble() < successRate ? "succeeded" : "failed";
+            runs.Add(new RunDot(i, status, $"{Random.Shared.Next(1, 15)}m {Random.Shared.Next(0, 59)}s"));
+        }
+        return runs;
+    }
+
+    public void Dispose() => _timer?.Dispose();
+
+    // Models
+    record PipelineProvider(string Id, string Name, string Icon, bool Connected);
+
+    class MockPipeline
+    {
+        public string Id { get; set; }
+        public string Name { get; set; }
+        public string Branch { get; set; }
+        public string Trigger { get; set; }
+        public string LastStatus { get; set; }
+        public string Duration { get; set; }
+        public int RunNumber { get; set; }
+        public string CommitSha { get; set; }
+        public string CommitMessage { get; set; }
+        public string Author { get; set; }
+        public List<PipelineStage> Stages { get; set; }
+        public List<RunDot> RecentRuns { get; set; }
+        public string LastRunTime => $"{Random.Shared.Next(1, 45)}m ago";
+
+        public MockPipeline(string id, string name, string branch, string trigger,
+            string lastStatus, string duration, int runNumber,
+            string commitSha, string commitMessage, string author,
+            List<PipelineStage> stages, List<RunDot> recentRuns)
+        {
+            Id = id; Name = name; Branch = branch; Trigger = trigger;
+            LastStatus = lastStatus; Duration = duration; RunNumber = runNumber;
+            CommitSha = commitSha; CommitMessage = commitMessage; Author = author;
+            Stages = stages; RecentRuns = recentRuns;
+        }
+    }
+
+    class PipelineStage
+    {
+        public string Name { get; set; }
+        public string Status { get; set; }
+        public string Duration { get; set; }
+        public PipelineStage(string name, string status, string duration)
+        { Name = name; Status = status; Duration = duration; }
+    }
+
+    record RunDot(int Number, string Status, string Duration);
+}
