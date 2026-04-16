@@ -1,5 +1,6 @@
 using AgentSquad.Core.Agents;
 using AgentSquad.Core.Agents.Reasoning;
+using AgentSquad.Core.Agents.Steps;
 using AgentSquad.Core.AI;
 using AgentSquad.Core.Configuration;
 using AgentSquad.Core.GitHub;
@@ -27,6 +28,7 @@ public class ResearcherAgent : AgentBase
     private readonly SelfAssessmentService _selfAssessment;
     private readonly IAgentReasoningLog _reasoningLog;
     private readonly IPromptTemplateService _promptService;
+    private readonly IAgentTaskTracker _taskTracker;
 
     private readonly Queue<ResearchDirective> _researchQueue = new();
     private readonly List<IDisposable> _subscriptions = new();
@@ -46,6 +48,7 @@ public class ResearcherAgent : AgentBase
         IAgentReasoningLog reasoningLog,
         ILogger<ResearcherAgent> logger,
         IPromptTemplateService promptService,
+        IAgentTaskTracker taskTracker,
         RoleContextProvider? roleContextProvider = null,
         PlaywrightRunner? playwrightRunner = null)
         : base(identity, logger, memoryStore, roleContextProvider)
@@ -60,6 +63,7 @@ public class ResearcherAgent : AgentBase
         _selfAssessment = selfAssessment ?? throw new ArgumentNullException(nameof(selfAssessment));
         _reasoningLog = reasoningLog ?? throw new ArgumentNullException(nameof(reasoningLog));
         _promptService = promptService ?? throw new ArgumentNullException(nameof(promptService));
+        _taskTracker = taskTracker ?? throw new ArgumentNullException(nameof(taskTracker));
         _playwrightRunner = playwrightRunner;
     }
 
@@ -129,6 +133,8 @@ public class ResearcherAgent : AgentBase
 
                         // Create the PR upfront so it's visible immediately
                         UpdateStatus(AgentStatus.Working, "Creating PR for Research.md");
+                        string? createPrStepId = null;
+                        try { createPrStepId = _taskTracker.BeginStep(Identity.Id, directive.TaskId, "Create research PR", "Opening PR for Research.md", Identity.ModelTier); } catch { }
                         var pr = await _prWorkflow.OpenDocumentPRAsync(
                             Identity.DisplayName,
                             "Research.md",
@@ -136,6 +142,7 @@ public class ResearcherAgent : AgentBase
                             $"Research findings covering: {directive.Topic}",
                             relatedIssue,
                             ct);
+                        try { if (createPrStepId is not null) _taskTracker.CompleteStep(createPrStepId); } catch { }
 
                         // Resume-aware: check if gate is already pending/approved from a prior run
                         var gateStatus = await _gateCheck.GetGateStatusAsync(
@@ -162,7 +169,10 @@ public class ResearcherAgent : AgentBase
                             Logger.LogInformation("Starting research on: {Topic}", directive.Topic);
                             LogActivity("task", $"🔬 Starting research on: {directive.Topic}");
 
-                            var research = await ConductResearchAsync(directive, ct);
+                            string? researchStepId = null;
+                            try { researchStepId = _taskTracker.BeginStep(Identity.Id, directive.TaskId, "Multi-turn research", $"Conducting research on: {directive.Topic}", Identity.ModelTier); } catch { }
+                            var research = await ConductResearchAsync(directive, researchStepId, ct);
+                            try { if (researchStepId is not null) _taskTracker.CompleteStep(researchStepId); } catch { }
 
                             // Build the full Research.md content (design section was cached during research)
                             var existingContent = await _projectFiles.GetResearchDocAsync(ct);
@@ -177,14 +187,20 @@ public class ResearcherAgent : AgentBase
                         if (updatedDoc is not null && !pr.IsMerged)
                         {
                             UpdateStatus(AgentStatus.Working, "Committing Research.md for review");
+                            string? commitStepId = null;
+                            try { commitStepId = _taskTracker.BeginStep(Identity.Id, directive.TaskId, "Commit Research.md", "Committing research findings to PR"); } catch { }
                             await _prWorkflow.CommitDocumentToPRAsync(
                                 pr, "Research.md", updatedDoc,
                                 $"Add research findings: {directive.Topic}", ct);
+                            try { if (commitStepId is not null) _taskTracker.CompleteStep(commitStepId); } catch { }
                         }
 
                         // === Gate: ResearchFindings — human reviews before merge ===
                         if (gateStatus != GateStatus.Approved)
                         {
+                            string? gateStepId = null;
+                            try { gateStepId = _taskTracker.BeginStep(Identity.Id, directive.TaskId, "Human gate review", $"Awaiting human approval on PR #{pr.Number}"); } catch { }
+                            try { if (gateStepId is not null) _taskTracker.SetStepWaiting(gateStepId); } catch { }
                             var maxRevisions = 3;
                             for (var revision = 0; revision < maxRevisions; revision++)
                             {
@@ -229,6 +245,7 @@ public class ResearcherAgent : AgentBase
                                 await _github.AddPullRequestCommentAsync(pr.Number,
                                     $"📝 **Revised** based on your feedback:\n\n> {gateWait.Feedback}\n\nPlease review the updated Research.md.", ct);
                             }
+                            try { if (gateStepId is not null) _taskTracker.CompleteStep(gateStepId); } catch { }
                         }
 
                         // Merge after gate approval (skip if PR already merged)
@@ -260,6 +277,8 @@ public class ResearcherAgent : AgentBase
                             }
                         }
 
+                        string? signalStepId = null;
+                        try { signalStepId = _taskTracker.BeginStep(Identity.Id, directive.TaskId, "Signal PM", "Broadcasting ResearchComplete to all agents"); } catch { }
                         await _messageBus.PublishAsync(new StatusUpdateMessage
                         {
                             FromAgentId = Identity.Id,
@@ -269,6 +288,7 @@ public class ResearcherAgent : AgentBase
                             CurrentTask = directive.TaskId,
                             Details = $"Research complete: {directive.Topic}"
                         }, ct);
+                        try { if (signalStepId is not null) _taskTracker.CompleteStep(signalStepId); } catch { }
 
                         Logger.LogInformation(
                             "Research complete for task {TaskId}: {Topic}",
@@ -336,7 +356,7 @@ public class ResearcherAgent : AgentBase
     #region Research Logic
 
     private async Task<ResearchResult> ConductResearchAsync(
-        ResearchDirective directive, CancellationToken ct)
+        ResearchDirective directive, string? trackingStepId, CancellationToken ct)
     {
         // Quick mode: produce a minimal 1-paragraph research summary for fast testing
         if (_config.Project.QuickDocumentCreation)
@@ -462,6 +482,7 @@ public class ResearcherAgent : AgentBase
             history.AddUserMessage(singlePassPrompt);
 
             var response = await chat.GetChatMessageContentAsync(history, cancellationToken: ct);
+            try { if (trackingStepId is not null) { _taskTracker.RecordLlmCall(trackingStepId); _taskTracker.RecordSubStep(trackingStepId, "Single-pass research"); } } catch { }
             synthesisContent = response.Content ?? "";
             detailedAnalysis = synthesisContent;
         }
@@ -482,6 +503,7 @@ public class ResearcherAgent : AgentBase
         var subQuestionsResponse = await chat.GetChatMessageContentAsync(
             history, cancellationToken: ct);
         history.AddAssistantMessage(subQuestionsResponse.Content ?? "");
+        try { if (trackingStepId is not null) { _taskTracker.RecordLlmCall(trackingStepId); _taskTracker.RecordSubStep(trackingStepId, "Turn 1/3: Identifying sub-questions"); } } catch { }
 
         Logger.LogDebug("Research sub-questions identified for {Topic}", directive.Topic);
 
@@ -503,6 +525,7 @@ public class ResearcherAgent : AgentBase
         var analysisResponse = await chat.GetChatMessageContentAsync(
             history, cancellationToken: ct);
         history.AddAssistantMessage(analysisResponse.Content ?? "");
+        try { if (trackingStepId is not null) { _taskTracker.RecordLlmCall(trackingStepId); _taskTracker.RecordSubStep(trackingStepId, "Turn 2/3: Deep-dive analysis"); } } catch { }
 
         Logger.LogDebug("Detailed analysis complete for {Topic}", directive.Topic);
 
@@ -527,10 +550,13 @@ public class ResearcherAgent : AgentBase
             history, cancellationToken: ct);
         synthesisContent = synthesisResponse.Content ?? "";
         detailedAnalysis = analysisResponse.Content ?? "";
+        try { if (trackingStepId is not null) { _taskTracker.RecordLlmCall(trackingStepId); _taskTracker.RecordSubStep(trackingStepId, "Turn 3/3: Synthesizing findings"); } } catch { }
 
         } // end else (multi-turn)
 
         // Self-assessment: assess and refine the research document
+        string? assessStepId = null;
+        try { assessStepId = _taskTracker.BeginStep(Identity.Id, directive.TaskId, "Self-assessment & refinement", "Assessing and refining research output", Identity.ModelTier); } catch { }
         _reasoningLog.Log(new AgentReasoningEvent
         {
             AgentId = Identity.Id,
@@ -555,6 +581,7 @@ public class ResearcherAgent : AgentBase
                 chat,
                 ct);
         }
+        try { if (assessStepId is not null) _taskTracker.CompleteStep(assessStepId); } catch { }
 
         Logger.LogDebug("Research synthesis complete for {Topic}", directive.Topic);
         await RememberAsync(MemoryType.Decision,

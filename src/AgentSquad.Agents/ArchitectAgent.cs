@@ -3,6 +3,7 @@ using System.Text;
 using AgentSquad.Core.Agents;
 using AgentSquad.Core.Agents.Decisions;
 using AgentSquad.Core.Agents.Reasoning;
+using AgentSquad.Core.Agents.Steps;
 using AgentSquad.Core.AI;
 using AgentSquad.Core.Configuration;
 using AgentSquad.Core.GitHub;
@@ -31,6 +32,7 @@ public class ArchitectAgent : AgentBase
     private readonly IAgentReasoningLog _reasoningLog;
     private readonly IPromptTemplateService _promptService;
     private readonly DecisionGateService? _decisionGate;
+    private readonly IAgentTaskTracker _taskTracker;
 
     private readonly Queue<ArchitectureDirective>_taskQueue = new();
     private readonly HashSet<int> _reviewedPrNumbers = new();
@@ -54,6 +56,7 @@ public class ArchitectAgent : AgentBase
         SelfAssessmentService selfAssessment,
         IAgentReasoningLog reasoningLog,
         IPromptTemplateService promptService,
+        IAgentTaskTracker taskTracker,
         ILogger<ArchitectAgent> logger,
         RoleContextProvider? roleContextProvider = null,
         DecisionGateService? decisionGate = null)
@@ -70,6 +73,7 @@ public class ArchitectAgent : AgentBase
         _selfAssessment = selfAssessment ?? throw new ArgumentNullException(nameof(selfAssessment));
         _reasoningLog = reasoningLog ?? throw new ArgumentNullException(nameof(reasoningLog));
         _promptService = promptService ?? throw new ArgumentNullException(nameof(promptService));
+        _taskTracker = taskTracker ?? throw new ArgumentNullException(nameof(taskTracker));
         _decisionGate = decisionGate;
     }
 
@@ -370,6 +374,8 @@ public class ArchitectAgent : AgentBase
 
         // Create the PR upfront so it's visible immediately
         UpdateStatus(AgentStatus.Working, "Creating PR for Architecture.md");
+        string? createPrStepId = null;
+        try { createPrStepId = _taskTracker.BeginStep(Identity.Id, directive.TaskId, "Create architecture PR", "Opening PR for Architecture.md"); } catch { }
         var pr = await _prWorkflow.OpenDocumentPRAsync(
             Identity.DisplayName,
             "Architecture.md",
@@ -378,6 +384,7 @@ public class ArchitectAgent : AgentBase
             "API contracts, infrastructure, security, and scaling strategy.",
             relatedIssue,
             ct);
+        try { if (createPrStepId is not null) _taskTracker.CompleteStep(createPrStepId); } catch { }
 
         // Resume-aware: check if gate is already pending/approved from a prior run
         var gateStatus = await _gateCheck.GetGateStatusAsync(
@@ -404,11 +411,14 @@ public class ArchitectAgent : AgentBase
         LogActivity("task", $"🏗️ Starting architecture design: {directive.Title}");
 
         // 1. Read PM specs and Research.md
+        string? readCtxStepId = null;
+        try { readCtxStepId = _taskTracker.BeginStep(Identity.Id, directive.TaskId, "Read context (PMSpec, Research)", "Reading PM specification and research findings"); } catch { }
         var pmSpec = await _projectFiles.GetPMSpecAsync(ct);
         var research = await _projectFiles.GetResearchDocAsync(ct);
 
         // 1b. Read visual design reference files directly for architecture decisions
         var designContext = await ReadDesignReferencesAsync(ct);
+        try { if (readCtxStepId is not null) _taskTracker.CompleteStep(readCtxStepId); } catch { }
 
         // 2. Use Semantic Kernel multi-turn conversation to design architecture
         var kernel = _modelRegistry.GetKernel(Identity.ModelTier, Identity.Id);
@@ -460,6 +470,8 @@ public class ArchitectAgent : AgentBase
         history.AddSystemMessage(systemPrompt);
 
         var useSinglePass = _config.CopilotCli.SinglePassMode;
+        string? designStepId = null;
+        try { designStepId = _taskTracker.BeginStep(Identity.Id, directive.TaskId, "Multi-turn architecture design", "Designing architecture via AI conversation", Identity.ModelTier); } catch { }
 
         if (useSinglePass)
         {
@@ -501,6 +513,7 @@ public class ArchitectAgent : AgentBase
             var singleResponse = await chat.GetChatMessageContentAsync(
                 history, cancellationToken: ct);
             architectureDoc = singleResponse.Content?.Trim() ?? "";
+            try { if (designStepId is not null) { _taskTracker.RecordLlmCall(designStepId); _taskTracker.RecordSubStep(designStepId, "Single-pass architecture design"); } } catch { }
         }
         else
         {
@@ -530,6 +543,7 @@ public class ArchitectAgent : AgentBase
         var decisionsResponse = await chat.GetChatMessageContentAsync(
             history, cancellationToken: ct);
         history.AddAssistantMessage(decisionsResponse.Content ?? "");
+        try { if (designStepId is not null) { _taskTracker.RecordLlmCall(designStepId); _taskTracker.RecordSubStep(designStepId, "Turn 1/5: Key architectural decisions"); } } catch { }
 
         Logger.LogDebug("Architectural decisions identified for {TaskId}", directive.TaskId);
         await RememberAsync(MemoryType.Decision,
@@ -551,6 +565,7 @@ public class ArchitectAgent : AgentBase
         var componentsResponse = await chat.GetChatMessageContentAsync(
             history, cancellationToken: ct);
         history.AddAssistantMessage(componentsResponse.Content ?? "");
+        try { if (designStepId is not null) { _taskTracker.RecordLlmCall(designStepId); _taskTracker.RecordSubStep(designStepId, "Turn 2/5: Components & interactions"); } } catch { }
 
         Logger.LogDebug("System components designed for {TaskId}", directive.TaskId);
 
@@ -568,6 +583,7 @@ public class ArchitectAgent : AgentBase
         var contractsResponse = await chat.GetChatMessageContentAsync(
             history, cancellationToken: ct);
         history.AddAssistantMessage(contractsResponse.Content ?? "");
+        try { if (designStepId is not null) { _taskTracker.RecordLlmCall(designStepId); _taskTracker.RecordSubStep(designStepId, "Turn 3/5: Data model & APIs"); } } catch { }
 
         Logger.LogDebug("Data model and contracts defined for {TaskId}", directive.TaskId);
 
@@ -585,6 +601,7 @@ public class ArchitectAgent : AgentBase
         var risksResponse = await chat.GetChatMessageContentAsync(
             history, cancellationToken: ct);
         history.AddAssistantMessage(risksResponse.Content ?? "");
+        try { if (designStepId is not null) { _taskTracker.RecordLlmCall(designStepId); _taskTracker.RecordSubStep(designStepId, "Turn 4/5: Security & scaling"); } } catch { }
 
         Logger.LogDebug("Cross-cutting concerns addressed for {TaskId}", directive.TaskId);
 
@@ -621,10 +638,14 @@ public class ArchitectAgent : AgentBase
         var architectureResponse = await chat.GetChatMessageContentAsync(
             history, cancellationToken: ct);
         architectureDoc = architectureResponse.Content?.Trim() ?? "";
+        try { if (designStepId is not null) { _taskTracker.RecordLlmCall(designStepId); _taskTracker.RecordSubStep(designStepId, "Turn 5/5: Compiling Architecture.md"); } } catch { }
 
         } // end else (multi-turn)
 
         // Self-assessment: assess and refine the architecture document
+        try { if (designStepId is not null) _taskTracker.CompleteStep(designStepId); } catch { }
+        string? assessStepId = null;
+        try { assessStepId = _taskTracker.BeginStep(Identity.Id, directive.TaskId, "Self-assessment & impact classification", "Assessing and refining architecture output", Identity.ModelTier); } catch { }
         _reasoningLog.Log(new AgentReasoningEvent
         {
             AgentId = Identity.Id,
@@ -708,6 +729,7 @@ public class ArchitectAgent : AgentBase
                     archDecision.HumanFeedback ?? "No feedback provided", ct);
             }
         }
+        try { if (assessStepId is not null) _taskTracker.CompleteStep(assessStepId); } catch { }
 
         } // end else (fresh AI work, not resuming from gate)
 
@@ -715,14 +737,20 @@ public class ArchitectAgent : AgentBase
         if (architectureDoc is not null && !pr.IsMerged)
         {
             UpdateStatus(AgentStatus.Working, "Committing Architecture.md for review");
+            string? commitStepId = null;
+            try { commitStepId = _taskTracker.BeginStep(Identity.Id, directive.TaskId, "Commit Architecture.md", "Committing architecture document to PR"); } catch { }
             await _prWorkflow.CommitDocumentToPRAsync(
                 pr, "Architecture.md", architectureDoc,
                 $"Add system architecture for {directive.Title}", ct);
+            try { if (commitStepId is not null) _taskTracker.CompleteStep(commitStepId); } catch { }
         }
 
         // === Gate: ArchitectureDesign — human reviews architecture before merge ===
         if (gateStatus != GateStatus.Approved)
         {
+            string? gateStepId = null;
+            try { gateStepId = _taskTracker.BeginStep(Identity.Id, directive.TaskId, "Human gate review", $"Awaiting human approval on PR #{pr.Number}"); } catch { }
+            try { if (gateStepId is not null) _taskTracker.SetStepWaiting(gateStepId); } catch { }
             var maxRevisions = 3;
             for (var revision = 0; revision < maxRevisions; revision++)
             {
@@ -751,14 +779,18 @@ public class ArchitectAgent : AgentBase
                 await _github.AddPullRequestCommentAsync(pr.Number,
                     $"📝 **Revised** based on your feedback:\n\n> {gateWait.Feedback}\n\nPlease review the updated Architecture.md.", ct);
             }
+            try { if (gateStepId is not null) _taskTracker.CompleteStep(gateStepId); } catch { }
         }
 
         // Merge after gate approval (skip if PR already merged)
+        string? mergeStepId = null;
         if (!pr.IsMerged)
         {
             UpdateStatus(AgentStatus.Working, "Merging Architecture.md PR");
+            try { mergeStepId = _taskTracker.BeginStep(Identity.Id, directive.TaskId, "Merge PR", "Merging Architecture.md PR"); } catch { }
             await _prWorkflow.MergeDocumentPRAsync(
                 pr, Identity.DisplayName, "Architecture.md", ct);
+            try { if (mergeStepId is not null) _taskTracker.CompleteStep(mergeStepId); } catch { }
         }
 
         Logger.LogInformation("Architecture.md PR created and merged for task {TaskId}", directive.TaskId);
