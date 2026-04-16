@@ -535,7 +535,7 @@ public abstract class EngineerAgentBase : AgentBase
                         .ToList();
                     var overlapping = normalizedOwned.Count(f => mergedFileSet.Contains(f));
 
-                    if (overlapping > 0 && overlapping >= normalizedOwned.Count / 2)
+                    if (overlapping > 0 && overlapping * 2 >= normalizedOwned.Count)
                     {
                         Logger.LogWarning(
                             "{Role} {Name}: Task #{IssueNumber} has {Overlap}/{Total} files already in merged PRs — skipping as duplicate",

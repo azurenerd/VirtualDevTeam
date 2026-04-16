@@ -604,7 +604,10 @@ public class SoftwareEngineerAgent : EngineerAgentBase
             "- Do NOT create tasks that recreate files listed in merged PRs\n" +
             "- If T1 scaffolding has already been merged, skip T1 entirely and start from W1 tasks\n" +
             "- Only include tasks for work that has NOT been done yet\n" +
-            "- If a merged PR partially covers a feature, create a task only for the REMAINING work\n\n" +
+            "- If a merged PR partially covers a feature, create a task only for the REMAINING work\n" +
+            "- **NEVER create placeholder tasks named 'REMOVED', 'SKIP', 'N/A', or 'Merged into'.** " +
+            "Simply OMIT tasks that are already done — do not include them in the output at all.\n" +
+            "- Renumber remaining task IDs sequentially (T1, T2, T3...) after omitting done tasks.\n\n" +
 
             "CRITICAL: Review the existing repository structure carefully. " +
             "Tasks MUST reference existing files when appropriate (modify, not recreate). " +
@@ -811,6 +814,27 @@ public class SoftwareEngineerAgent : EngineerAgentBase
             }
         }
 
+        // Filter out invalid/placeholder tasks the AI may have generated
+        var invalidNames = new[] { "REMOVED", "SKIP", "N/A", "MERGED INTO", "DUPLICATE", "ALREADY DONE" };
+        var invalidTasks = parsedTasks.Where(t =>
+            invalidNames.Any(n => t.Name.Contains(n, StringComparison.OrdinalIgnoreCase)) ||
+            string.IsNullOrWhiteSpace(t.Name)).ToList();
+        if (invalidTasks.Count > 0)
+        {
+            var removedIds = invalidTasks.Select(t => t.Id).ToHashSet();
+            parsedTasks.RemoveAll(t => removedIds.Contains(t.Id));
+            foreach (var task in parsedTasks)
+            {
+                task.Dependencies.RemoveAll(d => removedIds.Contains(d));
+                task.DependencyTypes = task.DependencyTypes
+                    .Where(kv => !removedIds.Contains(kv.Key))
+                    .ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase);
+            }
+            Logger.LogInformation("Filtered {Count} invalid/placeholder tasks from AI output: {Names}",
+                invalidTasks.Count, string.Join(", ", invalidTasks.Select(t => $"{t.Id}:{t.Name}")));
+            LogActivity("warning", $"⚠️ Filtered {invalidTasks.Count} invalid placeholder tasks from plan");
+        }
+
         // Enforce foundation-first pattern: ensure T1 is a foundation task
         // and all other tasks depend on it
         EnsureFoundationFirstPattern(parsedTasks);
@@ -931,7 +955,7 @@ public class SoftwareEngineerAgent : EngineerAgentBase
                         .ToList();
                     var overlap = normalizedFiles.Count(f => allMergedFiles.Contains(f));
 
-                    if (overlap > 0 && overlap >= normalizedFiles.Count / 2)
+                    if (overlap > 0 && overlap * 2 >= normalizedFiles.Count)
                     {
                         Logger.LogWarning(
                             "Removing task {TaskId} from plan: {Overlap}/{Total} files already exist in merged PRs",
@@ -948,7 +972,12 @@ public class SoftwareEngineerAgent : EngineerAgentBase
                     parsedTasks.RemoveAll(t => removedIds.Contains(t.Id));
                     // Clean up dependency references to removed tasks
                     foreach (var task in parsedTasks)
+                    {
                         task.Dependencies.RemoveAll(d => removedIds.Contains(d));
+                        task.DependencyTypes = task.DependencyTypes
+                            .Where(kv => !removedIds.Contains(kv.Key))
+                            .ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase);
+                    }
                     Logger.LogInformation("Removed {Count} duplicate tasks from plan", tasksToRemove.Count);
                 }
             }
@@ -957,6 +986,10 @@ public class SoftwareEngineerAgent : EngineerAgentBase
         {
             Logger.LogWarning(ex, "Merged PR deduplication check failed — proceeding with full plan");
         }
+
+        // Recompute waves from dependency graph to eliminate gaps after task removal.
+        // Wave = max(dependency waves) + 1, with foundation (T1) always at W0.
+        RecomputeWavesFromDependencies(parsedTasks);
 
         // Create GitHub issues for each task (the single source of truth)
         var createIssuesStepId = _taskTracker.BeginStep(Identity.Id, "pe-planning", "Create GitHub issues",
@@ -1084,6 +1117,25 @@ public class SoftwareEngineerAgent : EngineerAgentBase
                 return $"- {t.Id}: {t.Name} (Parent: #{t.ParentIssueNumber}){files} — {t.Description?.Split('\n').FirstOrDefault()}";
             }));
 
+            // Also include files from merged PRs so coverage validation knows what's already built
+            var mergedFileContext = "";
+            try
+            {
+                var mergedPRs = await GitHub.GetMergedPullRequestsAsync(ct);
+                if (mergedPRs.Count > 0)
+                {
+                    var mergedFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var mpr in mergedPRs.Take(10))
+                    {
+                        var prFiles = await GitHub.GetPullRequestChangedFilesAsync(mpr.Number, ct);
+                        foreach (var f in prFiles) mergedFiles.Add(f);
+                    }
+                    if (mergedFiles.Count > 0)
+                        mergedFileContext = $"\n\n## Already Merged Files (already on main)\n{string.Join("\n", mergedFiles.OrderBy(f => f).Select(f => $"- {f}"))}\n\nIf the enhancement's requirements are satisfied by these already-merged files, respond with COVERED.";
+                }
+            }
+            catch { /* non-critical */ }
+
             foreach (var enhancement in uncoveredEnhancements)
             {
                 var history = CreateChatHistory();
@@ -1115,8 +1167,8 @@ public class SoftwareEngineerAgent : EngineerAgentBase
                     : null;
                 history.AddUserMessage(enhUser ??
                     $"## Uncovered Enhancement #{enhancement.Number}: {enhancement.Title}\n{enhancement.Body}\n\n" +
-                    $"## Existing Engineering Tasks\n{existingTasksSummary}\n\n" +
-                    "Is this enhancement covered by the existing tasks, or was it missed?");
+                    $"## Existing Engineering Tasks\n{existingTasksSummary}{mergedFileContext}\n\n" +
+                    "Is this enhancement covered by the existing tasks or already-merged files, or was it missed?");
 
                 var response = await chat.GetChatMessageContentAsync(history, cancellationToken: ct);
                 var responseText = response.Content ?? "";
@@ -1521,7 +1573,7 @@ public class SoftwareEngineerAgent : EngineerAgentBase
                 var overlapping = taskFilesNormalized
                     .Count(f => mergedFileSet.Contains(f));
 
-                if (overlapping > 0 && overlapping >= taskFilesNormalized.Count / 2)
+                if (overlapping > 0 && overlapping * 2 >= taskFilesNormalized.Count)
                 {
                     Logger.LogWarning(
                         "Task {TaskId} (#{IssueNumber}): {Overlap}/{Total} owned files already exist in merged PRs — skipping as duplicate",
@@ -3921,6 +3973,84 @@ public class SoftwareEngineerAgent : EngineerAgentBase
     /// and all other tasks depend on T1. If the AI didn't produce a proper foundation task,
     /// this reorders tasks so the foundation-like one is first, or injects a synthetic one.
     /// </summary>
+    /// Recomputes wave assignments from the dependency graph to eliminate gaps.
+    /// Foundation tasks (first task, W0) keep their wave. Other tasks get:
+    /// wave = max(dependency waves) + 1, minimum W1 for tasks with no non-foundation deps.
+    private void RecomputeWavesFromDependencies(List<EngineeringTask> tasks)
+    {
+        if (tasks.Count <= 1) return;
+
+        var taskById = tasks.ToDictionary(t => t.Id, StringComparer.OrdinalIgnoreCase);
+        var foundationId = tasks[0].Id;
+
+        // Assign W0 to foundation
+        tasks[0].Wave = "W0";
+
+        // Compute waves via BFS from dependencies
+        var changed = true;
+        var iterations = 0;
+        while (changed && iterations < 20)
+        {
+            changed = false;
+            iterations++;
+            foreach (var task in tasks.Skip(1))
+            {
+                if (task.Id == IntegrationTaskId) continue;
+
+                var maxDepWave = 0;
+                foreach (var depId in task.Dependencies)
+                {
+                    if (string.Equals(depId, foundationId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        maxDepWave = Math.Max(maxDepWave, 0); // W0
+                        continue;
+                    }
+                    if (taskById.TryGetValue(depId, out var dep))
+                    {
+                        var depWaveNum = ParseWaveNumber(dep.Wave);
+                        maxDepWave = Math.Max(maxDepWave, depWaveNum);
+                    }
+                }
+
+                var newWave = $"W{maxDepWave + 1}";
+                // Tasks with only foundation dependency → W1
+                if (task.Dependencies.Count == 0 ||
+                    task.Dependencies.All(d => string.Equals(d, foundationId, StringComparison.OrdinalIgnoreCase)))
+                    newWave = "W1";
+
+                if (!string.Equals(task.Wave, newWave, StringComparison.OrdinalIgnoreCase))
+                {
+                    task.Wave = newWave;
+                    changed = true;
+                }
+            }
+        }
+
+        // Integration task always gets the highest wave + 1
+        var integrationTask = tasks.FirstOrDefault(t => t.Id == IntegrationTaskId);
+        if (integrationTask is not null)
+        {
+            var maxWave = tasks.Where(t => t.Id != IntegrationTaskId)
+                .Max(t => ParseWaveNumber(t.Wave));
+            integrationTask.Wave = $"W{maxWave + 1}";
+        }
+
+        // Log the recomputed wave distribution
+        var waveGroups = tasks.Where(t => t.Id != IntegrationTaskId)
+            .GroupBy(t => t.Wave).OrderBy(g => g.Key)
+            .Select(g => $"{g.Key}:{g.Count()}");
+        Logger.LogInformation("Recomputed waves from dependency graph: {Distribution}",
+            string.Join(", ", waveGroups));
+    }
+
+    private static int ParseWaveNumber(string? wave)
+    {
+        if (string.IsNullOrEmpty(wave)) return 1;
+        if (wave.StartsWith('W') && int.TryParse(wave.AsSpan(1), out var num))
+            return num;
+        return 1;
+    }
+
     private void EnsureFoundationFirstPattern(List<EngineeringTask> tasks)
     {
         if (tasks.Count <= 1) return;
@@ -4634,11 +4764,11 @@ internal record EngineeringTask
     // ── PE Parallelism Enhancements ──
 
     /// <summary>Wave assignment for parallel scheduling (W1, W2, etc.). Default W1.</summary>
-    public string Wave { get; init; } = "W1";
+    public string Wave { get; set; } = "W1";
     /// <summary>Files this task owns (CREATE + MODIFY), extracted from FilePlan. Normalized paths.</summary>
     public List<string> OwnedFiles { get; init; } = new();
     /// <summary>Typed dependencies: taskId → dependency type (files, api, schema, etc.).</summary>
-    public Dictionary<string, string> DependencyTypes { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, string> DependencyTypes { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 }
 
 // BUG FIX: Added AgentId field. Previously only Name (DisplayName) was stored, but
