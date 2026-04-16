@@ -27,6 +27,8 @@
 <div class="reasoning-type-filters">
     <button class="type-filter-btn @(_typeFilter == null ? "active" : "")"
             @onclick="() => SetTypeFilter(null)">All</button>
+    <button class="type-filter-btn @(_typeFilter == "Steps" ? "active" : "")"
+            @onclick='() => SetTypeFilter("Steps")'>📊 Steps</button>
     <button class="type-filter-btn @(_typeFilter == "Decisions" ? "active" : "")"
             @onclick='() => SetTypeFilter("Decisions")'>
         ⚖️ Decisions @if (_decisions.Count > 0) { <span class="filter-count">@_decisions.Count</span> }
@@ -39,8 +41,6 @@
             @onclick='() => SetTypeFilter("Assessing")'>🔍 Assessing</button>
     <button class="type-filter-btn @(_typeFilter == "Other" ? "active" : "")"
             @onclick='() => SetTypeFilter("Other")'>📋 Other</button>
-    <button class="type-filter-btn @(_typeFilter == "Steps" ? "active" : "")"
-            @onclick='() => SetTypeFilter("Steps")'>📊 Steps</button>
 </div>
 
 @if (_loading)
@@ -313,7 +313,7 @@ else
     private List<AgentDecision> _decisions = [];
     private List<string> _agentIds = [];
     private string? _selectedAgent;
-    private string? _typeFilter;
+    private string? _typeFilter = "Steps";
     private int _pendingDecisionCount;
     private bool _disposed;
     private bool _loading = true;
