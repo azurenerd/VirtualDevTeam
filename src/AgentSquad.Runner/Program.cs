@@ -229,6 +229,9 @@ api.MapPost("/reset", (DashboardDataService svc) =>
 api.MapGet("/cost-summary", (DashboardDataService svc) =>
     Results.Ok(new { TotalCost = svc.GetTotalEstimatedCost(), TotalCalls = svc.GetTotalAiCalls() }));
 
+api.MapGet("/metrics/aggregates", async (AgentSquad.Core.Metrics.BuildTestMetrics metrics, CancellationToken ct) =>
+    Results.Ok(await metrics.GetAggregatesAsync(DateTime.MinValue, ct)));
+
 api.MapGet("/repo-info", (IGitHubService github) =>
     Results.Ok(new { FullName = github.RepositoryFullName }));
 

@@ -4,8 +4,11 @@
 @using AgentSquad.Core.Diagnostics
 @using AgentSquad.Dashboard.Services
 @using AgentSquad.Orchestrator
+@using System.Net.Http.Json
 @implements IDisposable
 @inject IDashboardDataService DataService
+@inject DashboardMode Mode
+@inject IServiceProvider Services
 
 <PageTitle>AgentSquad — Health Monitor</PageTitle>
 
@@ -256,10 +259,34 @@
     private string _filterAgent = "";
     private string _filterCompliance = "";
 
+    private HttpClient? _http;
+    private List<DiagnosticHistoryEntry>? _standaloneDiagnostics;
+    private System.Threading.Timer? _pollTimer;
+
     protected override void OnInitialized()
     {
+        if (Mode.IsStandalone)
+        {
+            var factory = Services.GetService<IHttpClientFactory>();
+            _http = factory?.CreateClient("RunnerApi");
+            _pollTimer = new System.Threading.Timer(async _ => await PollDiagnosticsAsync(), null, 0, 5000);
+        }
         RefreshData();
         DataService.OnChange += OnDataChanged;
+    }
+
+    private async Task PollDiagnosticsAsync()
+    {
+        if (_http is null) return;
+        try
+        {
+            _assessment = await _http.GetFromJsonAsync<ExecutionHealthAssessment>("/api/health/assessment") ?? _assessment;
+            _standaloneDiagnostics = await _http.GetFromJsonAsync<List<DiagnosticHistoryEntry>>("/api/health/diagnostics?limit=100");
+            var agents = await _http.GetFromJsonAsync<List<AgentSnapshot>>("/api/agents");
+            if (agents is not null) _agents = agents;
+            await InvokeAsync(StateHasChanged);
+        }
+        catch { /* runner not reachable */ }
     }
 
     private void RefreshData()
@@ -284,6 +311,15 @@
         };
 
         var agentFilter = string.IsNullOrEmpty(_filterAgent) ? null : _filterAgent;
+
+        if (_standaloneDiagnostics is not null)
+        {
+            IEnumerable<DiagnosticHistoryEntry> query = _standaloneDiagnostics;
+            if (agentFilter is not null) query = query.Where(d => d.AgentId == agentFilter);
+            if (compliantFilter is not null) query = query.Where(d => d.IsCompliant == compliantFilter);
+            return query.OrderByDescending(d => d.Timestamp).Take(100).ToList();
+        }
+
         return DataService.GetDiagnosticHistory(agentFilter, compliantFilter, 100);
     }
 
@@ -308,5 +344,6 @@
     public void Dispose()
     {
         DataService.OnChange -= OnDataChanged;
+        _pollTimer?.Dispose();
     }
 }

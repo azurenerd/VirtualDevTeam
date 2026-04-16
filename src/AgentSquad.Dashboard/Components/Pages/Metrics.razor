@@ -4,9 +4,11 @@
 @using AgentSquad.Core.Metrics
 @using AgentSquad.Dashboard.Services
 @using AgentSquad.Orchestrator
+@using System.Net.Http.Json
 @implements IDisposable
 @inject IDashboardDataService DataService
-@inject BuildTestMetrics MetricsService
+@inject DashboardMode Mode
+@inject IServiceProvider Services
 
 <PageTitle>AgentSquad — Metrics</PageTitle>
 
@@ -224,8 +226,21 @@
 
     private static readonly AgentStatus[] _allStatuses = Enum.GetValues<AgentStatus>();
 
+    private BuildTestMetrics? _metricsService;
+    private HttpClient? _http;
+
     protected override async Task OnInitializedAsync()
     {
+        if (!Mode.IsStandalone)
+        {
+            _metricsService = Services.GetService<BuildTestMetrics>();
+        }
+        else
+        {
+            var factory = Services.GetService<IHttpClientFactory>();
+            _http = factory?.CreateClient("RunnerApi");
+        }
+
         RefreshData();
         await RefreshBuildTestMetricsAsync();
         DataService.OnChange += OnDataChanged;
@@ -240,9 +255,17 @@
     {
         try
         {
-            _buildTestMetrics = await MetricsService.GetAggregatesAsync(DateTime.MinValue);
+            if (_metricsService is not null)
+            {
+                _buildTestMetrics = await _metricsService.GetAggregatesAsync(DateTime.MinValue);
+            }
+            else if (_http is not null)
+            {
+                var result = await _http.GetFromJsonAsync<Dictionary<string, double>>("/api/metrics/aggregates");
+                if (result is not null) _buildTestMetrics = result;
+            }
         }
-        catch { /* metrics table may not exist yet */ }
+        catch { /* metrics table may not exist yet or runner not reachable */ }
     }
 
     private async void OnDataChanged()

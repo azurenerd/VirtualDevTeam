@@ -327,21 +327,23 @@ public abstract class AgentBase : IAgent, IDisposable
             _currentDiagnostic = diagnostic;
         }
 
-        // Only fire event if the summary actually changed (avoid noise)
-        if (previous?.Summary != diagnostic.Summary || previous?.IsCompliant != diagnostic.IsCompliant)
-        {
-            DiagnosticChanged?.Invoke(this, new DiagnosticChangedEventArgs
-            {
-                AgentId = Identity.Id,
-                Diagnostic = diagnostic
-            });
+        // Always fire the event so the dashboard snapshot stays in sync.
+        // Include whether the diagnostic actually changed for history recording.
+        bool changed = previous?.Summary != diagnostic.Summary 
+                    || previous?.IsCompliant != diagnostic.IsCompliant;
 
-            if (!diagnostic.IsCompliant)
-            {
-                Logger.LogWarning(
-                    "Agent {AgentId} self-diagnostic NON-COMPLIANT: {Issue}",
-                    Identity.Id, diagnostic.ComplianceIssue ?? diagnostic.Summary);
-            }
+        DiagnosticChanged?.Invoke(this, new DiagnosticChangedEventArgs
+        {
+            AgentId = Identity.Id,
+            Diagnostic = diagnostic,
+            IsChanged = changed
+        });
+
+        if (!diagnostic.IsCompliant)
+        {
+            Logger.LogWarning(
+                "Agent {AgentId} self-diagnostic NON-COMPLIANT: {Issue}",
+                Identity.Id, diagnostic.ComplianceIssue ?? diagnostic.Summary);
         }
     }
 

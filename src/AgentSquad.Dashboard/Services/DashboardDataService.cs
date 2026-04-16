@@ -109,6 +109,7 @@ public sealed class DashboardDataService : BackgroundService, IDashboardDataServ
     private readonly Dictionary<string, List<AgentLogEntry>> _agentErrors = new();
     private readonly Dictionary<string, IAgent> _trackedAgents = new();
     private readonly List<DiagnosticHistoryEntry> _diagnosticHistory = new();
+    private readonly Dictionary<string, DateTime> _lastDiagnosticRecordTime = new();
     private readonly List<ExecutionMilestone> _milestones = new();
     private readonly HashSet<string> _recordedMilestoneKeys = new();
     private readonly object _cacheLock = new();
@@ -566,6 +567,7 @@ public sealed class DashboardDataService : BackgroundService, IDashboardDataServ
         {
             if (_agentCache.TryGetValue(e.AgentId, out var snapshot))
             {
+                // Always update the snapshot cache
                 _agentCache[e.AgentId] = snapshot with
                 {
                     DiagnosticSummary = e.Diagnostic.Summary,
@@ -575,23 +577,30 @@ public sealed class DashboardDataService : BackgroundService, IDashboardDataServ
                     DiagnosticScenarioRef = e.Diagnostic.ScenarioRef
                 };
 
-                // Record to diagnostic history feed
-                _diagnosticHistory.Add(new DiagnosticHistoryEntry
-                {
-                    AgentId = e.AgentId,
-                    AgentDisplayName = snapshot.DisplayName,
-                    Role = snapshot.Role,
-                    Summary = e.Diagnostic.Summary,
-                    Justification = e.Diagnostic.Justification,
-                    IsCompliant = e.Diagnostic.IsCompliant,
-                    ComplianceIssue = e.Diagnostic.ComplianceIssue,
-                    ScenarioRef = e.Diagnostic.ScenarioRef,
-                    Timestamp = e.Diagnostic.Timestamp
-                });
+                // Record to history on actual changes or every 30s for heartbeat
+                var now = DateTime.UtcNow;
+                var lastRecorded = _lastDiagnosticRecordTime.GetValueOrDefault(e.AgentId, DateTime.MinValue);
+                bool shouldRecord = e.IsChanged || (now - lastRecorded).TotalSeconds >= 30;
 
-                // Trim history to prevent unbounded growth
-                if (_diagnosticHistory.Count > MaxDiagnosticHistory)
-                    _diagnosticHistory.RemoveRange(0, _diagnosticHistory.Count - MaxDiagnosticHistory);
+                if (shouldRecord)
+                {
+                    _lastDiagnosticRecordTime[e.AgentId] = now;
+                    _diagnosticHistory.Add(new DiagnosticHistoryEntry
+                    {
+                        AgentId = e.AgentId,
+                        AgentDisplayName = snapshot.DisplayName,
+                        Role = snapshot.Role,
+                        Summary = e.Diagnostic.Summary,
+                        Justification = e.Diagnostic.Justification,
+                        IsCompliant = e.Diagnostic.IsCompliant,
+                        ComplianceIssue = e.Diagnostic.ComplianceIssue,
+                        ScenarioRef = e.Diagnostic.ScenarioRef,
+                        Timestamp = e.Diagnostic.Timestamp
+                    });
+
+                    if (_diagnosticHistory.Count > MaxDiagnosticHistory)
+                        _diagnosticHistory.RemoveRange(0, _diagnosticHistory.Count - MaxDiagnosticHistory);
+                }
             }
         }
 

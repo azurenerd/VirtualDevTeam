@@ -27,9 +27,11 @@ public sealed record AgentDiagnostic
     public DateTime Timestamp { get; init; } = DateTime.UtcNow;
 }
 
-/// <summary>Event args fired when an agent's diagnostic changes.</summary>
+/// <summary>Event args fired when an agent's diagnostic is refreshed.</summary>
 public class DiagnosticChangedEventArgs : EventArgs
 {
     public required string AgentId { get; init; }
     public required AgentDiagnostic Diagnostic { get; init; }
+    /// <summary>True when Summary or IsCompliant actually changed from previous value.</summary>
+    public bool IsChanged { get; init; }
 }
