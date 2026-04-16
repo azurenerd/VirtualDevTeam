@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text;
 using AgentSquad.Core.Agents;
+using AgentSquad.Core.Agents.Decisions;
 using AgentSquad.Core.Agents.Reasoning;
 using AgentSquad.Core.AI;
 using AgentSquad.Core.Configuration;
@@ -29,6 +30,7 @@ public class ArchitectAgent : AgentBase
     private readonly SelfAssessmentService _selfAssessment;
     private readonly IAgentReasoningLog _reasoningLog;
     private readonly IPromptTemplateService _promptService;
+    private readonly DecisionGateService? _decisionGate;
 
     private readonly Queue<ArchitectureDirective>_taskQueue = new();
     private readonly HashSet<int> _reviewedPrNumbers = new();
@@ -53,7 +55,8 @@ public class ArchitectAgent : AgentBase
         IAgentReasoningLog reasoningLog,
         IPromptTemplateService promptService,
         ILogger<ArchitectAgent> logger,
-        RoleContextProvider? roleContextProvider = null)
+        RoleContextProvider? roleContextProvider = null,
+        DecisionGateService? decisionGate = null)
         : base(identity, logger, memoryStore, roleContextProvider)
     {
         _messageBus = messageBus ?? throw new ArgumentNullException(nameof(messageBus));
@@ -67,6 +70,7 @@ public class ArchitectAgent : AgentBase
         _selfAssessment = selfAssessment ?? throw new ArgumentNullException(nameof(selfAssessment));
         _reasoningLog = reasoningLog ?? throw new ArgumentNullException(nameof(reasoningLog));
         _promptService = promptService ?? throw new ArgumentNullException(nameof(promptService));
+        _decisionGate = decisionGate;
     }
 
     protected override async Task OnInitializeAsync(CancellationToken ct)
@@ -647,6 +651,38 @@ public class ArchitectAgent : AgentBase
         }
 
         Logger.LogDebug("Architecture document compiled for {TaskId}", directive.TaskId);
+
+        // Classify architecture decision impact
+        if (_decisionGate is not null && architectureDoc is not null)
+        {
+            var archDecision = await _decisionGate.ClassifyAndGateDecisionAsync(
+                agentId: Identity.Id,
+                agentDisplayName: Identity.DisplayName,
+                phase: "Architecture",
+                title: $"Architecture design for '{directive.Title}'",
+                context: $"Architecture document defines system components, data models, technology choices, " +
+                         $"and project structure for the project. Key sections include system components, " +
+                         $"API contracts, and technology stack decisions. " +
+                         $"Document length: {architectureDoc.Length} chars.",
+                category: "Architecture",
+                modelTier: Identity.ModelTier,
+                ct: ct);
+
+            if (archDecision.Status == DecisionStatus.Pending)
+            {
+                Logger.LogInformation("Architecture decision gated — waiting for human approval");
+                archDecision = await _decisionGate.WaitForDecisionAsync(archDecision.Id, ct);
+            }
+
+            if (archDecision.Status == DecisionStatus.Rejected)
+            {
+                Logger.LogWarning("Architecture decision REJECTED: {Feedback}", archDecision.HumanFeedback);
+                // Store feedback for potential rework in the gate revision loop below
+                await RememberAsync(MemoryType.Decision,
+                    "Architecture decision rejected",
+                    archDecision.HumanFeedback ?? "No feedback provided", ct);
+            }
+        }
 
         } // end else (fresh AI work, not resuming from gate)
 

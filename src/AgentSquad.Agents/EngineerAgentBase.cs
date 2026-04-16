@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using AgentSquad.Core.Agents;
+using AgentSquad.Core.Agents.Decisions;
 using AgentSquad.Core.AI;
 using AgentSquad.Core.Configuration;
 using AgentSquad.Core.GitHub;
@@ -32,6 +33,7 @@ public abstract class EngineerAgentBase : AgentBase
     protected readonly AgentStateStore StateStore;
     protected readonly IPromptTemplateService PromptService;
     private readonly IGateCheckService _gateCheck;
+    protected readonly DecisionGateService? DecisionGate;
 
     protected readonly HashSet<int> ProcessedIssueIds = new();
     protected readonly ConcurrentQueue<ReworkItem> ReworkQueue = new();
@@ -81,7 +83,8 @@ public abstract class EngineerAgentBase : AgentBase
         BuildRunner? buildRunner = null,
         TestRunner? testRunner = null,
         Core.Metrics.BuildTestMetrics? metrics = null,
-        PlaywrightRunner? playwrightRunner = null)
+        PlaywrightRunner? playwrightRunner = null,
+        DecisionGateService? decisionGate = null)
         : base(identity, logger, memoryStore, roleContextProvider)
     {
         MessageBus = messageBus ?? throw new ArgumentNullException(nameof(messageBus));
@@ -98,6 +101,7 @@ public abstract class EngineerAgentBase : AgentBase
         TestRunnerSvc = testRunner;
         Metrics = metrics;
         ScreenshotRunner = playwrightRunner;
+        DecisionGate = decisionGate;
     }
 
     #region Lifecycle

@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using AgentSquad.Core.Agents;
+using AgentSquad.Core.Agents.Decisions;
 using AgentSquad.Core.AI;
 using AgentSquad.Core.Configuration;
 using AgentSquad.Core.GitHub;
@@ -61,6 +62,7 @@ public class TestEngineerAgent : AgentBase
     private readonly Core.Metrics.BuildTestMetrics? _metrics;
     private readonly IGateCheckService _gateCheck;
     private readonly IPromptTemplateService? _promptService;
+    private readonly DecisionGateService? _decisionGate;
 
     private LocalWorkspace? _workspace;
     private bool _pendingWorkspaceCleanup;
@@ -105,7 +107,8 @@ public class TestEngineerAgent : AgentBase
         TestStrategyAnalyzer? testStrategyAnalyzer = null,
         Core.Metrics.BuildTestMetrics? metrics = null,
         AgentStateStore? stateStore = null,
-        IPromptTemplateService? promptService = null)
+        IPromptTemplateService? promptService = null,
+        DecisionGateService? decisionGate = null)
         : base(identity, logger, memoryStore, roleContextProvider)
     {
         _messageBus = messageBus ?? throw new ArgumentNullException(nameof(messageBus));
@@ -122,6 +125,7 @@ public class TestEngineerAgent : AgentBase
         _metrics = metrics;
         _stateStore = stateStore;
         _promptService = promptService;
+        _decisionGate = decisionGate;
     }
 
     protected override async Task OnInitializeAsync(CancellationToken ct)

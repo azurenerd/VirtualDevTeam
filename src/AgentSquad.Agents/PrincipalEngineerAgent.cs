@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text;
 using AgentSquad.Core.Agents;
+using AgentSquad.Core.Agents.Decisions;
 using AgentSquad.Core.Agents.Reasoning;
 using AgentSquad.Core.AI;
 using AgentSquad.Core.Configuration;
@@ -36,6 +37,7 @@ public class PrincipalEngineerAgent : EngineerAgentBase
     private readonly IAgentReasoningLog _reasoningLog;
     private readonly SmeDefinitionGenerator? _smeGenerator;
     private readonly AgentSpawnManager? _spawnManager;
+    private readonly DecisionGateService? _decisionGate;
 
     private bool _planningComplete;
     private bool _planningSignalReceived;
@@ -116,10 +118,11 @@ public class PrincipalEngineerAgent : EngineerAgentBase
         Core.Metrics.BuildTestMetrics? metrics = null,
         PlaywrightRunner? playwrightRunner = null,
         SmeDefinitionGenerator? smeGenerator = null,
-        AgentSpawnManager? spawnManager = null)
+        AgentSpawnManager? spawnManager = null,
+        DecisionGateService? decisionGate = null)
         : base(identity, messageBus, github, prWorkflow, issueWorkflow,
                projectFiles, modelRegistry, stateStore, config.Value, memoryStore, gateCheck, logger,
-               promptService, roleContextProvider, buildRunner, testRunner, metrics, playwrightRunner)
+               promptService, roleContextProvider, buildRunner, testRunner, metrics, playwrightRunner, decisionGate)
     {
         _registry = registry ?? throw new ArgumentNullException(nameof(registry));
         _gateCheck = gateCheck ?? throw new ArgumentNullException(nameof(gateCheck));
@@ -128,6 +131,7 @@ public class PrincipalEngineerAgent : EngineerAgentBase
         _taskManager = new EngineeringTaskIssueManager(github, logger);
         _smeGenerator = smeGenerator;
         _spawnManager = spawnManager;
+        _decisionGate = decisionGate;
     }
 
     protected override string GetRoleDisplayName() => "Principal Engineer";
@@ -745,6 +749,44 @@ public class PrincipalEngineerAgent : EngineerAgentBase
             Complexity = "High",
             Dependencies = allTaskIds
         });
+
+        // Classify task decomposition decision impact
+        if (_decisionGate is not null)
+        {
+            var decisionTaskSummary = string.Join(", ", parsedTasks.Where(t => t.Id != IntegrationTaskId)
+                .Select(t => $"{t.Id}:{t.Name}({t.Complexity},{t.Wave})"));
+            var waveDistribution = parsedTasks.Where(t => t.Id != IntegrationTaskId)
+                .GroupBy(t => t.Wave).OrderBy(g => g.Key)
+                .Select(g => $"{g.Key}: {g.Count()} tasks");
+
+            var planDecision = await _decisionGate.ClassifyAndGateDecisionAsync(
+                agentId: Identity.Id,
+                agentDisplayName: Identity.DisplayName,
+                phase: "Engineering Planning",
+                title: "Engineering task decomposition and wave scheduling",
+                context: $"Decomposed {enhancementIssues.Count} enhancement issues into {parsedTasks.Count - 1} engineering tasks + integration task. " +
+                         $"Wave distribution: {string.Join(", ", waveDistribution)}. " +
+                         $"Tasks: {decisionTaskSummary}",
+                category: "TaskPlanning",
+                modelTier: Identity.ModelTier,
+                ct: ct);
+
+            if (planDecision.Status == DecisionStatus.Pending)
+            {
+                Logger.LogInformation("Engineering plan decision gated — waiting for human approval");
+                planDecision = await _decisionGate.WaitForDecisionAsync(planDecision.Id, ct);
+            }
+
+            if (planDecision.Status == DecisionStatus.Rejected)
+            {
+                Logger.LogWarning("Engineering plan REJECTED: {Feedback}", planDecision.HumanFeedback);
+                await RememberAsync(MemoryType.Decision,
+                    "Engineering plan rejected",
+                    planDecision.HumanFeedback ?? "No feedback provided", ct);
+                UpdateStatus(AgentStatus.Idle, "Engineering plan rejected — awaiting new direction");
+                return;
+            }
+        }
 
         // Create GitHub issues for each task (the single source of truth)
         var createdTasks = await _taskManager.CreateTaskIssuesAsync(parsedTasks, ct);

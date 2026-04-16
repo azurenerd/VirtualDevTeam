@@ -1,4 +1,5 @@
 using AgentSquad.Core.Agents;
+using AgentSquad.Core.Agents.Decisions;
 using AgentSquad.Core.AI;
 using AgentSquad.Core.Configuration;
 using AgentSquad.Core.GitHub;
@@ -39,10 +40,11 @@ public class JuniorEngineerAgent : EngineerAgentBase
         BuildRunner? buildRunner = null,
         TestRunner? testRunner = null,
         Core.Metrics.BuildTestMetrics? metrics = null,
-        PlaywrightRunner? playwrightRunner = null)
+        PlaywrightRunner? playwrightRunner = null,
+        DecisionGateService? decisionGate = null)
         : base(identity, messageBus, github, prWorkflow, issueWorkflow,
                projectFiles, modelRegistry, stateStore, config.Value, memoryStore, gateCheck, logger,
-               promptService, roleContextProvider, buildRunner, testRunner, metrics, playwrightRunner)
+               promptService, roleContextProvider, buildRunner, testRunner, metrics, playwrightRunner, decisionGate)
     {
     }
 

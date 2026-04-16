@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using AgentSquad.Core.Agents;
+using AgentSquad.Core.Agents.Decisions;
 using AgentSquad.Core.Agents.Reasoning;
 using AgentSquad.Core.AI;
 using AgentSquad.Core.Configuration;
@@ -32,6 +33,7 @@ public class ProgramManagerAgent : AgentBase
     private readonly SelfAssessmentService _selfAssessment;
     private readonly IAgentReasoningLog _reasoningLog;
     private readonly IPromptTemplateService _promptService;
+    private readonly DecisionGateService? _decisionGate;
     private readonly AgentTeamComposer? _teamComposer;
     private readonly SMEAgentDefinitionService? _definitionService;
 
@@ -69,7 +71,8 @@ public class ProgramManagerAgent : AgentBase
         ILogger<ProgramManagerAgent> logger,
         RoleContextProvider? roleContextProvider = null,
         AgentTeamComposer? teamComposer = null,
-        SMEAgentDefinitionService? definitionService = null)
+        SMEAgentDefinitionService? definitionService = null,
+        DecisionGateService? decisionGate = null)
         : base(identity, logger, memoryStore, roleContextProvider)
     {
         _messageBus = messageBus ?? throw new ArgumentNullException(nameof(messageBus));
@@ -87,6 +90,7 @@ public class ProgramManagerAgent : AgentBase
         _promptService = promptService ?? throw new ArgumentNullException(nameof(promptService));
         _teamComposer = teamComposer;
         _definitionService = definitionService;
+        _decisionGate = decisionGate;
     }
 
     protected override Task OnInitializeAsync(CancellationToken ct)
@@ -1923,6 +1927,35 @@ public class ProgramManagerAgent : AgentBase
             Logger.LogInformation(
                 "Team composition proposed: {BuiltInCount} built-in, {TemplateCount} templates, {NewSmeCount} new SME agents",
                 proposal.BuiltInAgents.Count, proposal.ExistingTemplateIds.Count, proposal.NewSmeAgents.Count);
+
+            // Classify team composition decision impact
+            if (_decisionGate is not null)
+            {
+                var teamDecision = await _decisionGate.ClassifyAndGateDecisionAsync(
+                    agentId: Identity.Id,
+                    agentDisplayName: Identity.DisplayName,
+                    phase: "Team Composition",
+                    title: "Team composition and agent selection",
+                    context: $"Proposed team: {proposal.BuiltInAgents.Count} built-in agents ({string.Join(", ", proposal.BuiltInAgents.Select(a => $"{a.Role}x{a.Count}"))}), " +
+                             $"{proposal.ExistingTemplateIds.Count} SME templates, {proposal.NewSmeAgents.Count} new SME agents. " +
+                             $"Rationale: {proposal.Rationale}",
+                    category: "TeamComposition",
+                    modelTier: Identity.ModelTier,
+                    ct: ct);
+
+                if (teamDecision.Status == DecisionStatus.Pending)
+                {
+                    Logger.LogInformation("Team composition decision gated — waiting for human approval");
+                    teamDecision = await _decisionGate.WaitForDecisionAsync(teamDecision.Id, ct);
+                }
+
+                if (teamDecision.Status == DecisionStatus.Rejected)
+                {
+                    Logger.LogWarning("Team composition decision REJECTED: {Feedback}", teamDecision.HumanFeedback);
+                    _teamCompositionComplete = true;
+                    return;
+                }
+            }
 
             // === Gate: AgentTeamComposition — human approves team composition ===
             var gateResult = await _gateCheck.WaitForGateAsync(
