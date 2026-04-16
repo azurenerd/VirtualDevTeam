@@ -4,6 +4,7 @@
 @using AgentSquad.Dashboard.Services
 @using Microsoft.Extensions.Options
 @using AgentSquad.Core.Prompts
+@using AgentSquad.Core.GitHub.Models
 @inject IConfigurationService ConfigService
 @inject IDashboardDataService DataService
 @inject IPromptTemplateService PromptService
@@ -1006,6 +1007,146 @@ else if (_config is not null)
             }
         </div>
 
+        @* ── Review Settings ── *@
+        <div class="config-card">
+            <div class="config-card-header" @onclick="() => _reviewExpanded = !_reviewExpanded">
+                <span class="config-card-icon">🔍</span>
+                <span class="config-card-title">PR Review</span>
+                <span class="config-card-chevron @(_reviewExpanded ? "expanded" : "")">▶</span>
+            </div>
+            @if (_reviewExpanded)
+            {
+                <div class="config-card-body">
+                    <div class="config-field-row">
+                        <div class="config-field" title="When enabled, the Architect posts inline code comments on specific lines in PRs instead of only a summary comment. Comments appear directly on the diff, making feedback more actionable for engineers.">
+                            <label>Enable Inline Comments</label>
+                            <label class="config-toggle">
+                                <input type="checkbox" @bind="_config.Review.EnableInlineComments" />
+                                <span class="config-toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="config-field" title="When enabled, the Architect includes a risk assessment (LOW/MEDIUM/HIGH) with each PR review. Risk levels indicate the scope of impact: LOW = cosmetic changes, MEDIUM = modifies shared models or APIs, HIGH = breaking changes or security-sensitive code.">
+                            <label>Enable Risk Assessment</label>
+                            <label class="config-toggle">
+                                <input type="checkbox" @bind="_config.Review.EnableRiskAssessment" />
+                                <span class="config-toggle-slider"></span>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="config-field-row">
+                        <div class="config-field">
+                            <label title="The minimum risk level that triggers a human review gate. When a PR's risk meets or exceeds this threshold, the Architect adds a 'human-review-required' label and pauses before promoting the PR. Remove the label on GitHub to allow the pipeline to continue. Set to 'None' to disable human risk gating.">Min Risk Level for Human Review</label>
+                            <select @bind="_minRiskLevel" class="config-input"
+                                title="The minimum risk level that triggers a human review gate. When a PR's risk meets or exceeds this threshold, the Architect adds a 'human-review-required' label and pauses before promoting the PR. Remove the label on GitHub to allow the pipeline to continue. Set to 'None' to disable human risk gating.">
+                                <option value="None">None</option>
+                                <option value="Low">Low</option>
+                                <option value="Medium">Medium</option>
+                                <option value="High">High</option>
+                            </select>
+                        </div>
+                        <div class="config-field">
+                            <label title="Maximum number of inline comments the Architect can post per review. Prevents overwhelming PRs with too many comments. Only the highest-priority comments are included when the limit is reached.">Max Inline Comments Per Review</label>
+                            <input type="number" @bind="_config.Review.MaxInlineCommentsPerReview" class="config-input config-input-number" min="1" max="50"
+                                title="Maximum number of inline comments the Architect can post per review. Prevents overwhelming PRs with too many comments. Only the highest-priority comments are included when the limit is reached." />
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+
+        @* ── Decision Gating Settings ── *@
+        <div class="config-card">
+            <div class="config-card-header" @onclick="() => _decisionGatingExpanded = !_decisionGatingExpanded">
+                <span class="config-card-icon">🚦</span>
+                <span class="config-card-title">Decision Gating</span>
+                <span class="config-card-chevron @(_decisionGatingExpanded ? "expanded" : "")">▶</span>
+            </div>
+            @if (_decisionGatingExpanded)
+            {
+                <div class="config-card-body">
+                    <div class="config-field-row">
+                        <div class="config-field" title="When enabled, agents pause before executing impactful decisions and present a structured analysis with alternatives. Decisions are classified by impact level (XS to XL) and only those at or above the MinimumGateLevel require explicit approval.">
+                            <label>Enabled</label>
+                            <label class="config-toggle">
+                                <input type="checkbox" @bind="_config.DecisionGating.Enabled" />
+                                <span class="config-toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="config-field" title="When enabled, gated decisions include a generated implementation plan showing exactly what changes will be made before proceeding.">
+                            <label>Require Plan for Gated</label>
+                            <label class="config-toggle">
+                                <input type="checkbox" @bind="_config.DecisionGating.RequirePlanForGated" />
+                                <span class="config-toggle-slider"></span>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="config-field-row">
+                        <div class="config-field">
+                            <label title="The minimum decision impact level that triggers a gate. Decisions below this level auto-proceed. XS = trivial naming/formatting. S = single-file changes. M = multi-file refactors. L = architectural changes. XL = breaking/irreversible changes.">Minimum Gate Level</label>
+                            <select @bind="_config.DecisionGating.MinimumGateLevel" class="config-input"
+                                title="The minimum decision impact level that triggers a gate. Decisions below this level auto-proceed. XS = trivial naming/formatting. S = single-file changes. M = multi-file refactors. L = architectural changes. XL = breaking/irreversible changes.">
+                                <option value="None">None</option>
+                                <option value="XS">XS</option>
+                                <option value="S">S</option>
+                                <option value="M">M</option>
+                                <option value="L">L</option>
+                                <option value="XL">XL</option>
+                            </select>
+                        </div>
+                        <div class="config-field">
+                            <label title="What happens when a gated decision times out waiting for approval. 'auto-approve' = proceed anyway. 'block' = mark agent as blocked. 'escalate' = create an executive-request issue.">Timeout Fallback Action</label>
+                            <select @bind="_config.DecisionGating.TimeoutFallbackAction" class="config-input"
+                                title="What happens when a gated decision times out waiting for approval. 'auto-approve' = proceed anyway. 'block' = mark agent as blocked. 'escalate' = create an executive-request issue.">
+                                <option value="auto-approve">auto-approve</option>
+                                <option value="block">block</option>
+                                <option value="escalate">escalate</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="config-field-row">
+                        <div class="config-field">
+                            <label title="Maximum number of AI deliberation turns when evaluating a decision. More turns = more thorough analysis but slower. Default: 2.">Max Decision Turns</label>
+                            <input type="number" @bind="_config.DecisionGating.MaxDecisionTurns" class="config-input config-input-number" min="1" max="10"
+                                title="Maximum number of AI deliberation turns when evaluating a decision. More turns = more thorough analysis but slower. Default: 2." />
+                        </div>
+                        <div class="config-field">
+                            <label title="How long to wait for human approval before taking the fallback action. 0 = wait indefinitely. Default: 0 minutes.">Gate Timeout (minutes)</label>
+                            <input type="number" @bind="_config.DecisionGating.GateTimeoutMinutes" class="config-input config-input-number" min="0" max="1440"
+                                title="How long to wait for human approval before taking the fallback action. 0 = wait indefinitely. Default: 0 minutes." />
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+
+        @* ── Agentic Loop Settings ── *@
+        <div class="config-card">
+            <div class="config-card-header" @onclick="() => _agenticLoopExpanded = !_agenticLoopExpanded">
+                <span class="config-card-icon">🔄</span>
+                <span class="config-card-title">Agentic Loop</span>
+                <span class="config-card-chevron @(_agenticLoopExpanded ? "expanded" : "")">▶</span>
+            </div>
+            @if (_agenticLoopExpanded)
+            {
+                <div class="config-card-body">
+                    <div class="config-field-row">
+                        <div class="config-field" title="When enabled, agents perform iterative self-assessment after generating documents or code. Each iteration critiques and refines the output, improving quality at the cost of additional AI calls.">
+                            <label>Enabled</label>
+                            <label class="config-toggle">
+                                <input type="checkbox" @bind="_config.AgenticLoop.Enabled" />
+                                <span class="config-toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="config-field">
+                            <label title="Maximum number of self-assessment refinement iterations. Default: 2. Higher values produce more polished output but cost more tokens and take longer.">Max Iterations</label>
+                            <input type="number" @bind="_config.AgenticLoop.MaxIterations" class="config-input config-input-number" min="1" max="10"
+                                title="Maximum number of self-assessment refinement iterations. Default: 2. Higher values produce more polished output but cost more tokens and take longer." />
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+
         @* ── Save Button ── *@
         <div class="config-save-bar">
             @if (_saveError is not null)
@@ -1043,7 +1184,8 @@ else if (_config is not null)
             @foreach (var role in _promptRoles)
             {
                 <div class="config-card">
-                    <div class="config-card-header" @onclick="() => TogglePromptRole(role)">
+                    <div class="config-card-header" @onclick="() => TogglePromptRole(role)"
+                        title="@GetPromptRoleTooltip(role)">
                         <span class="config-card-icon">🤖</span>
                         <span class="config-card-title">@FormatRoleName(role)</span>
                         <span class="config-card-badge">@(GetTemplateCount(role)) templates</span>
@@ -1297,6 +1439,9 @@ else if (_config is not null)
     private bool _humanInteractionExpanded;
     private bool _mcpServersExpanded;
     private bool _smeTemplatesExpanded;
+    private bool _reviewExpanded;
+    private bool _decisionGatingExpanded;
+    private bool _agenticLoopExpanded;
 
     // Per-agent accordion expansion tracking
     private readonly HashSet<string> _expandedAgentPanels = new();
@@ -1310,6 +1455,13 @@ else if (_config is not null)
     {
         get => _config?.CopilotCli.ReasoningEffort ?? "";
         set { if (_config is not null) _config.CopilotCli.ReasoningEffort = string.IsNullOrEmpty(value) ? null : value; }
+    }
+
+    // Review risk level helper (enum ↔ string binding)
+    private string _minRiskLevel
+    {
+        get => _config?.Review.MinRiskLevelForHumanReview.ToString() ?? "None";
+        set { if (_config is not null) _config.Review.MinRiskLevelForHumanReview = Enum.Parse<ReviewRiskLevel>(value); }
     }
 
     // Cleanup state
@@ -1753,4 +1905,18 @@ else if (_config is not null)
     private static string FormatRoleName(string role) =>
         string.Join(' ', role.Split('-').Select(w =>
             char.ToUpper(w[0]) + w[1..]));
+
+    private static string GetPromptRoleTooltip(string role) => role switch
+    {
+        "architect" => "Prompts that control the Architect agent's behavior: architecture document generation (multi-turn and single-pass), PR review criteria, revision handling, and design reference formatting. Changes here affect how Architecture.md is created and how PRs are evaluated for architectural alignment.",
+        "pm" => "Prompts for the Program Manager agent: PMSpec generation, story extraction and review, clarification dialogs, blocker triage, PR review from a product perspective, screenshot analysis, and the rubber-duck critique pass. These shape how requirements are specified and how the PM evaluates deliverables.",
+        "researcher" => "Prompts for the Researcher agent: technology research generation (multi-turn with sub-questions, deep-dive, and synthesis), revision handling, and design reference context. These control the depth and focus of Research.md.",
+        "engineer-base" => "Shared prompts inherited by ALL engineer agents (Senior, Junior, Principal): implementation planning, step-by-step execution, rework handling, build/test fix attempts, clarification follow-ups, and code regeneration. Changes here affect every engineer role.",
+        "senior-engineer" => "Senior Engineer-specific prompts: implementation system prompt (defines coding standards, quality expectations) and self-review instructions. These layer on top of engineer-base prompts.",
+        "junior-engineer" => "Junior Engineer-specific prompt: implementation system prompt emphasizing clean code, good comments, and straightforward patterns. Layers on top of engineer-base prompts.",
+        "principal-engineer" => "Principal Engineer prompts: high-complexity implementation, engineering plan generation, enhancement coverage evaluation, integration review, code review analysis, PR description writing, visual validation, and SME assessment. PEs handle the hardest tasks.",
+        "test-engineer" => "Test Engineer prompts: test generation across tiers (unit, integration, UI/E2E), testability assessment, Blazor-specific guidance, build/test failure classification and fixing, test removal decisions, and rework handling. Controls test quality and coverage strategy.",
+        "custom" => "Prompts for user-defined custom agents: generic task execution and issue processing templates. These provide the base behavior for any custom agent you create.",
+        _ => $"Prompts for the {role} agent role. Edit these to customize how the agent thinks, responds, and makes decisions."
+    };
 }
