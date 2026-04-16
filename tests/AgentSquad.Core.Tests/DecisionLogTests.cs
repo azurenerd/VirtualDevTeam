@@ -285,3 +285,144 @@ public class DecisionGateServiceParsingTests
         Assert.Equal("No rationale provided", rationale);
     }
 }
+
+/// <summary>
+/// Tests for inline impact classification piggybacked on self-assessment responses.
+/// </summary>
+public class InlineImpactClassificationTests
+{
+    [Fact]
+    public void ParseAssessment_WithImpactClassification_ExtractsAllFields()
+    {
+        var response = """
+            VERDICT: PASS
+            SUMMARY: All criteria met
+            GAPS:
+            IMPACT: L
+            IMPACT_RATIONALE: Introduces new service module with cross-cutting concerns
+            ALTERNATIVES: Could use existing middleware pattern instead
+            AFFECTED_FILES: src/Services/NewAuth.cs, src/Startup.cs
+            RISK: Breaking changes to existing auth consumers
+            """;
+
+        var result = AgentSquad.Core.Agents.Reasoning.SelfAssessmentService.ParseAssessment(response, parseImpact: true);
+
+        Assert.True(result.Passed);
+        Assert.True(result.HasImpactClassification);
+        Assert.Equal(DecisionImpactLevel.L, result.ImpactLevel);
+        Assert.Contains("new service module", result.ImpactRationale);
+        Assert.Contains("middleware", result.Alternatives);
+        Assert.Contains("NewAuth.cs", result.AffectedFiles);
+        Assert.Contains("Breaking changes", result.RiskAssessment);
+    }
+
+    [Fact]
+    public void ParseAssessment_WithoutImpactFlag_IgnoresImpactFields()
+    {
+        var response = """
+            VERDICT: PASS
+            SUMMARY: All criteria met
+            GAPS:
+            IMPACT: XL
+            IMPACT_RATIONALE: Major restructure
+            """;
+
+        var result = AgentSquad.Core.Agents.Reasoning.SelfAssessmentService.ParseAssessment(response, parseImpact: false);
+
+        Assert.True(result.Passed);
+        Assert.False(result.HasImpactClassification);
+        Assert.Null(result.ImpactLevel);
+        Assert.Null(result.ImpactRationale);
+    }
+
+    [Fact]
+    public void ParseAssessment_WithImpact_PreservesAssessmentFields()
+    {
+        var response = """
+            VERDICT: FAIL
+            CONFIDENCE: 72%
+            SUMMARY: Missing error handling
+            GAPS:
+            - [critical] No error handling for null inputs
+            - [minor] Missing XML documentation
+            IMPACT: M
+            IMPACT_RATIONALE: Moderate refactoring of existing class
+            """;
+
+        var result = AgentSquad.Core.Agents.Reasoning.SelfAssessmentService.ParseAssessment(response, parseImpact: true);
+
+        Assert.False(result.Passed);
+        Assert.Equal(72, result.Confidence);
+        Assert.Equal(2, result.Gaps.Count);
+        Assert.Contains("No error handling", result.Gaps[0]);
+        Assert.Equal("critical", result.GapSeverities[0]);
+        Assert.Equal(DecisionImpactLevel.M, result.ImpactLevel);
+    }
+
+    [Fact]
+    public void ParseAssessment_MissingImpactInResponse_ReturnsNullLevel()
+    {
+        var response = """
+            VERDICT: PASS
+            SUMMARY: Looks good
+            GAPS:
+            """;
+
+        var result = AgentSquad.Core.Agents.Reasoning.SelfAssessmentService.ParseAssessment(response, parseImpact: true);
+
+        Assert.True(result.Passed);
+        Assert.False(result.HasImpactClassification);
+        Assert.Null(result.ImpactLevel);
+    }
+
+    [Theory]
+    [InlineData("IMPACT: XS", DecisionImpactLevel.XS)]
+    [InlineData("IMPACT: S", DecisionImpactLevel.S)]
+    [InlineData("IMPACT: M", DecisionImpactLevel.M)]
+    [InlineData("IMPACT: L", DecisionImpactLevel.L)]
+    [InlineData("IMPACT: XL", DecisionImpactLevel.XL)]
+    public void ParseAssessment_AllImpactLevels(string impactLine, DecisionImpactLevel expected)
+    {
+        var response = $"VERDICT: PASS\nSUMMARY: OK\nGAPS:\n{impactLine}";
+        var result = AgentSquad.Core.Agents.Reasoning.SelfAssessmentService.ParseAssessment(response, parseImpact: true);
+        Assert.Equal(expected, result.ImpactLevel);
+    }
+
+    [Fact]
+    public void ParseAssessment_UnrecognizedImpactLevel_ReturnsNull()
+    {
+        var response = "VERDICT: PASS\nSUMMARY: OK\nGAPS:\nIMPACT: MASSIVE";
+        var result = AgentSquad.Core.Agents.Reasoning.SelfAssessmentService.ParseAssessment(response, parseImpact: true);
+        Assert.Null(result.ImpactLevel);
+    }
+
+    [Fact]
+    public void AssessmentResult_HasImpactClassification_FalseByDefault()
+    {
+        var result = new AgentSquad.Core.Agents.Reasoning.AssessmentResult
+        {
+            Passed = true,
+            Gaps = [],
+            Summary = "OK",
+        };
+
+        Assert.False(result.HasImpactClassification);
+        Assert.Null(result.ImpactLevel);
+    }
+
+    [Fact]
+    public void AssessmentResult_HasImpactClassification_TrueWhenSet()
+    {
+        var result = new AgentSquad.Core.Agents.Reasoning.AssessmentResult
+        {
+            Passed = true,
+            Gaps = [],
+            Summary = "OK",
+            ImpactLevel = DecisionImpactLevel.L,
+            ImpactRationale = "Big change",
+        };
+
+        Assert.True(result.HasImpactClassification);
+        Assert.Equal(DecisionImpactLevel.L, result.ImpactLevel);
+    }
+}

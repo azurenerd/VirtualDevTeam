@@ -37,6 +37,82 @@ public class DecisionGateService
     }
 
     /// <summary>
+    /// Create a decision from pre-classified assessment results (inline classification).
+    /// Skips the separate classification LLM call since impact was already determined during self-assessment.
+    /// Still generates a plan for gated decisions (requires a separate LLM call).
+    /// </summary>
+    public async Task<AgentDecision> ClassifyFromAssessmentAsync(
+        string agentId,
+        string agentDisplayName,
+        string phase,
+        string title,
+        string context,
+        Reasoning.AssessmentResult assessment,
+        string? category = null,
+        string modelTier = "standard",
+        CancellationToken ct = default)
+    {
+        if (!_config.Enabled || !assessment.HasImpactClassification)
+        {
+            // Fall back to separate classification if gating disabled or no inline classification
+            return await ClassifyAndGateDecisionAsync(agentId, agentDisplayName, phase, title, context, category, modelTier, ct);
+        }
+
+        var impactLevel = assessment.ImpactLevel!.Value;
+        var requiresGate = _config.RequiresGate(impactLevel);
+
+        string? plan = null;
+        if (requiresGate && _config.RequirePlanForGated && _config.MaxDecisionTurns >= 2)
+        {
+            plan = await GeneratePlanAsync(agentDisplayName, title, context,
+                assessment.ImpactRationale ?? "No rationale provided",
+                assessment.Alternatives, assessment.AffectedFiles, assessment.RiskAssessment,
+                modelTier, ct);
+        }
+
+        var status = requiresGate ? DecisionStatus.Pending : DecisionStatus.AutoApproved;
+        var decision = new AgentDecision
+        {
+            Id = Guid.NewGuid().ToString("N")[..12],
+            AgentId = agentId,
+            AgentDisplayName = agentDisplayName,
+            Phase = phase,
+            ImpactLevel = impactLevel,
+            Title = title,
+            Rationale = assessment.ImpactRationale ?? context,
+            Alternatives = assessment.Alternatives,
+            AffectedFiles = assessment.AffectedFiles,
+            RiskAssessment = assessment.RiskAssessment,
+            Plan = plan,
+            Status = status,
+            Category = category,
+        };
+
+        _decisionLog.Log(decision);
+
+        if (requiresGate)
+        {
+            var gateContext = FormatGateContext(decision);
+            await _gateNotificationService.AddNotificationAsync(
+                $"{DecisionGatePrefix}{decision.Id}",
+                gateContext,
+                ct: ct);
+
+            _logger.LogWarning(
+                "[{Agent}] Decision GATED [{Impact}] (inline classification): {Title} — awaiting human approval",
+                agentDisplayName, impactLevel, title);
+        }
+        else
+        {
+            _logger.LogInformation(
+                "[{Agent}] Decision auto-approved [{Impact}] (inline classification): {Title}",
+                agentDisplayName, impactLevel, title);
+        }
+
+        return decision;
+    }
+
+    /// <summary>
     /// Classify a decision's impact level using AI, generate a plan if gated,
     /// and either auto-approve or wait for human approval.
     /// </summary>

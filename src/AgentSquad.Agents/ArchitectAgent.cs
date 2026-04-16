@@ -636,9 +636,11 @@ public class ArchitectAgent : AgentBase
         });
 
         var criteria = AssessmentCriteria.GetForRole(Identity.Role);
+        AgentSquad.Core.Agents.Reasoning.AssessmentResult? assessmentResult = null;
         if (criteria is not null)
         {
-            architectureDoc = await _selfAssessment.AssessAndRefineAsync(
+            // Use inline classification to save a separate LLM call
+            var (refinedOutput, assessment) = await _selfAssessment.AssessAndRefineWithResultAsync(
                 Identity.Id,
                 Identity.DisplayName,
                 Identity.Role,
@@ -647,26 +649,49 @@ public class ArchitectAgent : AgentBase
                 criteria,
                 $"Project: {_config.Project.Description}\nPM Spec and Research available for reference",
                 chat,
+                classifyImpact: _decisionGate is not null,
                 ct);
+            architectureDoc = refinedOutput;
+            assessmentResult = assessment;
         }
 
         Logger.LogDebug("Architecture document compiled for {TaskId}", directive.TaskId);
 
-        // Classify architecture decision impact
+        // Use inline classification from assessment if available, otherwise fall back to separate call
         if (_decisionGate is not null && architectureDoc is not null)
         {
-            var archDecision = await _decisionGate.ClassifyAndGateDecisionAsync(
-                agentId: Identity.Id,
-                agentDisplayName: Identity.DisplayName,
-                phase: "Architecture",
-                title: $"Architecture design for '{directive.Title}'",
-                context: $"Architecture document defines system components, data models, technology choices, " +
-                         $"and project structure for the project. Key sections include system components, " +
-                         $"API contracts, and technology stack decisions. " +
-                         $"Document length: {architectureDoc.Length} chars.",
-                category: "Architecture",
-                modelTier: Identity.ModelTier,
-                ct: ct);
+            AgentDecision archDecision;
+            if (assessmentResult?.HasImpactClassification == true)
+            {
+                archDecision = await _decisionGate.ClassifyFromAssessmentAsync(
+                    agentId: Identity.Id,
+                    agentDisplayName: Identity.DisplayName,
+                    phase: "Architecture",
+                    title: $"Architecture design for '{directive.Title}'",
+                    context: $"Architecture document defines system components, data models, technology choices, " +
+                             $"and project structure for the project. Key sections include system components, " +
+                             $"API contracts, and technology stack decisions. " +
+                             $"Document length: {architectureDoc.Length} chars.",
+                    assessment: assessmentResult,
+                    category: "Architecture",
+                    modelTier: Identity.ModelTier,
+                    ct: ct);
+            }
+            else
+            {
+                archDecision = await _decisionGate.ClassifyAndGateDecisionAsync(
+                    agentId: Identity.Id,
+                    agentDisplayName: Identity.DisplayName,
+                    phase: "Architecture",
+                    title: $"Architecture design for '{directive.Title}'",
+                    context: $"Architecture document defines system components, data models, technology choices, " +
+                             $"and project structure for the project. Key sections include system components, " +
+                             $"API contracts, and technology stack decisions. " +
+                             $"Document length: {architectureDoc.Length} chars.",
+                    category: "Architecture",
+                    modelTier: Identity.ModelTier,
+                    ct: ct);
+            }
 
             if (archDecision.Status == DecisionStatus.Pending)
             {

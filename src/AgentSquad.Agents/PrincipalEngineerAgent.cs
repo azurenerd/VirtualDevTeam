@@ -640,9 +640,10 @@ public class PrincipalEngineerAgent : EngineerAgentBase
         });
 
         var criteria = AssessmentCriteria.GetForRole(Identity.Role);
+        AgentSquad.Core.Agents.Reasoning.AssessmentResult? peAssessmentResult = null;
         if (criteria is not null)
         {
-            structuredText = await _selfAssessment.AssessAndRefineAsync(
+            var (refinedOutput, assessment) = await _selfAssessment.AssessAndRefineWithResultAsync(
                 Identity.Id,
                 Identity.DisplayName,
                 Identity.Role,
@@ -651,7 +652,10 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 criteria,
                 $"Project: {Config.Project.Description}\nArchitecture doc available for reference",
                 chat,
+                classifyImpact: _decisionGate is not null,
                 ct);
+            structuredText = refinedOutput;
+            peAssessmentResult = assessment;
         }
 
         var parsedTasks = new List<EngineeringTask>();
@@ -759,17 +763,36 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 .GroupBy(t => t.Wave).OrderBy(g => g.Key)
                 .Select(g => $"{g.Key}: {g.Count()} tasks");
 
-            var planDecision = await _decisionGate.ClassifyAndGateDecisionAsync(
-                agentId: Identity.Id,
-                agentDisplayName: Identity.DisplayName,
-                phase: "Engineering Planning",
-                title: "Engineering task decomposition and wave scheduling",
-                context: $"Decomposed {enhancementIssues.Count} enhancement issues into {parsedTasks.Count - 1} engineering tasks + integration task. " +
-                         $"Wave distribution: {string.Join(", ", waveDistribution)}. " +
-                         $"Tasks: {decisionTaskSummary}",
-                category: "TaskPlanning",
-                modelTier: Identity.ModelTier,
-                ct: ct);
+            AgentDecision planDecision;
+            if (peAssessmentResult?.HasImpactClassification == true)
+            {
+                planDecision = await _decisionGate.ClassifyFromAssessmentAsync(
+                    agentId: Identity.Id,
+                    agentDisplayName: Identity.DisplayName,
+                    phase: "Engineering Planning",
+                    title: "Engineering task decomposition and wave scheduling",
+                    context: $"Decomposed {enhancementIssues.Count} enhancement issues into {parsedTasks.Count - 1} engineering tasks + integration task. " +
+                             $"Wave distribution: {string.Join(", ", waveDistribution)}. " +
+                             $"Tasks: {decisionTaskSummary}",
+                    assessment: peAssessmentResult,
+                    category: "TaskPlanning",
+                    modelTier: Identity.ModelTier,
+                    ct: ct);
+            }
+            else
+            {
+                planDecision = await _decisionGate.ClassifyAndGateDecisionAsync(
+                    agentId: Identity.Id,
+                    agentDisplayName: Identity.DisplayName,
+                    phase: "Engineering Planning",
+                    title: "Engineering task decomposition and wave scheduling",
+                    context: $"Decomposed {enhancementIssues.Count} enhancement issues into {parsedTasks.Count - 1} engineering tasks + integration task. " +
+                             $"Wave distribution: {string.Join(", ", waveDistribution)}. " +
+                             $"Tasks: {decisionTaskSummary}",
+                    category: "TaskPlanning",
+                    modelTier: Identity.ModelTier,
+                    ct: ct);
+            }
 
             if (planDecision.Status == DecisionStatus.Pending)
             {

@@ -1776,7 +1776,8 @@ public class ProgramManagerAgent : AgentBase
             var criteria = AssessmentCriteria.GetForRole(Identity.Role);
             if (criteria is not null)
             {
-                pmSpecDoc = await _selfAssessment.AssessAndRefineAsync(
+                // PM spec self-assessment with inline impact classification
+                var (refinedOutput, _) = await _selfAssessment.AssessAndRefineWithResultAsync(
                     Identity.Id,
                     Identity.DisplayName,
                     Identity.Role,
@@ -1785,7 +1786,9 @@ public class ProgramManagerAgent : AgentBase
                     criteria,
                     $"Project: {_config.Project.Description}\nResearch findings available in Research.md",
                     chat,
+                    classifyImpact: false, // PM spec assessment doesn't drive a decision gate
                     ct);
+                pmSpecDoc = refinedOutput;
             }
 
             Logger.LogDebug("PM Spec document compiled for {ProjectName}", projectName);

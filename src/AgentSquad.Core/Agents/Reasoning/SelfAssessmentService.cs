@@ -20,6 +20,26 @@ public record AssessmentResult
 
     /// <summary>Severity of each gap: "critical", "major", or "minor".</summary>
     public IReadOnlyList<string> GapSeverities { get; init; } = [];
+
+    // --- Inline decision impact classification (piggybacked on assessment) ---
+
+    /// <summary>Impact level classified during assessment. Null if classification was not requested or failed to parse.</summary>
+    public Decisions.DecisionImpactLevel? ImpactLevel { get; init; }
+
+    /// <summary>Why this impact level was assigned.</summary>
+    public string? ImpactRationale { get; init; }
+
+    /// <summary>Alternatives the AI considered for the decision.</summary>
+    public string? Alternatives { get; init; }
+
+    /// <summary>Files or modules affected by the decision.</summary>
+    public string? AffectedFiles { get; init; }
+
+    /// <summary>Risk assessment for the decision.</summary>
+    public string? RiskAssessment { get; init; }
+
+    /// <summary>Whether inline impact classification was included in this assessment.</summary>
+    public bool HasImpactClassification => ImpactLevel.HasValue;
 }
 
 /// <summary>
@@ -58,9 +78,10 @@ public class SelfAssessmentService
     /// <param name="assessmentCriteria">Role-specific criteria the output must meet.</param>
     /// <param name="contextForRefinement">Additional context to include in refinement prompts (e.g., project description, upstream docs).</param>
     /// <param name="chat">The chat completion service to use for assessment/refinement AI calls.</param>
+    /// <param name="classifyImpact">When true, the assessment also classifies the decision's impact level inline (saves a separate LLM call).</param>
     /// <param name="ct">Cancellation token.</param>
-    /// <returns>The final output (original if passed, or refined version).</returns>
-    public async Task<string> AssessAndRefineAsync(
+    /// <returns>The assessment result containing the final output and optional impact classification.</returns>
+    public async Task<(string FinalOutput, AssessmentResult? LastAssessment)> AssessAndRefineWithResultAsync(
         string agentId,
         string agentDisplayName,
         AgentRole role,
@@ -69,6 +90,7 @@ public class SelfAssessmentService
         string assessmentCriteria,
         string contextForRefinement,
         IChatCompletionService chat,
+        bool classifyImpact = false,
         CancellationToken ct = default)
     {
         if (!_config.IsEnabledForRole(role))
@@ -82,7 +104,7 @@ public class SelfAssessmentService
                 Summary = "Agentic loop disabled for this role — publishing first draft",
                 Iteration = 0,
             });
-            return generatedOutput;
+            return (generatedOutput, null);
         }
 
         var roleName = role.ToString();
@@ -91,6 +113,7 @@ public class SelfAssessmentService
             : _config.MaxIterations;
 
         var currentOutput = generatedOutput;
+        AssessmentResult? lastAssessment = null;
 
         for (int iteration = 0; iteration < maxIterations; iteration++)
         {
@@ -106,8 +129,12 @@ public class SelfAssessmentService
             });
 
             var sw = System.Diagnostics.Stopwatch.StartNew();
-            var assessment = await AssessOutputAsync(currentOutput, assessmentCriteria, chat, ct);
+            // Only include impact classification on the FINAL assessment (when it passes or last iteration)
+            var isLastIteration = iteration == maxIterations - 1;
+            var assessment = await AssessOutputAsync(currentOutput, assessmentCriteria, chat,
+                classifyImpact && (isLastIteration || iteration == 0), ct);
             sw.Stop();
+            lastAssessment = assessment;
 
             _reasoningLog.Log(new AgentReasoningEvent
             {
@@ -127,6 +154,12 @@ public class SelfAssessmentService
 
             if (assessment.Passed)
             {
+                // If we didn't classify on this iteration, do a quick re-assess with classification
+                if (classifyImpact && !assessment.HasImpactClassification)
+                {
+                    lastAssessment = await AssessOutputAsync(currentOutput, assessmentCriteria, chat, true, ct);
+                }
+
                 _reasoningLog.Log(new AgentReasoningEvent
                 {
                     AgentId = agentId,
@@ -140,7 +173,7 @@ public class SelfAssessmentService
                 _logger.LogInformation(
                     "[{Agent}] Self-assessment passed on iteration {Iteration}",
                     agentDisplayName, iteration + 1);
-                return currentOutput;
+                return (currentOutput, lastAssessment);
             }
 
             // --- CONFIDENCE THRESHOLD CHECK ---
@@ -167,7 +200,7 @@ public class SelfAssessmentService
                     _logger.LogInformation(
                         "[{Agent}] Confidence threshold met ({Confidence}% ≥ {Threshold}%), skipping refinement",
                         agentDisplayName, assessment.Confidence.Value, _config.ConfidenceThreshold.MinConfidence);
-                    return currentOutput;
+                    return (currentOutput, lastAssessment);
                 }
             }
 
@@ -218,17 +251,42 @@ public class SelfAssessmentService
         _logger.LogWarning(
             "[{Agent}] Self-assessment exhausted {Max} iterations, publishing best effort",
             agentDisplayName, maxIterations);
-        return currentOutput;
+        return (currentOutput, lastAssessment);
+    }
+
+    /// <summary>
+    /// Run the agentic self-assessment loop on generated output.
+    /// If agentic loop is disabled for this role, returns the original output unchanged.
+    /// This is the backward-compatible overload that returns just the final output string.
+    /// </summary>
+    public async Task<string> AssessAndRefineAsync(
+        string agentId,
+        string agentDisplayName,
+        AgentRole role,
+        string phase,
+        string generatedOutput,
+        string assessmentCriteria,
+        string contextForRefinement,
+        IChatCompletionService chat,
+        CancellationToken ct = default)
+    {
+        var (finalOutput, _) = await AssessAndRefineWithResultAsync(
+            agentId, agentDisplayName, role, phase, generatedOutput,
+            assessmentCriteria, contextForRefinement, chat,
+            classifyImpact: false, ct);
+        return finalOutput;
     }
 
     /// <summary>
     /// Ask the AI to assess output against specific criteria.
-    /// Returns structured pass/fail with specific gaps.
+    /// When classifyImpact is true, also includes decision impact classification in the same call.
+    /// Returns structured pass/fail with specific gaps and optional impact classification.
     /// </summary>
     private async Task<AssessmentResult> AssessOutputAsync(
         string output,
         string criteria,
         IChatCompletionService chat,
+        bool classifyImpact,
         CancellationToken ct)
     {
         var history = new ChatHistory();
@@ -253,6 +311,11 @@ public class SelfAssessmentService
               "- Gap description 2\n" +
               "(leave GAPS empty if PASS)";
 
+        if (classifyImpact)
+        {
+            formatInstructions += "\n\n" + ImpactClassificationInstructions;
+        }
+
         history.AddSystemMessage(
             "You are a strict quality assessor. Your job is to evaluate a document against specific criteria " +
             "and identify any gaps or weaknesses. Be thorough but fair — only flag genuine gaps, not stylistic preferences.\n\n" +
@@ -265,7 +328,7 @@ public class SelfAssessmentService
         var response = await chat.GetChatMessageContentAsync(history, cancellationToken: ct);
         var responseText = response.Content ?? "";
 
-        return ParseAssessment(responseText);
+        return ParseAssessment(responseText, classifyImpact);
     }
 
     /// <summary>
@@ -299,7 +362,7 @@ public class SelfAssessmentService
     }
 
     /// <summary>Parse the structured assessment response from the AI.</summary>
-    private static AssessmentResult ParseAssessment(string response)
+    internal static AssessmentResult ParseAssessment(string response, bool parseImpact = false)
     {
         var lines = response.Split('\n', StringSplitOptions.TrimEntries);
         var passed = false;
@@ -309,22 +372,32 @@ public class SelfAssessmentService
         var severities = new List<string>();
         var inGaps = false;
 
+        // Impact classification fields
+        Decisions.DecisionImpactLevel? impactLevel = null;
+        string? impactRationale = null;
+        string? alternatives = null;
+        string? affectedFiles = null;
+        string? riskAssessment = null;
+
         foreach (var line in lines)
         {
             if (line.StartsWith("VERDICT:", StringComparison.OrdinalIgnoreCase))
             {
                 var verdict = line["VERDICT:".Length..].Trim();
                 passed = verdict.Contains("PASS", StringComparison.OrdinalIgnoreCase);
+                inGaps = false;
             }
             else if (line.StartsWith("CONFIDENCE:", StringComparison.OrdinalIgnoreCase))
             {
                 var confText = line["CONFIDENCE:".Length..].Trim().TrimEnd('%');
                 if (int.TryParse(confText, out var confValue))
                     confidence = Math.Clamp(confValue, 0, 100);
+                inGaps = false;
             }
             else if (line.StartsWith("SUMMARY:", StringComparison.OrdinalIgnoreCase))
             {
                 summary = line["SUMMARY:".Length..].Trim();
+                inGaps = false;
             }
             else if (line.StartsWith("GAPS:", StringComparison.OrdinalIgnoreCase))
             {
@@ -332,6 +405,40 @@ public class SelfAssessmentService
                 var gapContent = line["GAPS:".Length..].Trim();
                 if (gapContent.StartsWith("- ") || gapContent.StartsWith("* "))
                     ParseGapLine(gapContent[2..].Trim(), gaps, severities);
+            }
+            else if (line.StartsWith("IMPACT:", StringComparison.OrdinalIgnoreCase) && parseImpact)
+            {
+                inGaps = false;
+                var value = line["IMPACT:".Length..].Trim().ToUpperInvariant();
+                impactLevel = value switch
+                {
+                    "XS" => Decisions.DecisionImpactLevel.XS,
+                    "S" => Decisions.DecisionImpactLevel.S,
+                    "M" => Decisions.DecisionImpactLevel.M,
+                    "L" => Decisions.DecisionImpactLevel.L,
+                    "XL" => Decisions.DecisionImpactLevel.XL,
+                    _ => null,
+                };
+            }
+            else if (line.StartsWith("IMPACT_RATIONALE:", StringComparison.OrdinalIgnoreCase) && parseImpact)
+            {
+                inGaps = false;
+                impactRationale = line["IMPACT_RATIONALE:".Length..].Trim();
+            }
+            else if (line.StartsWith("ALTERNATIVES:", StringComparison.OrdinalIgnoreCase) && parseImpact)
+            {
+                inGaps = false;
+                alternatives = line["ALTERNATIVES:".Length..].Trim();
+            }
+            else if (line.StartsWith("AFFECTED_FILES:", StringComparison.OrdinalIgnoreCase) && parseImpact)
+            {
+                inGaps = false;
+                affectedFiles = line["AFFECTED_FILES:".Length..].Trim();
+            }
+            else if (line.StartsWith("RISK:", StringComparison.OrdinalIgnoreCase) && parseImpact)
+            {
+                inGaps = false;
+                riskAssessment = line["RISK:".Length..].Trim();
             }
             else if (inGaps && (line.StartsWith("- ") || line.StartsWith("* ")))
             {
@@ -361,6 +468,11 @@ public class SelfAssessmentService
             Summary = string.IsNullOrEmpty(summary) ? (passed ? "All criteria met." : "Gaps found.") : summary,
             Confidence = confidence,
             GapSeverities = severities,
+            ImpactLevel = impactLevel,
+            ImpactRationale = impactRationale,
+            Alternatives = alternatives,
+            AffectedFiles = affectedFiles,
+            RiskAssessment = riskAssessment,
         };
     }
 
@@ -383,4 +495,29 @@ public class SelfAssessmentService
             gaps.Add(text);
         }
     }
+
+    /// <summary>
+    /// Additional prompt instructions appended to assessment when inline impact classification is requested.
+    /// This allows the assessment to piggyback impact classification without a separate LLM call.
+    /// </summary>
+    private const string ImpactClassificationInstructions = """
+
+        Additionally, classify the IMPACT LEVEL of the changes described in this document.
+        After your assessment (VERDICT/SUMMARY/GAPS), add these fields:
+
+        IMPACT: [XS|S|M|L|XL]
+        IMPACT_RATIONALE: [Why this impact level — one sentence]
+        ALTERNATIVES: [What alternatives were considered, if apparent from the document]
+        AFFECTED_FILES: [Files or modules that will be affected]
+        RISK: [What could go wrong with these changes]
+
+        Impact levels:
+        - XS (Extra Small): Cosmetic — CSS tweaks, comment fixes, formatting, typos.
+        - S (Small): Low-risk isolated — utility method, config value, simple bug fix in one file.
+        - M (Medium): Moderate structural — refactoring a class, changing API signatures, new dependency.
+        - L (Large): Significant architectural — new service/module, schema change, core abstraction change.
+        - XL (Extra Large): Project-defining — restructure layout, change tech stack, major feature pivot.
+
+        Be precise and conservative. When in doubt, choose the higher level.
+        """;
 }
