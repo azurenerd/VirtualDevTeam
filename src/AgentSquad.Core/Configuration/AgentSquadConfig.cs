@@ -17,6 +17,7 @@ public class AgentSquadConfig
     public Dictionary<string, McpServerDefinition> McpServers { get; set; } = new();
     public SmeAgentsConfig SmeAgents { get; set; } = new();
     public PromptsConfig Prompts { get; set; } = new();
+    public DecisionGatingConfig DecisionGating { get; set; } = new();
 }
 
 public class ProjectConfig

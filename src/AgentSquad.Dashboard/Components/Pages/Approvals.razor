@@ -1,6 +1,7 @@
 @page "/approvals"
 @rendermode InteractiveServer
 @using AgentSquad.Core.Notifications
+@using AgentSquad.Core.Agents.Decisions
 @using AgentSquad.Dashboard.Services
 @implements IDisposable
 @inject IServiceProvider ServiceProvider
@@ -13,6 +14,10 @@
         <span class="header-badge @(_openCount > 0 ? "warning" : "healthy")">
             @_openCount Open
         </span>
+        @if (_pendingDecisionCount > 0)
+        {
+            <span class="header-badge warning">⚖️ @_pendingDecisionCount Decision Gates</span>
+        }
         <span class="header-badge">@_resolvedCount Resolved</span>
     </div>
 </div>
@@ -32,7 +37,74 @@
     </button>
 </div>
 
-@if (_notifications.Count == 0)
+@* ── Pending Decision Gates ── *@
+@if (_pendingDecisions.Count > 0 && _filter != NotificationFilter.Resolved)
+{
+    <div class="decision-gates-section">
+        <h3>⚖️ Decision Gates Awaiting Review</h3>
+        @foreach (var decision in _pendingDecisions)
+        {
+            <div class="approval-card decision-gate open">
+                <div class="approval-card-left">
+                    <div class="approval-icon">
+                        <span class="impact-badge impact-@decision.ImpactLevel.ToString().ToLower()">@decision.ImpactLevel</span>
+                    </div>
+                </div>
+                <div class="approval-card-body">
+                    <div class="approval-card-header">
+                        <span class="approval-gate-name">⚖️ @decision.Title</span>
+                        <span class="approval-resource-badge">@decision.AgentDisplayName</span>
+                        <span class="approval-time">@FormatTime(decision.CreatedAt)</span>
+                    </div>
+                    <div class="approval-context">
+                        <strong>Rationale:</strong> @decision.Rationale
+                    </div>
+                    @if (!string.IsNullOrEmpty(decision.Alternatives))
+                    {
+                        <div class="decision-detail-field">
+                            <strong>Alternatives Considered:</strong> @decision.Alternatives
+                        </div>
+                    }
+                    @if (!string.IsNullOrEmpty(decision.AffectedFiles))
+                    {
+                        <div class="decision-detail-field">
+                            <strong>Affected Files:</strong> @decision.AffectedFiles
+                        </div>
+                    }
+                    @if (!string.IsNullOrEmpty(decision.RiskAssessment))
+                    {
+                        <div class="decision-detail-field">
+                            <strong>Risk Assessment:</strong> @decision.RiskAssessment
+                        </div>
+                    }
+                    @if (!string.IsNullOrEmpty(decision.Plan))
+                    {
+                        <details class="decision-plan-detail">
+                            <summary>📋 View Implementation Plan</summary>
+                            <pre class="decision-plan-content">@decision.Plan</pre>
+                        </details>
+                    }
+
+                    @* Feedback + Approve/Reject *@
+                    <div class="decision-actions">
+                        <input type="text" class="decision-feedback-input"
+                               placeholder="Optional feedback..."
+                               @bind="_feedbackInputs[decision.Id]" />
+                        <button class="decision-approve-btn" @onclick="() => ApproveDecision(decision.Id)">
+                            ✅ Approve
+                        </button>
+                        <button class="decision-reject-btn" @onclick="() => RejectDecision(decision.Id)">
+                            ❌ Reject
+                        </button>
+                    </div>
+                </div>
+            </div>
+        }
+    </div>
+}
+
+@* ── Standard Gate Notifications ── *@
+@if (_notifications.Count == 0 && _pendingDecisions.Count == 0)
 {
     <div class="empty-state">
         <div class="empty-icon">✅</div>
@@ -53,55 +125,59 @@
         <div class="empty-sub">Gate approval requests from agents will appear here</div>
     </div>
 }
-else
+else if (_notifications.Count > 0)
 {
     <div class="approvals-list">
         @foreach (var gate in _notifications)
         {
             var isProjectComplete = gate.GateName.Contains("Project Complete", StringComparison.OrdinalIgnoreCase);
+            var isDecisionGate = gate.GateId.StartsWith(DecisionGateService.DecisionGatePrefix);
 
-            <div class="approval-card @(gate.IsResolved ? "resolved" : "open") @(isProjectComplete ? "project-complete" : "")">
-                <div class="approval-card-left">
-                    <div class="approval-icon">
-                        @if (isProjectComplete) { <span>🎉</span> }
-                        else if (gate.IsResolved) { <span>✅</span> }
-                        else { <span>🚦</span> }
-                    </div>
-                </div>
-                <div class="approval-card-body">
-                    <div class="approval-card-header">
-                        <span class="approval-gate-name">@gate.GateName</span>
-                        @if (gate.ResourceType is not null && gate.ResourceNumber is not null)
-                        {
-                            <span class="approval-resource-badge">@gate.ResourceType #@gate.ResourceNumber</span>
-                        }
-                        <span class="approval-time">@FormatTime(gate.CreatedAt)</span>
-                    </div>
-                    <div class="approval-context">@gate.Context</div>
-                    @if (gate.IsResolved && gate.ResolvedAt.HasValue)
-                    {
-                        <div class="approval-resolved-info">
-                            ✅ @(isProjectComplete ? "Completed" : "Approved") @FormatTime(gate.ResolvedAt.Value)
+            @if (!isDecisionGate)
+            {
+                <div class="approval-card @(gate.IsResolved ? "resolved" : "open") @(isProjectComplete ? "project-complete" : "")">
+                    <div class="approval-card-left">
+                        <div class="approval-icon">
+                            @if (isProjectComplete) { <span>🎉</span> }
+                            else if (gate.IsResolved) { <span>✅</span> }
+                            else { <span>🚦</span> }
                         </div>
-                    }
+                    </div>
+                    <div class="approval-card-body">
+                        <div class="approval-card-header">
+                            <span class="approval-gate-name">@gate.GateName</span>
+                            @if (gate.ResourceType is not null && gate.ResourceNumber is not null)
+                            {
+                                <span class="approval-resource-badge">@gate.ResourceType #@gate.ResourceNumber</span>
+                            }
+                            <span class="approval-time">@FormatTime(gate.CreatedAt)</span>
+                        </div>
+                        <div class="approval-context">@gate.Context</div>
+                        @if (gate.IsResolved && gate.ResolvedAt.HasValue)
+                        {
+                            <div class="approval-resolved-info">
+                                ✅ @(isProjectComplete ? "Completed" : "Approved") @FormatTime(gate.ResolvedAt.Value)
+                            </div>
+                        }
+                    </div>
+                    <div class="approval-card-actions">
+                        @if (gate.GitHubUrl is not null)
+                        {
+                            <a class="approval-action-btn review-btn" href="@gate.GitHubUrl" target="_blank" rel="noopener">
+                                Review on GitHub ↗
+                            </a>
+                        }
+                        @if (!gate.IsResolved && !isProjectComplete)
+                        {
+                            <span class="approval-status-pill pending">Awaiting Review</span>
+                        }
+                        else if (gate.IsResolved)
+                        {
+                            <span class="approval-status-pill approved">@(isProjectComplete ? "Complete" : "Approved")</span>
+                        }
+                    </div>
                 </div>
-                <div class="approval-card-actions">
-                    @if (gate.GitHubUrl is not null)
-                    {
-                        <a class="approval-action-btn review-btn" href="@gate.GitHubUrl" target="_blank" rel="noopener">
-                            Review on GitHub ↗
-                        </a>
-                    }
-                    @if (!gate.IsResolved && !isProjectComplete)
-                    {
-                        <span class="approval-status-pill pending">Awaiting Review</span>
-                    }
-                    else if (gate.IsResolved)
-                    {
-                        <span class="approval-status-pill approved">@(isProjectComplete ? "Complete" : "Approved")</span>
-                    }
-                </div>
-            </div>
+            }
         }
     </div>
 }
@@ -109,26 +185,45 @@ else
 @code {
     private NotificationFilter _filter = NotificationFilter.Open;
     private IReadOnlyList<GateNotification> _notifications = Array.Empty<GateNotification>();
+    private IReadOnlyList<AgentDecision> _pendingDecisions = Array.Empty<AgentDecision>();
+    private Dictionary<string, string> _feedbackInputs = new();
     private int _openCount;
     private int _resolvedCount;
+    private int _pendingDecisionCount;
 
     private GateNotificationService? _inProcessService;
     private HttpGateNotificationService? _httpService;
+    private IDecisionLog? _decisionLog;
+    private DecisionGateService? _decisionGateService;
 
     protected override void OnInitialized()
     {
         _httpService = ServiceProvider.GetService<HttpGateNotificationService>();
         _inProcessService = ServiceProvider.GetService<GateNotificationService>();
+        _decisionLog = ServiceProvider.GetService<IDecisionLog>();
+        _decisionGateService = ServiceProvider.GetService<DecisionGateService>();
 
         if (_httpService is not null)
             _httpService.OnChange += OnChange;
         else if (_inProcessService is not null)
             _inProcessService.OnChange += OnChange;
 
+        if (_decisionLog is not null)
+            _decisionLog.OnDecisionChanged += OnDecisionChange;
+
         RefreshData();
     }
 
     private void OnChange()
+    {
+        InvokeAsync(() =>
+        {
+            RefreshData();
+            StateHasChanged();
+        });
+    }
+
+    private void OnDecisionChange(AgentDecision _)
     {
         InvokeAsync(() =>
         {
@@ -157,6 +252,35 @@ else
             _openCount = _inProcessService.OpenCount;
             _resolvedCount = _inProcessService.ResolvedCount;
         }
+
+        // Get pending decisions
+        if (_decisionLog is not null)
+        {
+            _pendingDecisions = _decisionLog.GetPendingDecisions();
+            _pendingDecisionCount = _pendingDecisions.Count;
+
+            // Ensure feedback inputs exist for each pending decision
+            foreach (var d in _pendingDecisions)
+            {
+                _feedbackInputs.TryAdd(d.Id, "");
+            }
+        }
+    }
+
+    private void ApproveDecision(string decisionId)
+    {
+        var feedback = _feedbackInputs.GetValueOrDefault(decisionId, "");
+        _decisionGateService?.ApproveDecision(decisionId, string.IsNullOrWhiteSpace(feedback) ? null : feedback);
+        _feedbackInputs.Remove(decisionId);
+        RefreshData();
+    }
+
+    private void RejectDecision(string decisionId)
+    {
+        var feedback = _feedbackInputs.GetValueOrDefault(decisionId, "");
+        _decisionGateService?.RejectDecision(decisionId, string.IsNullOrWhiteSpace(feedback) ? null : feedback);
+        _feedbackInputs.Remove(decisionId);
+        RefreshData();
     }
 
     private static string FormatTime(DateTime dt)
@@ -174,5 +298,8 @@ else
             _httpService.OnChange -= OnChange;
         else if (_inProcessService is not null)
             _inProcessService.OnChange -= OnChange;
+
+        if (_decisionLog is not null)
+            _decisionLog.OnDecisionChanged -= OnDecisionChange;
     }
 }

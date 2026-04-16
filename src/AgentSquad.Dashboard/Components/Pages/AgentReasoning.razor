@@ -1,6 +1,7 @@
 @page "/reasoning"
 @rendermode InteractiveServer
 @using AgentSquad.Core.Agents.Reasoning
+@using AgentSquad.Core.Agents.Decisions
 @using System.Net.Http.Json
 @using AgentSquad.Dashboard.Services
 @implements IDisposable
@@ -10,9 +11,33 @@
 
 <div class="dashboard-header">
     <h1>🧠 Agent Reasoning</h1>
-    <span class="header-badge @(_events.Count > 0 ? "badge-active" : "badge-idle")">
-        @(_events.Count) events
-    </span>
+    <div class="header-badges">
+        <span class="header-badge @(_events.Count > 0 ? "badge-active" : "badge-idle")">
+            @(_events.Count) events
+        </span>
+        @if (_pendingDecisionCount > 0)
+        {
+            <span class="header-badge warning">@_pendingDecisionCount pending decisions</span>
+        }
+    </div>
+</div>
+
+@* ── Event Type Filter Bar ── *@
+<div class="reasoning-type-filters">
+    <button class="type-filter-btn @(_typeFilter == null ? "active" : "")"
+            @onclick="() => SetTypeFilter(null)">All</button>
+    <button class="type-filter-btn @(_typeFilter == "Decisions" ? "active" : "")"
+            @onclick='() => SetTypeFilter("Decisions")'>
+        ⚖️ Decisions @if (_decisions.Count > 0) { <span class="filter-count">@_decisions.Count</span> }
+    </button>
+    <button class="type-filter-btn @(_typeFilter == "Planning" ? "active" : "")"
+            @onclick='() => SetTypeFilter("Planning")'>🎯 Planning</button>
+    <button class="type-filter-btn @(_typeFilter == "Generating" ? "active" : "")"
+            @onclick='() => SetTypeFilter("Generating")'>✍️ Generating</button>
+    <button class="type-filter-btn @(_typeFilter == "Assessing" ? "active" : "")"
+            @onclick='() => SetTypeFilter("Assessing")'>🔍 Assessing</button>
+    <button class="type-filter-btn @(_typeFilter == "Other" ? "active" : "")"
+            @onclick='() => SetTypeFilter("Other")'>📋 Other</button>
 </div>
 
 <div class="reasoning-layout">
@@ -28,12 +53,17 @@
             {
                 var displayName = GetDisplayName(agentId);
                 var eventCount = _events.Count(e => e.AgentId == agentId);
+                var decisionCount = _decisions.Count(d => d.AgentId == agentId);
                 var latestType = _events.Where(e => e.AgentId == agentId).MaxBy(e => e.Timestamp)?.EventType;
                 <button class="reason-agent-btn @(_selectedAgent == agentId ? "active" : "")"
                         @onclick="() => SelectAgent(agentId)">
                     <span class="agent-icon">@GetEventIcon(latestType)</span>
                     <span class="agent-name">@displayName</span>
                     <span class="agent-badge">@eventCount</span>
+                    @if (decisionCount > 0)
+                    {
+                        <span class="agent-badge decision-badge">⚖️ @decisionCount</span>
+                    }
                 </button>
             }
         </div>
@@ -41,7 +71,74 @@
 
     @* ── Right: Event Timeline ── *@
     <div class="reasoning-timeline">
-        @if (!_filteredEvents.Any())
+        @if (_typeFilter == "Decisions")
+        {
+            @* ── Decision-specific view ── *@
+            @if (!_filteredDecisions.Any())
+            {
+                <div class="reasoning-empty">
+                    <div class="empty-icon">⚖️</div>
+                    <h3>No Decisions Yet</h3>
+                    <p>Agent decisions with impact classification will appear here when decision gating is enabled.</p>
+                </div>
+            }
+            else
+            {
+                @foreach (var decision in _filteredDecisions)
+                {
+                    <div class="reasoning-event event-decision @GetDecisionStatusClass(decision.Status)">
+                        <div class="event-header">
+                            <span class="event-icon">⚖️</span>
+                            <span class="impact-badge impact-@decision.ImpactLevel.ToString().ToLower()">@decision.ImpactLevel</span>
+                            <span class="event-agent">@decision.AgentDisplayName</span>
+                            <span class="event-phase">@decision.Phase</span>
+                            @if (!string.IsNullOrEmpty(decision.Category))
+                            {
+                                <span class="decision-category">@decision.Category</span>
+                            }
+                            <span class="decision-status-pill status-@decision.Status.ToString().ToLower()">
+                                @GetDecisionStatusIcon(decision.Status) @decision.Status
+                            </span>
+                            <span class="event-time">@decision.CreatedAt.ToLocalTime().ToString("HH:mm:ss")</span>
+                        </div>
+                        <div class="event-summary"><strong>@decision.Title</strong></div>
+                        <div class="decision-rationale">@decision.Rationale</div>
+                        @if (!string.IsNullOrEmpty(decision.Alternatives))
+                        {
+                            <div class="decision-field">
+                                <strong>Alternatives:</strong> @decision.Alternatives
+                            </div>
+                        }
+                        @if (!string.IsNullOrEmpty(decision.AffectedFiles))
+                        {
+                            <div class="decision-field">
+                                <strong>Affected Files:</strong> @decision.AffectedFiles
+                            </div>
+                        }
+                        @if (!string.IsNullOrEmpty(decision.RiskAssessment))
+                        {
+                            <div class="decision-field">
+                                <strong>Risk:</strong> @decision.RiskAssessment
+                            </div>
+                        }
+                        @if (!string.IsNullOrEmpty(decision.Plan))
+                        {
+                            <details class="event-detail">
+                                <summary>View implementation plan</summary>
+                                <pre>@decision.Plan</pre>
+                            </details>
+                        }
+                        @if (!string.IsNullOrEmpty(decision.HumanFeedback))
+                        {
+                            <div class="decision-feedback">
+                                <strong>Human Feedback:</strong> @decision.HumanFeedback
+                            </div>
+                        }
+                    </div>
+                }
+            }
+        }
+        else if (!_filteredEvents.Any())
         {
             <div class="reasoning-empty">
                 <div class="empty-icon">🧠</div>
@@ -100,29 +197,58 @@
     [Inject] private IServiceProvider Services { get; set; } = default!;
 
     private IAgentReasoningLog? _directLog;
+    private IDecisionLog? _decisionLog;
     private HttpClient? _http;
     private Timer? _pollTimer;
     private List<AgentReasoningEvent> _events = [];
+    private List<AgentDecision> _decisions = [];
     private List<string> _agentIds = [];
     private string? _selectedAgent;
+    private string? _typeFilter;
+    private int _pendingDecisionCount;
     private bool _disposed;
 
-    private IEnumerable<AgentReasoningEvent> _filteredEvents =>
+    private IEnumerable<AgentReasoningEvent> _filteredEvents
+    {
+        get
+        {
+            var agentFiltered = _selectedAgent is null
+                ? _events
+                : _events.Where(e => e.AgentId == _selectedAgent);
+
+            if (_typeFilter is not null and not "Decisions")
+            {
+                agentFiltered = _typeFilter switch
+                {
+                    "Planning" => agentFiltered.Where(e => e.EventType == AgentReasoningEventType.Planning),
+                    "Generating" => agentFiltered.Where(e => e.EventType == AgentReasoningEventType.Generating),
+                    "Assessing" => agentFiltered.Where(e => e.EventType == AgentReasoningEventType.Assessing),
+                    "Other" => agentFiltered.Where(e => e.EventType is AgentReasoningEventType.Refining
+                        or AgentReasoningEventType.Publishing or AgentReasoningEventType.Error
+                        or AgentReasoningEventType.HumanIntervention),
+                    _ => agentFiltered,
+                };
+            }
+
+            return agentFiltered.OrderByDescending(e => e.Timestamp);
+        }
+    }
+
+    private IEnumerable<AgentDecision> _filteredDecisions =>
         (_selectedAgent is null
-            ? _events
-            : _events.Where(e => e.AgentId == _selectedAgent))
-        .OrderByDescending(e => e.Timestamp);
+            ? _decisions
+            : _decisions.Where(d => d.AgentId == _selectedAgent))
+        .OrderByDescending(d => d.CreatedAt);
 
     protected override void OnInitialized()
     {
         if (!Mode.IsStandalone)
         {
-            // In-process mode: access the reasoning log directly
             _directLog = Services.GetService<IAgentReasoningLog>();
+            _decisionLog = Services.GetService<IDecisionLog>();
         }
         else
         {
-            // Standalone mode: use HTTP to poll the Runner API
             var factory = Services.GetService<IHttpClientFactory>();
             _http = factory?.CreateClient("RunnerApi");
         }
@@ -149,15 +275,28 @@
                 if (events is not null) _events = events;
             }
 
+            // Also poll decisions
+            if (_decisionLog is not null)
+            {
+                _decisions = _decisionLog.GetAllDecisions().ToList();
+                _pendingDecisionCount = _decisionLog.GetPendingDecisions().Count;
+
+                // Merge decision agent IDs into _agentIds
+                foreach (var agentId in _decisionLog.GetAgentIds())
+                {
+                    if (!_agentIds.Contains(agentId))
+                        _agentIds.Add(agentId);
+                }
+            }
+
             await InvokeAsync(StateHasChanged);
         }
         catch { /* Runner not reachable — silently retry */ }
     }
 
-    private void SelectAgent(string? agentId)
-    {
-        _selectedAgent = agentId;
-    }
+    private void SelectAgent(string? agentId) => _selectedAgent = agentId;
+
+    private void SetTypeFilter(string? filter) => _typeFilter = filter;
 
     private static string GetDisplayName(string agentId)
     {
@@ -197,6 +336,24 @@
         AgentReasoningEventType.Publishing => "event-publishing",
         AgentReasoningEventType.Error => "event-error",
         AgentReasoningEventType.HumanIntervention => "event-human",
+        _ => ""
+    };
+
+    private static string GetDecisionStatusClass(DecisionStatus status) => status switch
+    {
+        DecisionStatus.Pending => "decision-pending",
+        DecisionStatus.Approved => "decision-approved",
+        DecisionStatus.Rejected => "decision-rejected",
+        DecisionStatus.AutoApproved => "decision-auto",
+        _ => ""
+    };
+
+    private static string GetDecisionStatusIcon(DecisionStatus status) => status switch
+    {
+        DecisionStatus.Pending => "⏳",
+        DecisionStatus.Approved => "✅",
+        DecisionStatus.Rejected => "❌",
+        DecisionStatus.AutoApproved => "🤖",
         _ => ""
     };
 

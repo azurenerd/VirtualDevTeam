@@ -358,6 +358,22 @@ main {
     margin-top: 0.25rem;
 }
 
+.stat-card.stat-card-alert {
+    border-color: rgba(210, 153, 34, 0.3);
+    background: rgba(210, 153, 34, 0.05);
+}
+
+.stat-sub-badge {
+    font-size: 0.65rem;
+    padding: 1px 6px;
+    border-radius: 8px;
+    background: rgba(255, 160, 0, 0.2);
+    color: #ffa000;
+    font-weight: 600;
+    margin-left: 4px;
+    vertical-align: middle;
+}
+
 /* ===== Team Composition Card ===== */
 .team-composition-card {
     background: var(--card-bg);
@@ -7059,4 +7075,287 @@ a.ntl-detail-pr-num:hover { text-decoration: underline; color: #79c0ff; }
 .prompt-reset-btn:hover {
     color: var(--text-primary);
     border-color: var(--text-secondary);
+}
+
+/* ═══════════════════════════════════════════════════
+   Decision Impact Classification & Gating
+   ═══════════════════════════════════════════════════ */
+
+/* ── Type Filter Bar (Reasoning page) ── */
+.reasoning-type-filters {
+    display: flex;
+    gap: 0.4rem;
+    padding: 0 16px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+}
+
+.type-filter-btn {
+    padding: 0.3rem 0.75rem;
+    border-radius: 8px;
+    border: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
+    background: rgba(22, 27, 34, 0.5);
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+
+.type-filter-btn:hover {
+    border-color: rgba(88, 166, 255, 0.25);
+    background: rgba(88, 166, 255, 0.06);
+    color: var(--text-primary);
+}
+
+.type-filter-btn.active {
+    background: rgba(88, 166, 255, 0.15);
+    border-color: rgba(88, 166, 255, 0.4);
+    color: #58a6ff;
+    font-weight: 600;
+}
+
+.type-filter-btn .filter-count {
+    font-size: 0.68rem;
+    padding: 0 5px;
+    border-radius: 8px;
+    background: rgba(255, 160, 0, 0.2);
+    color: #ffa000;
+    font-weight: 600;
+}
+
+/* ── Decision Badge on Agent Button ── */
+.reason-agent-btn .decision-badge {
+    background: rgba(210, 153, 34, 0.15);
+    color: #d29922;
+}
+
+/* ── Impact Level Badges ── */
+.impact-badge {
+    font-size: 0.7rem;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    white-space: nowrap;
+}
+
+.impact-badge.impact-xs {
+    background: rgba(63, 185, 80, 0.15);
+    color: #3fb950;
+    border: 1px solid rgba(63, 185, 80, 0.3);
+}
+
+.impact-badge.impact-s {
+    background: rgba(88, 166, 255, 0.15);
+    color: #58a6ff;
+    border: 1px solid rgba(88, 166, 255, 0.3);
+}
+
+.impact-badge.impact-m {
+    background: rgba(210, 153, 34, 0.15);
+    color: #d29922;
+    border: 1px solid rgba(210, 153, 34, 0.3);
+}
+
+.impact-badge.impact-l {
+    background: rgba(248, 81, 73, 0.15);
+    color: #f85149;
+    border: 1px solid rgba(248, 81, 73, 0.3);
+}
+
+.impact-badge.impact-xl {
+    background: rgba(188, 76, 0, 0.2);
+    color: #ff8c69;
+    border: 1px solid rgba(188, 76, 0, 0.4);
+}
+
+/* ── Decision Status Pills ── */
+.decision-status-pill {
+    font-size: 0.72rem;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.decision-status-pill.status-pending {
+    background: rgba(255, 160, 0, 0.15);
+    color: #ffa000;
+}
+
+.decision-status-pill.status-approved {
+    background: rgba(63, 185, 80, 0.15);
+    color: #3fb950;
+}
+
+.decision-status-pill.status-rejected {
+    background: rgba(248, 81, 73, 0.15);
+    color: #f85149;
+}
+
+.decision-status-pill.status-autoapproved {
+    background: rgba(88, 166, 255, 0.1);
+    color: #79c0ff;
+}
+
+/* ── Decision Event Styling (Reasoning page) ── */
+.reasoning-event.decision-pending {
+    border-left-color: #ffa000;
+    background: rgba(255, 160, 0, 0.04);
+}
+
+.reasoning-event.decision-approved {
+    border-left-color: #3fb950;
+}
+
+.reasoning-event.decision-rejected {
+    border-left-color: #f85149;
+    background: rgba(248, 81, 73, 0.04);
+}
+
+.reasoning-event.decision-auto {
+    border-left-color: #58a6ff;
+}
+
+.decision-rationale {
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+    margin-top: 4px;
+    line-height: 1.45;
+}
+
+.decision-field {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    margin-top: 4px;
+    padding: 4px 8px;
+    background: rgba(255, 255, 255, 0.02);
+    border-radius: 4px;
+}
+
+.decision-category {
+    font-size: 0.72rem;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: rgba(163, 113, 247, 0.12);
+    color: #a371f7;
+}
+
+.decision-feedback {
+    margin-top: 8px;
+    padding: 6px 10px;
+    background: rgba(88, 166, 255, 0.06);
+    border-radius: 6px;
+    border-left: 2px solid #58a6ff;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+}
+
+/* ── Decision Gate Cards (Approvals page) ── */
+.decision-gates-section {
+    margin-bottom: 1.5rem;
+}
+
+.decision-gates-section h3 {
+    color: var(--text-primary);
+    font-size: 0.95rem;
+    margin-bottom: 0.75rem;
+}
+
+.approval-card.decision-gate {
+    border-left-color: #d29922;
+    background: rgba(210, 153, 34, 0.03);
+}
+
+.decision-detail-field {
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+    margin-top: 4px;
+    padding: 4px 0;
+}
+
+.decision-plan-detail {
+    margin-top: 8px;
+}
+
+.decision-plan-detail summary {
+    cursor: pointer;
+    color: #58a6ff;
+    font-size: 0.82rem;
+    font-weight: 500;
+}
+
+.decision-plan-content {
+    margin-top: 6px;
+    padding: 12px;
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 6px;
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 400px;
+    overflow-y: auto;
+    line-height: 1.5;
+}
+
+.decision-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.decision-feedback-input {
+    flex: 1;
+    padding: 6px 10px;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(0, 0, 0, 0.2);
+    color: var(--text-primary);
+    font-size: 0.82rem;
+}
+
+.decision-feedback-input:focus {
+    outline: none;
+    border-color: rgba(88, 166, 255, 0.4);
+}
+
+.decision-approve-btn,
+.decision-reject-btn {
+    padding: 6px 14px;
+    border-radius: 6px;
+    border: none;
+    font-size: 0.82rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+    white-space: nowrap;
+}
+
+.decision-approve-btn {
+    background: rgba(63, 185, 80, 0.15);
+    color: #3fb950;
+    border: 1px solid rgba(63, 185, 80, 0.3);
+}
+
+.decision-approve-btn:hover {
+    background: rgba(63, 185, 80, 0.25);
+}
+
+.decision-reject-btn {
+    background: rgba(248, 81, 73, 0.15);
+    color: #f85149;
+    border: 1px solid rgba(248, 81, 73, 0.3);
+}
+
+.decision-reject-btn:hover {
+    background: rgba(248, 81, 73, 0.25);
 }

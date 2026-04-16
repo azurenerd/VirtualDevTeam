@@ -102,6 +102,10 @@ builder.Services.AddHostedService<AgentSquad.Core.Prompts.PromptFileWatcher>();
 builder.Services.AddSingleton<AgentSquad.Core.Agents.Reasoning.IAgentReasoningLog, AgentSquad.Core.Agents.Reasoning.AgentReasoningLog>();
 builder.Services.AddSingleton<AgentSquad.Core.Agents.Reasoning.SelfAssessmentService>();
 
+// Decision impact classification and gating
+builder.Services.AddSingleton<AgentSquad.Core.Agents.Decisions.IDecisionLog, AgentSquad.Core.Agents.Decisions.DecisionLog>();
+builder.Services.AddSingleton<AgentSquad.Core.Agents.Decisions.DecisionGateService>();
+
 // Orchestrator (registry, health monitor, deadlock detector, spawn manager, workflow)
 builder.Services.AddOrchestrator();
 

@@ -1,6 +1,7 @@
 @page "/"
 @rendermode InteractiveServer
 @using AgentSquad.Core.Agents
+@using AgentSquad.Core.Agents.Decisions
 @using AgentSquad.Core.Diagnostics
 @using AgentSquad.Core.GitHub
 @using AgentSquad.Core.Notifications
@@ -76,6 +77,21 @@
         <div class="stat-label">Blocked</div>
         <div class="stat-value red">@CountByStatus(AgentStatus.Blocked)</div>
     </div>
+    @if (_decisionLog is not null)
+    {
+        var pending = _decisionLog.GetPendingDecisions().Count;
+        var total = _decisionLog.GetAllDecisions().Count;
+        <div class="stat-card @(pending > 0 ? "stat-card-alert" : "")">
+            <div class="stat-label">⚖️ Decisions</div>
+            <div class="stat-value @(pending > 0 ? "amber" : "")">
+                @total
+                @if (pending > 0)
+                {
+                    <span class="stat-sub-badge">@pending gated</span>
+                }
+            </div>
+        </div>
+    }
 </div>
 
 @if (_teamComposition is not null)
@@ -352,6 +368,7 @@ else
     private string? _selectedAgentId;
     private bool _hasDeadlock;
     private List<string>? _deadlockCycle;
+    private IDecisionLog? _decisionLog;
 
     // Error modal state
     private bool _showErrorModal;
@@ -380,6 +397,7 @@ else
 
     protected override void OnInitialized()
     {
+        _decisionLog = ServiceProvider.GetService<IDecisionLog>();
         RefreshData();
         _availableModels = DataService.GetAvailableModels();
         DataService.OnChange += OnDataChanged;
