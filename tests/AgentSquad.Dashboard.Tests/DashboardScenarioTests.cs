@@ -43,12 +43,32 @@ public class DashboardScenarioTests : IAsyncLifetime
 
     private async Task<IBrowserContext> CreateContextAsync(string scenarioName)
     {
+        var scenarioVideoDir = Path.Combine(_videoDir, scenarioName);
+        Directory.CreateDirectory(scenarioVideoDir);
+
         return await _browser.NewContextAsync(new BrowserNewContextOptions
         {
             ViewportSize = new ViewportSize { Width = 1920, Height = 1080 },
-            RecordVideoDir = _videoDir,
+            RecordVideoDir = scenarioVideoDir,
             RecordVideoSize = new RecordVideoSize { Width = 1920, Height = 1080 }
         });
+    }
+
+    /// <summary>
+    /// Renames the random-hash video file to a scenario-named file after context disposal.
+    /// Must be called after DisposeAsync on the context.
+    /// </summary>
+    private void RenameVideo(string scenarioName)
+    {
+        var scenarioVideoDir = Path.Combine(_videoDir, scenarioName);
+        var videoFile = Directory.GetFiles(scenarioVideoDir, "*.webm").FirstOrDefault();
+        if (videoFile is null) return;
+
+        var dest = Path.Combine(_videoDir, $"{scenarioName}.webm");
+        File.Move(videoFile, dest, overwrite: true);
+
+        // Clean up the per-scenario subdirectory
+        try { Directory.Delete(scenarioVideoDir, recursive: true); } catch { }
     }
 
     private async Task<string> CaptureScreenshotAsync(IPage page, string scenarioId)
@@ -65,7 +85,7 @@ public class DashboardScenarioTests : IAsyncLifetime
     [Fact]
     public async Task S01_AgentOverview_ShowsAgentCards()
     {
-        await using var context = await CreateContextAsync("S01");
+        var context = await CreateContextAsync("S01");
         var page = await context.NewPageAsync();
 
         await page.GotoAsync(_baseUrl, new PageGotoOptions { WaitUntil = WaitUntilState.Load, Timeout = 15000 });
@@ -84,12 +104,14 @@ public class DashboardScenarioTests : IAsyncLifetime
         Assert.False(string.IsNullOrWhiteSpace(text), "Page body should have text content");
 
         await CaptureScreenshotAsync(page, "S01_AgentOverview");
+        await context.CloseAsync();
+        RenameVideo("S01");
     }
 
     [Fact]
     public async Task S02_PullRequests_ShowsPRList()
     {
-        await using var context = await CreateContextAsync("S02");
+        var context = await CreateContextAsync("S02");
         var page = await context.NewPageAsync();
 
         await page.GotoAsync($"{_baseUrl}/pullrequests", new PageGotoOptions { WaitUntil = WaitUntilState.Load, Timeout = 15000 });
@@ -105,12 +127,14 @@ public class DashboardScenarioTests : IAsyncLifetime
         Assert.True(hasFilters, "PR page should have state filters or PR heading");
 
         await CaptureScreenshotAsync(page, "S02_PullRequests");
+        await context.CloseAsync();
+        RenameVideo("S02");
     }
 
     [Fact]
     public async Task S03_Issues_ShowsIssueList()
     {
-        await using var context = await CreateContextAsync("S03");
+        var context = await CreateContextAsync("S03");
         var page = await context.NewPageAsync();
 
         await page.GotoAsync($"{_baseUrl}/issues", new PageGotoOptions { WaitUntil = WaitUntilState.Load, Timeout = 15000 });
@@ -124,12 +148,14 @@ public class DashboardScenarioTests : IAsyncLifetime
         Assert.True(hasIssueElements, "Issues page should have issue-related content");
 
         await CaptureScreenshotAsync(page, "S03_Issues");
+        await context.CloseAsync();
+        RenameVideo("S03");
     }
 
     [Fact]
     public async Task S04_Reasoning_ShowsAgentReasoning()
     {
-        await using var context = await CreateContextAsync("S04");
+        var context = await CreateContextAsync("S04");
         var page = await context.NewPageAsync();
 
         await page.GotoAsync($"{_baseUrl}/reasoning", new PageGotoOptions { WaitUntil = WaitUntilState.Load, Timeout = 15000 });
@@ -139,12 +165,14 @@ public class DashboardScenarioTests : IAsyncLifetime
         Assert.False(string.IsNullOrWhiteSpace(text), "Reasoning page should have content");
 
         await CaptureScreenshotAsync(page, "S04_Reasoning");
+        await context.CloseAsync();
+        RenameVideo("S04");
     }
 
     [Fact]
     public async Task S05_Timeline_ShowsTimelineGroups()
     {
-        await using var context = await CreateContextAsync("S05");
+        var context = await CreateContextAsync("S05");
         var page = await context.NewPageAsync();
 
         await page.GotoAsync($"{_baseUrl}/timeline", new PageGotoOptions { WaitUntil = WaitUntilState.Load, Timeout = 15000 });
@@ -154,12 +182,14 @@ public class DashboardScenarioTests : IAsyncLifetime
         Assert.False(string.IsNullOrWhiteSpace(text), "Timeline page should have content");
 
         await CaptureScreenshotAsync(page, "S05_Timeline");
+        await context.CloseAsync();
+        RenameVideo("S05");
     }
 
     [Fact]
     public async Task S06_Configuration_ShowsAgentSections()
     {
-        await using var context = await CreateContextAsync("S06");
+        var context = await CreateContextAsync("S06");
         var page = await context.NewPageAsync();
 
         await page.GotoAsync($"{_baseUrl}/configuration", new PageGotoOptions { WaitUntil = WaitUntilState.Load, Timeout = 15000 });
@@ -168,19 +198,20 @@ public class DashboardScenarioTests : IAsyncLifetime
         var text = await page.InnerTextAsync("body");
         Assert.False(string.IsNullOrWhiteSpace(text), "Configuration page should have content");
 
-        // Configuration page should have agent-related content
         var hasConfigContent = text.Contains("Configuration", StringComparison.OrdinalIgnoreCase)
                             || text.Contains("Agent", StringComparison.OrdinalIgnoreCase)
                             || text.Contains("Settings", StringComparison.OrdinalIgnoreCase);
         Assert.True(hasConfigContent, "Configuration page should have config-related content");
 
         await CaptureScreenshotAsync(page, "S06_Configuration");
+        await context.CloseAsync();
+        RenameVideo("S06");
     }
 
     [Fact]
     public async Task S08_HealthMonitor_ShowsStatus()
     {
-        await using var context = await CreateContextAsync("S08");
+        var context = await CreateContextAsync("S08");
         var page = await context.NewPageAsync();
 
         await page.GotoAsync($"{_baseUrl}/health", new PageGotoOptions { WaitUntil = WaitUntilState.Load, Timeout = 15000 });
@@ -190,12 +221,14 @@ public class DashboardScenarioTests : IAsyncLifetime
         Assert.False(string.IsNullOrWhiteSpace(text), "Health Monitor page should have content");
 
         await CaptureScreenshotAsync(page, "S08_HealthMonitor");
+        await context.CloseAsync();
+        RenameVideo("S08");
     }
 
     [Fact]
     public async Task S09_Metrics_ShowsData()
     {
-        await using var context = await CreateContextAsync("S09");
+        var context = await CreateContextAsync("S09");
         var page = await context.NewPageAsync();
 
         var response = await page.GotoAsync($"{_baseUrl}/metrics", new PageGotoOptions { WaitUntil = WaitUntilState.Load, Timeout = 15000 });
@@ -207,12 +240,14 @@ public class DashboardScenarioTests : IAsyncLifetime
 
         var text = await page.InnerTextAsync("body");
         Assert.False(string.IsNullOrWhiteSpace(text), "Metrics page should have content");
+        await context.CloseAsync();
+        RenameVideo("S09");
     }
 
     [Fact]
     public async Task S10_TeamViz_ShowsVisualization()
     {
-        await using var context = await CreateContextAsync("S10");
+        var context = await CreateContextAsync("S10");
         var page = await context.NewPageAsync();
 
         await page.GotoAsync($"{_baseUrl}/team", new PageGotoOptions { WaitUntil = WaitUntilState.Load, Timeout = 15000 });
@@ -222,12 +257,14 @@ public class DashboardScenarioTests : IAsyncLifetime
         Assert.False(string.IsNullOrWhiteSpace(text), "Team Viz page should have content");
 
         await CaptureScreenshotAsync(page, "S10_TeamViz");
+        await context.CloseAsync();
+        RenameVideo("S10");
     }
 
     [Fact]
     public async Task S11_Approvals_ShowsGates()
     {
-        await using var context = await CreateContextAsync("S11");
+        var context = await CreateContextAsync("S11");
         var page = await context.NewPageAsync();
 
         await page.GotoAsync($"{_baseUrl}/approvals", new PageGotoOptions { WaitUntil = WaitUntilState.Load, Timeout = 15000 });
@@ -237,6 +274,8 @@ public class DashboardScenarioTests : IAsyncLifetime
         Assert.False(string.IsNullOrWhiteSpace(text), "Approvals page should have content");
 
         await CaptureScreenshotAsync(page, "S11_Approvals");
+        await context.CloseAsync();
+        RenameVideo("S11");
     }
 
     public record ScenarioResult(string Id, string Name, bool Passed, string? Error, string ScreenshotPath);
