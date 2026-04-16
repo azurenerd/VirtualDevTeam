@@ -104,7 +104,7 @@ The system runs as two independent processes:
 | Process | Port | Purpose |
 |---------|------|---------|
 | **Runner** | 5050 | Agent orchestration + REST API + embedded dashboard |
-| **Dashboard.Host** (optional) | 5051 | Standalone dashboard — can restart without killing agents |
+| **Dashboard.Host** | 5051 | Standalone dashboard — **ALWAYS start alongside Runner** |
 
 The **Runner** hosts an embedded Blazor dashboard at port 5050 that has full functionality (including Configuration page and cleanup).
 
@@ -127,15 +127,20 @@ Start-Process -FilePath "src\AgentSquad.Runner\bin\Debug\net8.0\AgentSquad.Runne
 
 Dashboard is available at **http://localhost:5050** once the Runner starts.
 
-### Starting the Standalone Dashboard (optional)
+### Starting the Standalone Dashboard (REQUIRED)
+
+> ⚠️ **ALWAYS start the standalone dashboard alongside the Runner.** The embedded dashboard on port 5050 cannot be rebuilt without stopping the Runner. The standalone dashboard on port 5051 can be restarted independently for UI changes without disrupting running agents.
 
 ```powershell
 # Option 1: Use the start script
 .\scripts\start-dashboard.ps1
 
-# Option 2: Manual start
-dotnet build src\AgentSquad.Dashboard.Host
-Start-Process -FilePath "dotnet" -ArgumentList "run --project src\AgentSquad.Dashboard.Host --no-build" -WindowStyle Hidden -PassThru
+# Option 2: Manual start (from AgentSquad root)
+cd src\AgentSquad.Dashboard
+dotnet run
+
+# Option 3: Detached via Copilot CLI
+# Use mode="async", detach=true, shellId="dashboard"
 ```
 
 Standalone dashboard at **http://localhost:5051** connects to Runner API at port 5050.

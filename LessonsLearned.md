@@ -723,4 +723,19 @@ if (_gateCheck.RequiresHuman("pm_spec_review"))
 
 ---
 
+## 22. Always Start the Standalone Dashboard
+
+**Lesson:** The standalone dashboard (port 5051) must ALWAYS be started alongside the Runner (port 5050). The embedded dashboard inside the Runner cannot be rebuilt without stopping the Runner process (file locks on DLLs). The standalone dashboard can be restarted independently for UI iterations without disrupting running agents.
+
+**Startup checklist:**
+1. Start the Runner: `cd src\AgentSquad.Runner && dotnet run` (detached)
+2. Start the standalone dashboard: `cd src\AgentSquad.Dashboard && dotnet run` (detached)
+3. Verify both ports: 5050 (Runner + embedded) and 5051 (standalone)
+
+**Why both matter:**
+- Port 5050 (embedded): Has Configuration page, Engineering Plan, full in-process access
+- Port 5051 (standalone): Can be rebuilt/restarted without killing agents, shares SQLite DB for live data
+
+---
+
 *This document was compiled from 80+ checkpoints, 400+ conversation turns, and 85+ end-to-end test runs across six Copilot CLI sessions building the AgentSquad system.*
