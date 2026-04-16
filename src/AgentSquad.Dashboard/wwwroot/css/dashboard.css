@@ -7359,3 +7359,269 @@ a.ntl-detail-pr-num:hover { text-decoration: underline; color: #79c0ff; }
 .decision-reject-btn:hover {
     background: rgba(248, 81, 73, 0.25);
 }
+
+/* ===== Task Steps UI ===== */
+
+/* Step status colors */
+.step-status-completed { color: var(--accent-green); }
+.step-status-inprogress { color: var(--accent-cyan); }
+.step-status-pending { color: var(--text-muted); }
+.step-status-failed { color: var(--accent-red); }
+.step-status-skipped { color: var(--text-secondary); }
+.step-status-waiting { color: var(--accent-amber); }
+
+/* ── Steps filter view (AgentReasoning) ── */
+.step-timeline {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.step-agent-section {
+    background: var(--bg-card);
+    border: 1px solid var(--border-card);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+}
+
+.step-agent-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 16px;
+    cursor: pointer;
+    user-select: none;
+    transition: background var(--transition-fast);
+}
+
+.step-agent-header:hover {
+    background: var(--bg-card-hover);
+}
+
+.step-agent-chevron {
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+    transition: transform var(--transition-fast);
+}
+
+.step-agent-chevron.expanded {
+    transform: rotate(90deg);
+}
+
+.step-agent-name {
+    font-weight: 600;
+    color: var(--text-primary);
+    flex: 1;
+}
+
+.step-agent-progress-text {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
+.step-agent-body {
+    padding: 0 16px 16px;
+}
+
+/* Step progress bar (shared) */
+.step-progress-bar {
+    height: 4px;
+    background: rgba(255, 255, 255, 0.06);
+    border-radius: 2px;
+    overflow: hidden;
+    margin-bottom: 12px;
+}
+
+.step-progress-fill {
+    height: 100%;
+    border-radius: 2px;
+    transition: width 0.4s ease;
+    background: linear-gradient(90deg, var(--accent-cyan), var(--accent-green));
+}
+
+/* Step list */
+.step-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.step-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    border-radius: var(--radius-sm);
+    font-size: 0.85rem;
+    transition: background var(--transition-fast);
+}
+
+.step-item:hover {
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.step-item.step-active {
+    background: rgba(0, 212, 255, 0.06);
+    border-left: 2px solid var(--accent-cyan);
+}
+
+.step-icon {
+    font-size: 1rem;
+    width: 20px;
+    text-align: center;
+    flex-shrink: 0;
+}
+
+.step-name {
+    flex: 1;
+    color: var(--text-primary);
+    font-weight: 500;
+}
+
+.step-name.step-name-pending {
+    color: var(--text-muted);
+}
+
+.step-meta {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    flex-shrink: 0;
+}
+
+.step-elapsed {
+    font-family: var(--font-mono);
+}
+
+.step-cost {
+    color: var(--accent-gold);
+    font-family: var(--font-mono);
+}
+
+.step-llm-count {
+    color: var(--accent-purple);
+}
+
+/* Sub-steps */
+.step-substeps {
+    margin-left: 42px;
+    padding: 4px 0 4px 12px;
+    border-left: 1px solid var(--border-subtle);
+}
+
+.step-substep {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 0;
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+}
+
+.step-substep-turn {
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+    min-width: 24px;
+}
+
+.step-substep-desc {
+    flex: 1;
+}
+
+.step-substep-duration {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--text-muted);
+}
+
+.step-substep-cost {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--accent-gold);
+}
+
+/* Step totals row */
+.step-totals {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 10px 12px;
+    margin-top: 8px;
+    border-top: 1px solid var(--border-subtle);
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
+.step-totals-label {
+    color: var(--text-muted);
+    font-weight: 600;
+    text-transform: uppercase;
+    font-size: 0.7rem;
+    letter-spacing: 0.5px;
+}
+
+/* ── Agent Detail: Task Steps Card ── */
+.step-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-card);
+    border-radius: var(--radius-md);
+    padding: 20px;
+    margin-bottom: 20px;
+    box-shadow: var(--shadow-card);
+}
+
+.step-card-title {
+    font-size: 0.82rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-secondary);
+    margin-bottom: 12px;
+}
+
+.step-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+}
+
+.step-card-progress-label {
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
+/* ── Agent Overview: Compact step indicator ── */
+.step-compact {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding-top: 2px;
+}
+
+.step-compact-text {
+    font-size: 0.75rem;
+    color: var(--accent-cyan);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.step-compact-bar {
+    height: 3px;
+    background: rgba(255, 255, 255, 0.06);
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.step-compact-fill {
+    height: 100%;
+    border-radius: 2px;
+    background: linear-gradient(90deg, var(--accent-cyan), var(--accent-green));
+    transition: width 0.4s ease;
+}

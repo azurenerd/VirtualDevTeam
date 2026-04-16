@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using AgentSquad.Core.Agents;
 using AgentSquad.Core.Agents.Decisions;
 using AgentSquad.Core.Agents.Reasoning;
+using AgentSquad.Core.Agents.Steps;
 using AgentSquad.Core.AI;
 using AgentSquad.Core.Configuration;
 using AgentSquad.Core.GitHub;
@@ -36,6 +37,7 @@ public class ProgramManagerAgent : AgentBase
     private readonly DecisionGateService? _decisionGate;
     private readonly AgentTeamComposer? _teamComposer;
     private readonly SMEAgentDefinitionService? _definitionService;
+    private readonly IAgentTaskTracker _taskTracker;
 
     private readonly Dictionary<string, AgentTracking> _trackedAgents = new();
     private readonly HashSet<int> _processedIssueIds = new();
@@ -69,6 +71,7 @@ public class ProgramManagerAgent : AgentBase
         IAgentReasoningLog reasoningLog,
         IPromptTemplateService promptService,
         ILogger<ProgramManagerAgent> logger,
+        IAgentTaskTracker taskTracker,
         RoleContextProvider? roleContextProvider = null,
         AgentTeamComposer? teamComposer = null,
         SMEAgentDefinitionService? definitionService = null,
@@ -91,6 +94,7 @@ public class ProgramManagerAgent : AgentBase
         _teamComposer = teamComposer;
         _definitionService = definitionService;
         _decisionGate = decisionGate;
+        _taskTracker = taskTracker ?? throw new ArgumentNullException(nameof(taskTracker));
     }
 
     protected override Task OnInitializeAsync(CancellationToken ct)
@@ -120,7 +124,18 @@ public class ProgramManagerAgent : AgentBase
         UpdateStatus(AgentStatus.Idle, "Initializing project oversight");
 
         // One-time kickoff: read project description and seed the Researcher
-        await KickOffProjectAsync(ct);
+        var kickoffStepId = _taskTracker.BeginStep(Identity.Id, "pm-kickoff", "Read project context",
+            "Reading project description and kicking off research", Identity.ModelTier);
+        try
+        {
+            await KickOffProjectAsync(ct);
+            _taskTracker.CompleteStep(kickoffStepId);
+        }
+        catch (Exception ex)
+        {
+            _taskTracker.FailStep(kickoffStepId, ex.Message);
+            throw;
+        }
 
         while (!ct.IsCancellationRequested)
         {
@@ -1463,6 +1478,8 @@ public class ProgramManagerAgent : AgentBase
     /// </summary>
     private async Task CreatePMSpecAsync(CancellationToken ct)
     {
+        var specStepId = _taskTracker.BeginStep(Identity.Id, "pm-spec", "Generate PM Spec",
+            "Creating PM Specification from research findings", Identity.ModelTier);
         try
         {
             // Idempotency: check if PMSpec already has meaningful content
@@ -1711,6 +1728,8 @@ public class ProgramManagerAgent : AgentBase
 
                 var singleResponse = await chat.GetChatMessageContentAsync(
                     history, cancellationToken: ct);
+                _taskTracker.RecordSubStep(specStepId, "Single-pass PM Spec generation");
+                _taskTracker.RecordLlmCall(specStepId);
                 pmSpecDoc = singleResponse.Content?.Trim() ?? "";
             }
             else
@@ -1732,6 +1751,8 @@ public class ProgramManagerAgent : AgentBase
 
             var analysisResponse = await chat.GetChatMessageContentAsync(
                 history, cancellationToken: ct);
+            _taskTracker.RecordSubStep(specStepId, "Turn 1: Analyze requirements");
+            _taskTracker.RecordLlmCall(specStepId);
             history.AddAssistantMessage(analysisResponse.Content ?? "");
 
             Logger.LogDebug("PM Spec analysis complete for {ProjectName}", projectName);
@@ -1759,10 +1780,15 @@ public class ProgramManagerAgent : AgentBase
 
             var specResponse = await chat.GetChatMessageContentAsync(
                 history, cancellationToken: ct);
+            _taskTracker.RecordSubStep(specStepId, "Turn 2: Compile specification document");
+            _taskTracker.RecordLlmCall(specStepId);
             pmSpecDoc = specResponse.Content?.Trim() ?? "";
             }
 
             // Self-assessment: assess and refine the PM specification
+            _taskTracker.CompleteStep(specStepId);
+            var assessStepId = _taskTracker.BeginStep(Identity.Id, "pm-spec", "Self-assessment & refinement",
+                "Assessing and refining PM specification quality", Identity.ModelTier);
             _reasoningLog.Log(new AgentReasoningEvent
             {
                 AgentId = Identity.Id,
@@ -1789,21 +1815,29 @@ public class ProgramManagerAgent : AgentBase
                     classifyImpact: false, // PM spec assessment doesn't drive a decision gate
                     ct);
                 pmSpecDoc = refinedOutput;
+                _taskTracker.RecordLlmCall(assessStepId);
             }
+            _taskTracker.CompleteStep(assessStepId);
 
             Logger.LogDebug("PM Spec document compiled for {ProjectName}", projectName);
 
             } // end else (fresh AI work, not resuming from gate)
 
             // Commit document to PR so reviewers can see it before the gate
+            var commitStepId = _taskTracker.BeginStep(Identity.Id, "pm-spec", "Commit PMSpec.md",
+                "Committing PM Specification to PR", Identity.ModelTier);
             if (pmSpecDoc is not null && !pr.IsMerged)
             {
                 await _prWorkflow.CommitDocumentToPRAsync(
                     pr, "PMSpec.md", pmSpecDoc,
                     $"Add PM Specification for {projectName}", ct);
             }
+            _taskTracker.CompleteStep(commitStepId);
 
             // === Gate: PMSpecification — human reviews PMSpec before merge ===
+            var gateStepId = _taskTracker.BeginStep(Identity.Id, "pm-spec", "Human gate review",
+                "Awaiting human approval of PM Specification", Identity.ModelTier);
+            _taskTracker.SetStepWaiting(gateStepId);
             if (pmGateStatus != GateStatus.Approved)
             {
                 var maxRevisions = 3;
@@ -1841,6 +1875,7 @@ public class ProgramManagerAgent : AgentBase
                 await _prWorkflow.MergeDocumentPRAsync(
                     pr, Identity.DisplayName, "PMSpec.md", ct);
             }
+            _taskTracker.CompleteStep(gateStepId);
             Logger.LogInformation("PMSpec.md PR created and merged for project {ProjectName}", projectName);
             LogActivity("task", $"📝 PMSpec.md created and merged for {projectName}");
             await RememberAsync(MemoryType.Action,
@@ -1848,6 +1883,8 @@ public class ProgramManagerAgent : AgentBase
                 TruncateForMemory(pmSpecDoc), ct);
 
             // Notify all agents that PMSpec is ready — Architect will pick this up
+            var signalStepId = _taskTracker.BeginStep(Identity.Id, "pm-spec", "Signal Architect",
+                "Notifying team that PM Specification is ready", Identity.ModelTier);
             await _messageBus.PublishAsync(new StatusUpdateMessage
             {
                 FromAgentId = Identity.Id,
@@ -1862,11 +1899,23 @@ public class ProgramManagerAgent : AgentBase
             // Team composition: evaluate catalog and propose optimal team (if SME system enabled)
             if (_teamComposer is not null && _config.SmeAgents.Enabled && !_teamCompositionComplete)
             {
-                await ComposeTeamAsync(ct);
+                var teamStepId = _taskTracker.BeginStep(Identity.Id, "pm-spec", "Team composition analysis",
+                    "Evaluating optimal team composition", Identity.ModelTier);
+                try
+                {
+                    await ComposeTeamAsync(ct);
+                    _taskTracker.CompleteStep(teamStepId);
+                }
+                catch (Exception ex)
+                {
+                    _taskTracker.FailStep(teamStepId, ex.Message);
+                    throw;
+                }
             }
 
             // After PMSpec is merged, create User Story Issues
             await CreateUserStoryIssuesAsync(ct);
+            _taskTracker.CompleteStep(signalStepId);
 
             UpdateStatus(AgentStatus.Idle, "PMSpec complete, Issues created, Architect triggered");
         }

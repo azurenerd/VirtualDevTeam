@@ -1,6 +1,7 @@
 @page "/agent/{AgentId}"
 @rendermode InteractiveServer
 @using AgentSquad.Core.Agents
+@using AgentSquad.Core.Agents.Steps
 @using AgentSquad.Core.GitHub
 @using AgentSquad.Core.Persistence
 @using AgentSquad.Dashboard.Services
@@ -176,6 +177,85 @@ else
             </div>
         </div>
 
+        @* ── Current Task Steps ── *@
+        @if (_steps.Count > 0)
+        {
+            var pct = _stepTotal > 0 ? (int)(100.0 * _stepCompleted / _stepTotal) : 0;
+            <div class="step-card">
+                <div class="step-card-header">
+                    <div class="step-card-title">Current Task Steps</div>
+                    <span class="step-card-progress-label">@_stepCompleted / @_stepTotal steps</span>
+                </div>
+                <div class="step-progress-bar">
+                    <div class="step-progress-fill" style="width: @(pct)%"></div>
+                </div>
+                <div class="step-list">
+                    @foreach (var step in _steps)
+                    {
+                        <div class="step-item @(step.Status == AgentTaskStepStatus.InProgress ? "step-active" : "")">
+                            <span class="step-icon">@GetStepIcon(step.Status)</span>
+                            <span class="step-name @(step.Status == AgentTaskStepStatus.Pending ? "step-name-pending" : "")">@step.Name</span>
+                            <div class="step-meta">
+                                @if (step.Elapsed.HasValue)
+                                {
+                                    <span class="step-elapsed">@FormatStepDuration(step.Elapsed.Value)</span>
+                                }
+                                @if (step.EstimatedCost > 0)
+                                {
+                                    <span class="step-cost">@FormatStepCost(step.EstimatedCost)</span>
+                                }
+                                @if (step.LlmCallCount > 0)
+                                {
+                                    <span class="step-llm-count">@step.LlmCallCount calls</span>
+                                }
+                            </div>
+                        </div>
+                        @if (step.SubSteps.Count > 0)
+                        {
+                            <div class="step-substeps">
+                                @foreach (var sub in step.SubSteps)
+                                {
+                                    <div class="step-substep">
+                                        <span class="step-substep-turn">#@sub.TurnIndex</span>
+                                        <span class="step-substep-desc">@sub.Description</span>
+                                        @if (sub.Duration.HasValue)
+                                        {
+                                            <span class="step-substep-duration">@FormatStepDuration(sub.Duration.Value)</span>
+                                        }
+                                        @if (sub.EstimatedCost > 0)
+                                        {
+                                            <span class="step-substep-cost">@FormatStepCost(sub.EstimatedCost)</span>
+                                        }
+                                    </div>
+                                }
+                            </div>
+                        }
+                    }
+                </div>
+                @{ var totalElapsed = _steps.Where(s => s.Elapsed.HasValue).Select(s => s.Elapsed!.Value).Aggregate(TimeSpan.Zero, (a, b) => a + b);
+                   var totalCost = _steps.Sum(s => s.EstimatedCost);
+                   var totalLlm = _steps.Sum(s => s.LlmCallCount); }
+                @if (totalElapsed > TimeSpan.Zero || totalCost > 0 || totalLlm > 0)
+                {
+                    <div class="step-totals">
+                        <span class="step-totals-label">Totals</span>
+                        @if (totalElapsed > TimeSpan.Zero)
+                        {
+                            <span class="step-elapsed">@FormatStepDuration(totalElapsed)</span>
+                        }
+                        @if (totalCost > 0)
+                        {
+                            <span class="step-cost">@FormatStepCost(totalCost)</span>
+                        }
+                        @if (totalLlm > 0)
+                        {
+                            <span class="step-llm-count">@totalLlm LLM calls</span>
+                        }
+                    </div>
+                }
+            </div>
+        }
+
         <!-- Activity Log -->
         <div class="detail-card detail-log-card">
             <div class="detail-card-header-row">
@@ -239,9 +319,22 @@ else
     private string? _activeFilter;
     private System.Threading.Timer? _refreshTimer;
 
+    // Step tracking state
+    private IAgentTaskTracker? _taskTracker;
+    private HttpClient? _stepHttp;
+    private List<AgentTaskStep> _steps = [];
+    private int _stepCompleted;
+    private int _stepTotal;
+
     protected override void OnInitialized()
     {
         _spawnManager = ServiceProvider.GetService<AgentSpawnManager>();
+        _taskTracker = ServiceProvider.GetService<IAgentTaskTracker>();
+        if (_taskTracker is null)
+        {
+            var factory = ServiceProvider.GetService<IHttpClientFactory>();
+            _stepHttp = factory?.CreateClient("RunnerApi");
+        }
         RefreshData();
         DataService.OnChange += OnDataChanged;
 
@@ -261,7 +354,35 @@ else
     {
         _agent = DataService.GetAgentSnapshot(AgentId);
         _ = LoadActivityLogAsync();
+        _ = LoadStepsAsync();
     }
+
+    private async Task LoadStepsAsync()
+    {
+        try
+        {
+            if (_taskTracker is not null)
+            {
+                _steps = _taskTracker.GetSteps(AgentId).ToList();
+                (_stepCompleted, _stepTotal) = _taskTracker.GetProgress(AgentId);
+            }
+            else if (_stepHttp is not null)
+            {
+                var steps = await _stepHttp.GetFromJsonAsync<List<AgentTaskStep>>($"/api/steps/{AgentId}");
+                if (steps is not null) _steps = steps;
+                var progress = await _stepHttp.GetFromJsonAsync<StepProgressDto>($"/api/steps/{AgentId}/progress");
+                if (progress is not null)
+                {
+                    _stepCompleted = progress.Completed;
+                    _stepTotal = progress.Total;
+                }
+            }
+            await InvokeAsync(StateHasChanged);
+        }
+        catch { /* Steps not available */ }
+    }
+
+    private record StepProgressDto(int Completed, int Total);
 
     private async Task LoadActivityLogAsync()
     {
@@ -396,6 +517,28 @@ else
     {
         0m => "—",
         < 0.01m => $"< $0.01",
+        < 1m => cost.ToString("$0.00"),
+        _ => cost.ToString("$#,##0.00")
+    };
+
+    private static string GetStepIcon(AgentTaskStepStatus status) => status switch
+    {
+        AgentTaskStepStatus.Completed => "✅",
+        AgentTaskStepStatus.InProgress => "🔄",
+        AgentTaskStepStatus.Pending => "⬜",
+        AgentTaskStepStatus.Failed => "❌",
+        AgentTaskStepStatus.Skipped => "⏭️",
+        AgentTaskStepStatus.WaitingOnHuman => "⏳",
+        _ => "⬜"
+    };
+
+    private static string FormatStepDuration(TimeSpan ts) => ts.TotalMinutes >= 1
+        ? $"{ts.Minutes}m {ts.Seconds}s"
+        : $"{ts.TotalSeconds:F1}s";
+
+    private static string FormatStepCost(decimal cost) => cost switch
+    {
+        < 0.01m => "< $0.01",
         < 1m => cost.ToString("$0.00"),
         _ => cost.ToString("$#,##0.00")
     };

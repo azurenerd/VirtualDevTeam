@@ -102,6 +102,9 @@ builder.Services.AddHostedService<AgentSquad.Core.Prompts.PromptFileWatcher>();
 builder.Services.AddSingleton<AgentSquad.Core.Agents.Reasoning.IAgentReasoningLog, AgentSquad.Core.Agents.Reasoning.AgentReasoningLog>();
 builder.Services.AddSingleton<AgentSquad.Core.Agents.Reasoning.SelfAssessmentService>();
 
+// Agent task step tracking
+builder.Services.AddSingleton<AgentSquad.Core.Agents.Steps.IAgentTaskTracker, AgentSquad.Core.Agents.Steps.AgentTaskTracker>();
+
 // Decision impact classification and gating
 builder.Services.AddSingleton<AgentSquad.Core.Agents.Decisions.IDecisionLog, AgentSquad.Core.Agents.Decisions.DecisionLog>();
 builder.Services.AddSingleton<AgentSquad.Core.Agents.Decisions.DecisionGateService>();
@@ -322,6 +325,34 @@ reasoningApi.MapGet("/events/{agentId}/since", (string agentId, DateTime since, 
 
 reasoningApi.MapGet("/recent", (AgentSquad.Core.Agents.Reasoning.IAgentReasoningLog log, int? count) =>
     Results.Ok(log.GetRecentEvents(count ?? 50)));
+
+// ── Agent Task Steps REST API ──
+var stepsApi = app.MapGroup("/api/steps").WithTags("Steps");
+
+stepsApi.MapGet("/{agentId}", (string agentId, AgentSquad.Core.Agents.Steps.IAgentTaskTracker tracker) =>
+    Results.Ok(tracker.GetSteps(agentId)));
+
+stepsApi.MapGet("/{agentId}/current", (string agentId, AgentSquad.Core.Agents.Steps.IAgentTaskTracker tracker) =>
+{
+    var step = tracker.GetCurrentStep(agentId);
+    return step is not null ? Results.Ok(step) : Results.NotFound();
+});
+
+stepsApi.MapGet("/{agentId}/progress", (string agentId, AgentSquad.Core.Agents.Steps.IAgentTaskTracker tracker) =>
+{
+    var (completed, total) = tracker.GetProgress(agentId);
+    return Results.Ok(new { completed, total });
+});
+
+stepsApi.MapGet("/active", (AgentSquad.Core.Agents.Steps.IAgentTaskTracker tracker) =>
+    Results.Ok(tracker.GetActiveSteps()));
+
+stepsApi.MapGet("/templates/{role}", (string role) =>
+{
+    if (!Enum.TryParse<AgentSquad.Core.Agents.AgentRole>(role, true, out var agentRole))
+        return Results.BadRequest($"Unknown role: {role}");
+    return Results.Ok(AgentSquad.Core.Agents.Steps.AgentStepTemplates.GetTemplateSteps(agentRole));
+});
 
 // Gate approval API — for workflow-level gates that have no associated PR
 var gateApi = app.MapGroup("/api/gates").WithTags("Gates");

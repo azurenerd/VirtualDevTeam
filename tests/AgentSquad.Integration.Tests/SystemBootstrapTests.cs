@@ -91,6 +91,9 @@ public class SystemBootstrapTests : IDisposable
         services.AddSingleton<AgentSquad.Core.Agents.Reasoning.IAgentReasoningLog, AgentSquad.Core.Agents.Reasoning.AgentReasoningLog>();
         services.AddSingleton<AgentSquad.Core.Agents.Reasoning.SelfAssessmentService>();
 
+        // Task step tracking
+        services.AddSingleton<AgentSquad.Core.Agents.Steps.IAgentTaskTracker, AgentSquad.Core.Agents.Steps.AgentTaskTracker>();
+
         // Prompt template service (needed by all agents)
         services.AddSingleton<IPromptTemplateService, PromptTemplateService>();
 

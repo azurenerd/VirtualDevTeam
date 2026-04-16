@@ -2,6 +2,7 @@
 @rendermode InteractiveServer
 @using AgentSquad.Core.Agents
 @using AgentSquad.Core.Agents.Decisions
+@using AgentSquad.Core.Agents.Steps
 @using AgentSquad.Core.Diagnostics
 @using AgentSquad.Core.GitHub
 @using AgentSquad.Core.Notifications
@@ -233,6 +234,22 @@ else
                             <span class="detail-value task-active">@FormatDuration(DateTime.UtcNow - agent.LastStatusChange)</span>
                         </div>
                     }
+                    @{ var stepInfo = GetAgentStepInfo(agent.Id); }
+                    @if (stepInfo.total > 0)
+                    {
+                        var stepPct = (int)(100.0 * stepInfo.completed / stepInfo.total);
+                        <div class="agent-detail">
+                            <span class="detail-label">Steps</span>
+                            <span class="detail-value">
+                                <div class="step-compact">
+                                    <span class="step-compact-text">Step @(stepInfo.completed)/@(stepInfo.total): @(stepInfo.currentName ?? "—")</span>
+                                    <div class="step-compact-bar">
+                                        <div class="step-compact-fill" style="width: @(stepPct)%"></div>
+                                    </div>
+                                </div>
+                            </span>
+                        </div>
+                    }
                     @if (agent.ErrorCount > 0)
                     {
                         <div class="agent-detail error-badge-row" @onclick:stopPropagation="true" @onclick="() => ShowErrors(agent.Id)">
@@ -369,6 +386,7 @@ else
     private bool _hasDeadlock;
     private List<string>? _deadlockCycle;
     private IDecisionLog? _decisionLog;
+    private IAgentTaskTracker? _taskTracker;
 
     // Error modal state
     private bool _showErrorModal;
@@ -398,6 +416,7 @@ else
     protected override void OnInitialized()
     {
         _decisionLog = ServiceProvider.GetService<IDecisionLog>();
+        _taskTracker = ServiceProvider.GetService<IAgentTaskTracker>();
         RefreshData();
         _availableModels = DataService.GetAvailableModels();
         DataService.OnChange += OnDataChanged;
@@ -682,6 +701,15 @@ else
         if (onIdx >= 0)
             return statusReason[onIdx..].Trim();
         return "Approval required";
+    }
+
+    private (int completed, int total, string? currentName) GetAgentStepInfo(string agentId)
+    {
+        if (_taskTracker is null)
+            return (0, 0, null);
+        var progress = _taskTracker.GetProgress(agentId);
+        var currentStep = _taskTracker.GetCurrentStep(agentId);
+        return (progress.completed, progress.total, currentStep?.Name);
     }
 
     public void Dispose()

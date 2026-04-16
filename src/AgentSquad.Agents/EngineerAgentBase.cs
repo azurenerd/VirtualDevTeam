@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using AgentSquad.Core.Agents;
 using AgentSquad.Core.Agents.Decisions;
+using AgentSquad.Core.Agents.Steps;
 using AgentSquad.Core.AI;
 using AgentSquad.Core.Configuration;
 using AgentSquad.Core.GitHub;
@@ -34,6 +35,7 @@ public abstract class EngineerAgentBase : AgentBase
     protected readonly IPromptTemplateService PromptService;
     private readonly IGateCheckService _gateCheck;
     protected readonly DecisionGateService? DecisionGate;
+    protected readonly IAgentTaskTracker _taskTracker;
 
     protected readonly HashSet<int> ProcessedIssueIds = new();
     protected readonly ConcurrentQueue<ReworkItem> ReworkQueue = new();
@@ -84,7 +86,8 @@ public abstract class EngineerAgentBase : AgentBase
         TestRunner? testRunner = null,
         Core.Metrics.BuildTestMetrics? metrics = null,
         PlaywrightRunner? playwrightRunner = null,
-        DecisionGateService? decisionGate = null)
+        DecisionGateService? decisionGate = null,
+        IAgentTaskTracker? taskTracker = null)
         : base(identity, logger, memoryStore, roleContextProvider)
     {
         MessageBus = messageBus ?? throw new ArgumentNullException(nameof(messageBus));
@@ -102,6 +105,7 @@ public abstract class EngineerAgentBase : AgentBase
         Metrics = metrics;
         ScreenshotRunner = playwrightRunner;
         DecisionGate = decisionGate;
+        _taskTracker = taskTracker!;
     }
 
     #region Lifecycle
@@ -490,6 +494,7 @@ public abstract class EngineerAgentBase : AgentBase
     /// </summary>
     protected virtual async Task WorkOnIssueAsync(IssueAssignmentMessage assignment, CancellationToken ct)
     {
+        var taskId = $"issue-{assignment.IssueNumber}";
         try
         {
             // Clear any previous PR tracking from prior task
@@ -500,6 +505,8 @@ public abstract class EngineerAgentBase : AgentBase
             UpdateStatus(AgentStatus.Working, $"Starting issue #{assignment.IssueNumber}: {assignment.IssueTitle}");
             LogActivity("task", $"📋 Starting issue #{assignment.IssueNumber}: {assignment.IssueTitle}");
 
+            var claimStepId = _taskTracker.BeginStep(Identity.Id, taskId, "Claim issue",
+                $"Claiming issue #{assignment.IssueNumber}: {assignment.IssueTitle}", Identity.ModelTier);
             var issue = await GitHub.GetIssueAsync(assignment.IssueNumber, ct);
             if (issue is null)
             {
@@ -561,11 +568,15 @@ public abstract class EngineerAgentBase : AgentBase
 
             var planResponse = await chat.GetChatMessageContentAsync(planHistory, cancellationToken: ct);
             var planContent = planResponse.Content?.Trim() ?? "";
+            _taskTracker.RecordLlmCall(claimStepId);
 
             // Clarification loop (if the engineer has questions)
             planContent = await RunClarificationLoopAsync(planHistory, planContent, issue, ct);
+            _taskTracker.CompleteStep(claimStepId);
 
             // Create PR linking to the Issue — include Implementation Steps
+            var createPrStepId = _taskTracker.BeginStep(Identity.Id, taskId, "Create PR",
+                $"Creating PR for issue #{issue.Number}", Identity.ModelTier);
             var prDescription = $"Closes #{issue.Number}\n\n" +
                 $"## Understanding\n{ExtractSection(planContent, "summary", "understand")}\n\n" +
                 $"## Acceptance Criteria\n{ExtractSection(planContent, "acceptance", "criteria")}\n\n" +
@@ -595,6 +606,7 @@ public abstract class EngineerAgentBase : AgentBase
             Logger.LogInformation("{Role} {Name} created PR #{PrNumber} for issue #{IssueNumber}",
                 Identity.Role, Identity.DisplayName, pr.Number, issue.Number);
             LogActivity("github", $"Created PR #{pr.Number} for issue #{issue.Number}: {issue.Title}");
+            _taskTracker.CompleteStep(createPrStepId);
 
             await RememberAsync(MemoryType.Action,
                 $"Created PR #{pr.Number} for issue #{issue.Number}: {issue.Title}",
@@ -621,6 +633,7 @@ public abstract class EngineerAgentBase : AgentBase
     /// </summary>
     protected virtual async Task ImplementAndCommitAsync(AgentPullRequest pr, AgentIssue issue, CancellationToken ct)
     {
+        var implTaskId = $"pr-{pr.Number}";
         var architectureDoc = await GetArchitectureForContextAsync(ct);
         var pmSpecDoc = await GetPMSpecForContextAsync(ct);
         var techStack = Config.Project.TechStack;
@@ -630,7 +643,11 @@ public abstract class EngineerAgentBase : AgentBase
 
         // Step 1: Generate ordered implementation steps from the PR description
         UpdateStatus(AgentStatus.Working, $"PR #{pr.Number} generating implementation steps");
+        var genStepsStepId = _taskTracker.BeginStep(Identity.Id, implTaskId, "Generate implementation steps",
+            $"Breaking PR #{pr.Number} into discrete implementation steps", Identity.ModelTier);
         var steps = await GenerateImplementationStepsAsync(chat, pr, issue, pmSpecDoc, architectureDoc, techStack, ct);
+        _taskTracker.RecordLlmCall(genStepsStepId);
+        _taskTracker.CompleteStep(genStepsStepId);
 
         if (steps.Count == 0)
         {
@@ -665,6 +682,10 @@ public abstract class EngineerAgentBase : AgentBase
             ct.ThrowIfCancellationRequested();
             var step = steps[i];
             var stepNumber = i + 1;
+
+            var execStepId = _taskTracker.BeginStep(Identity.Id, implTaskId,
+                $"Execute step {stepNumber}: {Truncate(step, 60)}",
+                $"Step {stepNumber}/{steps.Count} for PR #{pr.Number}", Identity.ModelTier);
 
             UpdateStatus(AgentStatus.Working,
                 $"PR #{pr.Number} step {stepNumber}/{steps.Count}: {Truncate(step, 60)}");
@@ -753,10 +774,13 @@ public abstract class EngineerAgentBase : AgentBase
 
             var stepResponse = await chat.GetChatMessageContentAsync(stepHistory, cancellationToken: ct);
             var stepImpl = stepResponse.Content?.Trim() ?? "";
+            _taskTracker.RecordLlmCall(execStepId);
+            _taskTracker.RecordSubStep(execStepId, $"Implementation for step {stepNumber}");
 
             // Optional self-review for this step
             stepHistory.AddAssistantMessage(stepImpl);
             var finalStepOutput = await RunSelfReviewAsync(stepHistory, stepImpl, ct);
+            _taskTracker.RecordSubStep(execStepId, $"Self-review for step {stepNumber}");
 
             var codeFiles = AgentSquad.Core.AI.CodeFileParser.ParseFiles(finalStepOutput);
             if (codeFiles.Count == 0)
@@ -805,25 +829,32 @@ public abstract class EngineerAgentBase : AgentBase
 
                     // Checkpoint progress so we can resume after a crash
                     await CheckpointTaskProgressAsync(pr.Number, CurrentIssueNumber, stepNumber, ct);
+                    _taskTracker.CompleteStep(execStepId);
                 }
                 else
                 {
                     Logger.LogWarning("{Role} {Name} step {Step}/{Total} blocked by build errors, skipping",
                         Identity.Role, Identity.DisplayName, stepNumber, steps.Count);
                     LogActivity("task", $"⛔ Step {stepNumber}/{steps.Count} blocked by build errors: {Truncate(step, 80)}");
+                    _taskTracker.FailStep(execStepId, "Blocked by build errors");
                 }
             }
             else
             {
                 Logger.LogWarning("{Role} {Name} step {Step}/{Total} produced no parseable files, skipping commit",
                     Identity.Role, Identity.DisplayName, stepNumber, steps.Count);
+                _taskTracker.CompleteStep(execStepId, AgentTaskStepStatus.Skipped);
             }
 
             completedSteps.Add(step);
         }
 
         // Mark PR ready for review after all steps complete
+        var markReadyStepId = _taskTracker.BeginStep(Identity.Id, implTaskId, "Mark ready for review",
+            $"Marking PR #{pr.Number} ready for review", Identity.ModelTier);
+        _taskTracker.SetStepWaiting(markReadyStepId);
         await MarkPrCompleteAsync(pr, issue, ct);
+        _taskTracker.CompleteStep(markReadyStepId);
     }
 
     /// <summary>

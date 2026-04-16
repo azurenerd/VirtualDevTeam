@@ -7,6 +7,7 @@ using AgentSquad.Core.GitHub;
 using AgentSquad.Core.GitHub.Models;
 using AgentSquad.Core.Messaging;
 using AgentSquad.Core.Persistence;
+using AgentSquad.Core.Agents.Steps;
 using AgentSquad.Core.Prompts;
 using AgentSquad.Core.Workspace;
 using Microsoft.Extensions.Logging;
@@ -63,6 +64,7 @@ public class TestEngineerAgent : AgentBase
     private readonly IGateCheckService _gateCheck;
     private readonly IPromptTemplateService? _promptService;
     private readonly DecisionGateService? _decisionGate;
+    private readonly IAgentTaskTracker _taskTracker;
 
     private LocalWorkspace? _workspace;
     private bool _pendingWorkspaceCleanup;
@@ -108,7 +110,8 @@ public class TestEngineerAgent : AgentBase
         Core.Metrics.BuildTestMetrics? metrics = null,
         AgentStateStore? stateStore = null,
         IPromptTemplateService? promptService = null,
-        DecisionGateService? decisionGate = null)
+        DecisionGateService? decisionGate = null,
+        IAgentTaskTracker? taskTracker = null)
         : base(identity, logger, memoryStore, roleContextProvider)
     {
         _messageBus = messageBus ?? throw new ArgumentNullException(nameof(messageBus));
@@ -126,6 +129,7 @@ public class TestEngineerAgent : AgentBase
         _stateStore = stateStore;
         _promptService = promptService;
         _decisionGate = decisionGate;
+        _taskTracker = taskTracker!;
     }
 
     protected override async Task OnInitializeAsync(CancellationToken ct)
@@ -238,13 +242,20 @@ public class TestEngineerAgent : AgentBase
                 await RecoverTestPRsAsync(ct);
 
                 // Priority 3: Scan for PRs to test (mode-dependent)
+                var scanStepId = _taskTracker.BeginStep(Identity.Id, "te-loop", "Wait for PRs",
+                    isInline ? "Scanning approved PRs for inline testing" : "Scanning merged PRs for test coverage",
+                    Identity.ModelTier);
                 if (isInline)
                     await ScanApprovedPRsForInlineTestingAsync(ct);
                 else
                     await ScanMergedPRsForTestingAsync(ct);
+                _taskTracker.CompleteStep(scanStepId);
 
                 // Check if all code-bearing PRs have been tested → signal completion
+                var reportStepId = _taskTracker.BeginStep(Identity.Id, "te-loop", "Report results",
+                    "Checking test coverage completeness", Identity.ModelTier);
                 await CheckTestCoverageCompleteAsync(ct);
+                _taskTracker.CompleteStep(reportStepId);
 
                 await RefreshDiagnosticWithMemoryAsync(ct);
 
@@ -326,16 +337,21 @@ public class TestEngineerAgent : AgentBase
             // AI-based testability assessment for legacy mode
             var changedFiles = await _github.GetPullRequestChangedFilesAsync(pr.Number, ct);
             
+            var assessStepId = _taskTracker.BeginStep(Identity.Id, $"te-pr-{pr.Number}", "Generate test plan",
+                $"Assessing testability of merged PR #{pr.Number}", Identity.ModelTier);
             Logger.LogInformation("Assessing testability of merged PR #{Number} ({FileCount} files): {Title}",
                 pr.Number, changedFiles.Count, pr.Title);
             var assessment = await AssessTestabilityAsync(pr, changedFiles, ct);
+            _taskTracker.RecordLlmCall(assessStepId);
 
             if (!assessment.NeedsTests)
             {
                 Logger.LogInformation("AI assessment: merged PR #{Number} does not need tests — {Rationale}", pr.Number, assessment.Rationale);
                 _testedPRs.Add(pr.Number);
+                _taskTracker.CompleteStep(assessStepId, AgentTaskStepStatus.Skipped);
                 continue;
             }
+            _taskTracker.CompleteStep(assessStepId);
 
             _lastTestabilityAssessment = assessment;
             var codeFiles = assessment.TestableFiles;
@@ -347,9 +363,12 @@ public class TestEngineerAgent : AgentBase
 
             try
             {
+                var execStepId = _taskTracker.BeginStep(Identity.Id, $"te-pr-{pr.Number}", "Execute tests",
+                    $"Generating and running tests for PR #{pr.Number}", Identity.ModelTier);
                 await GenerateTestsForMergedPRAsync(pr, codeFiles, ct);
                 _testedPRs.Add(pr.Number);
                 _sessionTestedPRs.Add(pr.Number);
+                _taskTracker.CompleteStep(execStepId);
             }
             catch (Exception ex)
             {
@@ -475,9 +494,12 @@ public class TestEngineerAgent : AgentBase
             // AI-based testability assessment — examines files, acceptance criteria, and context
             var changedFiles = await _github.GetPullRequestChangedFilesAsync(pr.Number, ct);
 
+            var inlineAssessStepId = _taskTracker.BeginStep(Identity.Id, $"te-pr-{pr.Number}", "Generate test plan",
+                $"Assessing testability of PR #{pr.Number}", Identity.ModelTier);
             Logger.LogInformation("Assessing testability of PR #{Number} ({FileCount} changed files): {Title}",
                 pr.Number, changedFiles.Count, pr.Title);
             var assessment = await AssessTestabilityAsync(pr, changedFiles, ct);
+            _taskTracker.RecordLlmCall(inlineAssessStepId);
 
             if (!assessment.NeedsTests)
             {
@@ -488,8 +510,10 @@ public class TestEngineerAgent : AgentBase
                     $"✅ **[TestEngineer] No Tests Needed** — {assessment.Rationale}\n\n" +
                     "Marking as tested to proceed with PM review.", ct);
                 await ApplyTestsAddedLabelAsync(pr, ct);
+                _taskTracker.CompleteStep(inlineAssessStepId, AgentTaskStepStatus.Skipped);
                 continue;
             }
+            _taskTracker.CompleteStep(inlineAssessStepId);
 
             // Feed the assessment into the test strategy so GenerateTestCodeAsync knows what tiers to write
             _lastTestabilityAssessment = assessment;
@@ -505,11 +529,18 @@ public class TestEngineerAgent : AgentBase
 
             try
             {
+                var inlineExecStepId = _taskTracker.BeginStep(Identity.Id, $"te-pr-{pr.Number}", "Execute tests",
+                    $"Adding inline tests to PR #{pr.Number}", Identity.ModelTier);
                 var testingCompleted = await AddInlineTestsToPRAsync(pr, codeFiles, ct);
                 if (testingCompleted)
                 {
                     _testedPRs.Add(pr.Number);
                     _sessionTestedPRs.Add(pr.Number);
+                    _taskTracker.CompleteStep(inlineExecStepId);
+                }
+                else
+                {
+                    _taskTracker.SetStepWaiting(inlineExecStepId);
                 }
                 // else: blocked (e.g., base build failed) — don't add to _testedPRs so TE re-checks after rework
             }

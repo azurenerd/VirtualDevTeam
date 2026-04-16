@@ -3,6 +3,7 @@ using System.Text;
 using AgentSquad.Core.Agents;
 using AgentSquad.Core.Agents.Decisions;
 using AgentSquad.Core.Agents.Reasoning;
+using AgentSquad.Core.Agents.Steps;
 using AgentSquad.Core.AI;
 using AgentSquad.Core.Configuration;
 using AgentSquad.Core.GitHub;
@@ -119,10 +120,11 @@ public class PrincipalEngineerAgent : EngineerAgentBase
         PlaywrightRunner? playwrightRunner = null,
         SmeDefinitionGenerator? smeGenerator = null,
         AgentSpawnManager? spawnManager = null,
-        DecisionGateService? decisionGate = null)
+        DecisionGateService? decisionGate = null,
+        IAgentTaskTracker? taskTracker = null)
         : base(identity, messageBus, github, prWorkflow, issueWorkflow,
                projectFiles, modelRegistry, stateStore, config.Value, memoryStore, gateCheck, logger,
-               promptService, roleContextProvider, buildRunner, testRunner, metrics, playwrightRunner, decisionGate)
+               promptService, roleContextProvider, buildRunner, testRunner, metrics, playwrightRunner, decisionGate, taskTracker)
     {
         _registry = registry ?? throw new ArgumentNullException(nameof(registry));
         _gateCheck = gateCheck ?? throw new ArgumentNullException(nameof(gateCheck));
@@ -216,6 +218,9 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                     {
                         if (await CheckForArchitectureAsync(ct))
                         {
+                            var readArchStepId = _taskTracker.BeginStep(Identity.Id, "pe-planning", "Read architecture",
+                                "Architecture document detected, starting engineering plan", Identity.ModelTier);
+                            _taskTracker.CompleteStep(readArchStepId);
                             await CreateEngineeringPlanAsync(ct);
                             // _planningComplete is set inside CreateEngineeringPlanAsync
                             // on success or valid restore paths
@@ -467,6 +472,9 @@ public class PrincipalEngineerAgent : EngineerAgentBase
         Logger.LogInformation("Starting engineering plan creation from Enhancement issues");
         LogActivity("task", "📋 Starting engineering plan creation from Enhancement issues");
 
+        var decompStepId = _taskTracker.BeginStep(Identity.Id, "pe-planning", "Task decomposition",
+            "Decomposing enhancement issues into engineering tasks", Identity.ModelTier);
+
         var architectureDoc = await ProjectFiles.GetArchitectureDocAsync(ct);
         var pmSpec = await ProjectFiles.GetPMSpecAsync(ct);
 
@@ -627,8 +635,12 @@ public class PrincipalEngineerAgent : EngineerAgentBase
         var response = await chat.GetChatMessageContentAsync(
             history, cancellationToken: ct);
         var structuredText = response.Content ?? "";
+        _taskTracker.RecordLlmCall(decompStepId);
+        _taskTracker.CompleteStep(decompStepId);
 
         // Self-assessment: assess and refine the engineering plan
+        var assessStepId = _taskTracker.BeginStep(Identity.Id, "pe-planning", "Self-assessment & impact classification",
+            "Assessing engineering plan quality and classifying impact", Identity.ModelTier);
         _reasoningLog.Log(new AgentReasoningEvent
         {
             AgentId = Identity.Id,
@@ -656,7 +668,9 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 ct);
             structuredText = refinedOutput;
             peAssessmentResult = assessment;
+            _taskTracker.RecordLlmCall(assessStepId);
         }
+        _taskTracker.CompleteStep(assessStepId);
 
         var parsedTasks = new List<EngineeringTask>();
         var issueMap = enhancementIssues.ToDictionary(i => i.Number);
@@ -755,6 +769,9 @@ public class PrincipalEngineerAgent : EngineerAgentBase
         });
 
         // Classify task decomposition decision impact
+        var decisionStepId = _taskTracker.BeginStep(Identity.Id, "pe-planning", "Decision gate",
+            "Classifying task decomposition impact for approval", Identity.ModelTier);
+        _taskTracker.SetStepWaiting(decisionStepId);
         if (_decisionGate is not null)
         {
             var decisionTaskSummary = string.Join(", ", parsedTasks.Where(t => t.Id != IntegrationTaskId)
@@ -807,11 +824,15 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                     "Engineering plan rejected",
                     planDecision.HumanFeedback ?? "No feedback provided", ct);
                 UpdateStatus(AgentStatus.Idle, "Engineering plan rejected — awaiting new direction");
+                _taskTracker.FailStep(decisionStepId, "Plan rejected by human");
                 return;
             }
         }
+        _taskTracker.CompleteStep(decisionStepId);
 
         // Create GitHub issues for each task (the single source of truth)
+        var createIssuesStepId = _taskTracker.BeginStep(Identity.Id, "pe-planning", "Create GitHub issues",
+            $"Creating {parsedTasks.Count} engineering task issues on GitHub", Identity.ModelTier);
         var createdTasks = await _taskManager.CreateTaskIssuesAsync(parsedTasks, ct);
 
         // Track the integration issue number for later self-assignment
@@ -845,6 +866,7 @@ public class PrincipalEngineerAgent : EngineerAgentBase
 
         // Create native GitHub blocked-by dependency links between tasks
         await _taskManager.LinkTaskDependenciesAsync(_taskManager.Tasks.ToList(), ct);
+        _taskTracker.CompleteStep(createIssuesStepId);
 
         // REQ-PE-009: Validate all PM enhancements have engineering tasks
         await ValidateEnhancementCoverageAsync(enhancementIssues, ct);
@@ -1204,6 +1226,9 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                 await _taskManager.AssignTaskAsync(task.IssueNumber.Value, engineer.Name, ct);
                 _agentAssignments[engineer.AgentId] = task.IssueNumber.Value;
 
+                var assignStepId = _taskTracker.BeginStep(Identity.Id, "pe-orchestration", "Assign engineers",
+                    $"Assigning issue #{task.IssueNumber} ({task.Name}) to {engineer.Name}", Identity.ModelTier);
+
                 Logger.LogInformation(
                     "Assigned issue #{IssueNumber} ({TaskName}) to {Engineer}",
                     task.IssueNumber, task.Name, engineer.Name);
@@ -1218,6 +1243,7 @@ public class PrincipalEngineerAgent : EngineerAgentBase
                     Complexity = task.Complexity,
                     IssueUrl = task.IssueUrl
                 }, ct);
+                _taskTracker.CompleteStep(assignStepId);
             }
         }
         catch (Exception ex)

@@ -2,6 +2,7 @@
 @rendermode InteractiveServer
 @using AgentSquad.Core.Agents.Reasoning
 @using AgentSquad.Core.Agents.Decisions
+@using AgentSquad.Core.Agents.Steps
 @using System.Net.Http.Json
 @using AgentSquad.Dashboard.Services
 @implements IDisposable
@@ -38,6 +39,8 @@
             @onclick='() => SetTypeFilter("Assessing")'>🔍 Assessing</button>
     <button class="type-filter-btn @(_typeFilter == "Other" ? "active" : "")"
             @onclick='() => SetTypeFilter("Other")'>📋 Other</button>
+    <button class="type-filter-btn @(_typeFilter == "Steps" ? "active" : "")"
+            @onclick='() => SetTypeFilter("Steps")'>📊 Steps</button>
 </div>
 
 <div class="reasoning-layout">
@@ -71,7 +74,91 @@
 
     @* ── Right: Event Timeline ── *@
     <div class="reasoning-timeline">
-        @if (_typeFilter == "Decisions")
+        @if (_typeFilter == "Steps")
+        {
+            @* ── Step timeline view ── *@
+            @if (!_stepsByAgent.Any())
+            {
+                <div class="reasoning-empty">
+                    <div class="empty-icon">📊</div>
+                    <h3>No Task Steps Yet</h3>
+                    <p>Step tracking data will appear here when agents begin executing tasks.</p>
+                </div>
+            }
+            else
+            {
+                <div class="step-timeline">
+                    @foreach (var kvp in _filteredStepsByAgent)
+                    {
+                        var agentId = kvp.Key;
+                        var steps = kvp.Value;
+                        var progress = _stepProgress.GetValueOrDefault(agentId);
+                        var isExpanded = _expandedStepAgents.Contains(agentId);
+                        var pct = progress.total > 0 ? (int)(100.0 * progress.completed / progress.total) : 0;
+
+                        <div class="step-agent-section">
+                            <div class="step-agent-header" @onclick="() => ToggleStepAgent(agentId)">
+                                <span class="step-agent-chevron @(isExpanded ? "expanded" : "")">▶</span>
+                                <span class="step-agent-name">@GetDisplayName(agentId)</span>
+                                <span class="step-agent-progress-text">@progress.completed/@progress.total steps ✓</span>
+                            </div>
+                            @if (isExpanded)
+                            {
+                                <div class="step-agent-body">
+                                    <div class="step-progress-bar">
+                                        <div class="step-progress-fill" style="width: @(pct)%"></div>
+                                    </div>
+                                    <div class="step-list">
+                                        @foreach (var step in steps)
+                                        {
+                                            <div class="step-item @(step.Status == AgentTaskStepStatus.InProgress ? "step-active" : "")">
+                                                <span class="step-icon">@GetStepStatusIcon(step.Status)</span>
+                                                <span class="step-name @(step.Status == AgentTaskStepStatus.Pending ? "step-name-pending" : "")">@step.Name</span>
+                                                <div class="step-meta">
+                                                    @if (step.Elapsed.HasValue)
+                                                    {
+                                                        <span class="step-elapsed">@FormatStepDuration(step.Elapsed.Value)</span>
+                                                    }
+                                                    @if (step.EstimatedCost > 0)
+                                                    {
+                                                        <span class="step-cost">@FormatStepCost(step.EstimatedCost)</span>
+                                                    }
+                                                    @if (step.LlmCallCount > 0)
+                                                    {
+                                                        <span class="step-llm-count">@step.LlmCallCount calls</span>
+                                                    }
+                                                </div>
+                                            </div>
+                                            @if (step.SubSteps.Count > 0)
+                                            {
+                                                <div class="step-substeps">
+                                                    @foreach (var sub in step.SubSteps)
+                                                    {
+                                                        <div class="step-substep">
+                                                            <span class="step-substep-turn">#@sub.TurnIndex</span>
+                                                            <span class="step-substep-desc">@sub.Description</span>
+                                                            @if (sub.Duration.HasValue)
+                                                            {
+                                                                <span class="step-substep-duration">@FormatStepDuration(sub.Duration.Value)</span>
+                                                            }
+                                                            @if (sub.EstimatedCost > 0)
+                                                            {
+                                                                <span class="step-substep-cost">@FormatStepCost(sub.EstimatedCost)</span>
+                                                            }
+                                                        </div>
+                                                    }
+                                                </div>
+                                            }
+                                        }
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+            }
+        }
+        else if (_typeFilter == "Decisions")
         {
             @* ── Decision-specific view ── *@
             @if (!_filteredDecisions.Any())
@@ -198,6 +285,7 @@
 
     private IAgentReasoningLog? _directLog;
     private IDecisionLog? _decisionLog;
+    private IAgentTaskTracker? _taskTracker;
     private HttpClient? _http;
     private Timer? _pollTimer;
     private List<AgentReasoningEvent> _events = [];
@@ -207,6 +295,18 @@
     private string? _typeFilter;
     private int _pendingDecisionCount;
     private bool _disposed;
+
+    // Step tracking state
+    private Dictionary<string, IReadOnlyList<AgentTaskStep>> _stepsByAgent = new();
+    private Dictionary<string, (int completed, int total)> _stepProgress = new();
+    private HashSet<string> _expandedStepAgents = new();
+
+    private Dictionary<string, IReadOnlyList<AgentTaskStep>> _filteredStepsByAgent =>
+        _selectedAgent is null
+            ? _stepsByAgent
+            : _stepsByAgent
+                .Where(kvp => kvp.Key == _selectedAgent)
+                .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
 
     private IEnumerable<AgentReasoningEvent> _filteredEvents
     {
@@ -246,6 +346,7 @@
         {
             _directLog = Services.GetService<IAgentReasoningLog>();
             _decisionLog = Services.GetService<IDecisionLog>();
+            _taskTracker = Services.GetService<IAgentTaskTracker>();
         }
         else
         {
@@ -289,10 +390,71 @@
                 }
             }
 
+            // Poll task steps
+            if (_typeFilter == "Steps")
+            {
+                await PollStepsAsync();
+            }
+
             await InvokeAsync(StateHasChanged);
         }
         catch { /* Runner not reachable — silently retry */ }
     }
+
+    private async Task PollStepsAsync()
+    {
+        if (_taskTracker is not null)
+        {
+            var newSteps = new Dictionary<string, IReadOnlyList<AgentTaskStep>>();
+            var newProgress = new Dictionary<string, (int completed, int total)>();
+            foreach (var agentId in _agentIds)
+            {
+                var steps = _taskTracker.GetSteps(agentId);
+                if (steps.Count > 0)
+                {
+                    newSteps[agentId] = steps;
+                    newProgress[agentId] = _taskTracker.GetProgress(agentId);
+                }
+            }
+            // Also check active steps for agents not yet in _agentIds
+            foreach (var step in _taskTracker.GetActiveSteps())
+            {
+                if (!newSteps.ContainsKey(step.AgentId))
+                {
+                    newSteps[step.AgentId] = _taskTracker.GetSteps(step.AgentId);
+                    newProgress[step.AgentId] = _taskTracker.GetProgress(step.AgentId);
+                    if (!_agentIds.Contains(step.AgentId))
+                        _agentIds.Add(step.AgentId);
+                }
+            }
+            _stepsByAgent = newSteps;
+            _stepProgress = newProgress;
+        }
+        else if (_http is not null)
+        {
+            var newSteps = new Dictionary<string, IReadOnlyList<AgentTaskStep>>();
+            var newProgress = new Dictionary<string, (int completed, int total)>();
+            foreach (var agentId in _agentIds)
+            {
+                try
+                {
+                    var steps = await _http.GetFromJsonAsync<List<AgentTaskStep>>($"/api/steps/{agentId}");
+                    if (steps is { Count: > 0 })
+                    {
+                        newSteps[agentId] = steps;
+                        var progress = await _http.GetFromJsonAsync<ProgressDto>($"/api/steps/{agentId}/progress");
+                        if (progress is not null)
+                            newProgress[agentId] = (progress.Completed, progress.Total);
+                    }
+                }
+                catch { /* skip this agent */ }
+            }
+            _stepsByAgent = newSteps;
+            _stepProgress = newProgress;
+        }
+    }
+
+    private record ProgressDto(int Completed, int Total);
 
     private void SelectAgent(string? agentId) => _selectedAgent = agentId;
 
@@ -355,6 +517,34 @@
         DecisionStatus.Rejected => "❌",
         DecisionStatus.AutoApproved => "🤖",
         _ => ""
+    };
+
+    private void ToggleStepAgent(string agentId)
+    {
+        if (!_expandedStepAgents.Remove(agentId))
+            _expandedStepAgents.Add(agentId);
+    }
+
+    private static string GetStepStatusIcon(AgentTaskStepStatus status) => status switch
+    {
+        AgentTaskStepStatus.Completed => "✅",
+        AgentTaskStepStatus.InProgress => "🔄",
+        AgentTaskStepStatus.Pending => "⬜",
+        AgentTaskStepStatus.Failed => "❌",
+        AgentTaskStepStatus.Skipped => "⏭️",
+        AgentTaskStepStatus.WaitingOnHuman => "⏳",
+        _ => "⬜"
+    };
+
+    private static string FormatStepDuration(TimeSpan ts) => ts.TotalMinutes >= 1
+        ? $"{ts.Minutes}m {ts.Seconds}s"
+        : $"{ts.TotalSeconds:F1}s";
+
+    private static string FormatStepCost(decimal cost) => cost switch
+    {
+        < 0.01m => "< $0.01",
+        < 1m => cost.ToString("$0.00"),
+        _ => cost.ToString("$#,##0.00")
     };
 
     public void Dispose()
