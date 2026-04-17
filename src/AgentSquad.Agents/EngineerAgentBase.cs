@@ -1134,7 +1134,9 @@ public abstract class EngineerAgentBase : AgentBase
                 ? "GITIGNORE RULE: If the project does not already have a .gitignore, create one as your FIRST file. " +
                   "Include ALL standard ignores for the project's technology stack (e.g., bin/obj for .NET, " +
                   "node_modules for Node.js, __pycache__ for Python, target for Rust/Java, etc.). " +
-                  "This prevents build artifacts from being committed.\n\n"
+                  "This prevents build artifacts from being committed. " +
+                  "IMPORTANT: Do NOT gitignore data files like data.json, sample-data.json, etc. " +
+                  "These must be committed so the app works when cloned.\n\n"
                 : "";
             var rendered = PromptService.RenderAsync("engineer-base/step-implementation-system", new Dictionary<string, string>
             {
@@ -1163,7 +1165,9 @@ public abstract class EngineerAgentBase : AgentBase
                 ? "GITIGNORE RULE: If the project does not already have a .gitignore, create one as your FIRST file. " +
                   "Include ALL standard ignores for the project's technology stack (e.g., bin/obj for .NET, " +
                   "node_modules for Node.js, __pycache__ for Python, target for Rust/Java, etc.). " +
-                  "This prevents build artifacts from being committed.\n\n" +
+                  "This prevents build artifacts from being committed. " +
+                  "IMPORTANT: Do NOT gitignore data files like data.json, sample-data.json, etc. " +
+                  "These must be committed so the app works when cloned.\n\n" +
                   "VISUAL PLACEHOLDER RULE (WEB/UI PROJECTS): Every stub/placeholder component MUST be " +
                   "VISUALLY DISTINCT when rendered. Use colored backgrounds (#f0f4f8, #e8f4fd, #fef3cd), " +
                   "dashed borders (2px dashed #94a3b8), padding (2rem), and large bold label text " +
