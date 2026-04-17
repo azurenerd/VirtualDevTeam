@@ -1053,9 +1053,19 @@ public class ProgramManagerAgent : AgentBase
                         : $"**[ProgramManager] APPROVED**\n\n{reviewBody}";
                     await _github.AddPullRequestCommentAsync(pr.Number, approvalComment, ct);
 
-                    // Always submit formal GitHub APPROVE for branch-protection compatibility
-                    await _github.AddPullRequestReviewAsync(pr.Number,
-                        $"**[ProgramManager] APPROVED** — Final PM review passed.", "APPROVE", ct);
+                    // Always submit formal GitHub APPROVE for branch-protection compatibility.
+                    // Note: Will fail with 422 in single-PAT setup (can't approve own PR) — that's expected.
+                    try
+                    {
+                        await _github.AddPullRequestReviewAsync(pr.Number,
+                            $"**[ProgramManager] APPROVED** — Final PM review passed.", "APPROVE", ct);
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.LogDebug(ex,
+                            "Formal APPROVE review failed on PR #{Number} (expected in single-PAT setup — can't approve own PR)",
+                            pr.Number);
+                    }
 
                     Logger.LogInformation("PM approved PR #{Number} (Phase 3 final approval)", pr.Number);
 

@@ -984,15 +984,25 @@ public class ArchitectAgent : AgentBase
                     var approvalComment = $"**[Architect] APPROVED**\n\n🏗️ Architecture Review: {reasoning}";
                     await _github.AddPullRequestCommentAsync(pr.Number, approvalComment, ct);
 
-                    // Always submit a formal GitHub APPROVE review for branch-protection compatibility
-                    if (reviewResult.Comments.Count > 0 && _config.Review.EnableInlineComments)
+                    // Always submit a formal GitHub APPROVE review for branch-protection compatibility.
+                    // Note: Will fail with 422 in single-PAT setup (can't approve own PR) — that's expected.
+                    try
                     {
-                        await SubmitInlineReviewCommentsAsync(pr.Number, reviewResult, "APPROVE", ct);
+                        if (reviewResult.Comments.Count > 0 && _config.Review.EnableInlineComments)
+                        {
+                            await SubmitInlineReviewCommentsAsync(pr.Number, reviewResult, "APPROVE", ct);
+                        }
+                        else
+                        {
+                            await _github.AddPullRequestReviewAsync(pr.Number,
+                                $"🏗️ **[Architect] APPROVED**\n\n{reasoning}", "APPROVE", ct);
+                        }
                     }
-                    else
+                    catch (Exception ex)
                     {
-                        await _github.AddPullRequestReviewAsync(pr.Number,
-                            $"🏗️ **[Architect] APPROVED**\n\n{reasoning}", "APPROVE", ct);
+                        Logger.LogDebug(ex,
+                            "Formal APPROVE review failed on PR #{Number} (expected in single-PAT setup — can't approve own PR)",
+                            pr.Number);
                     }
 
                     // Resolve previously-opened inline review threads now that rework is accepted

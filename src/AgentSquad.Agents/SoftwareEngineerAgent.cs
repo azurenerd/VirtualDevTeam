@@ -2210,7 +2210,9 @@ public class SoftwareEngineerAgent : EngineerAgentBase
 
                 if (approved)
                 {
-                    // Submit formal GitHub APPROVE review for branch protection compatibility
+                    // Submit formal GitHub APPROVE review for branch protection compatibility.
+                    // Note: This will fail with 422 if all agents share a single PAT (can't approve own PR).
+                    // The discussion comment above is the primary approval mechanism for our workflow.
                     try
                     {
                         await GitHub.AddPullRequestReviewAsync(prNumber,
@@ -2218,7 +2220,9 @@ public class SoftwareEngineerAgent : EngineerAgentBase
                     }
                     catch (Exception ex)
                     {
-                        Logger.LogWarning(ex, "Failed to submit formal SE APPROVE review on PR #{Number}", prNumber);
+                        Logger.LogDebug(ex,
+                            "Formal APPROVE review failed on PR #{Number} (expected in single-PAT setup — can't approve own PR)",
+                            prNumber);
                     }
 
                     // Resolve any prior SE inline review threads
