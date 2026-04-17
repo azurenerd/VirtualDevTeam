@@ -335,7 +335,7 @@ public class TeamComposerTests
 
         var doc = _composer.GenerateTeamCompositionDoc(proposal);
 
-        Assert.Contains("## New SME Agents", doc);
+        Assert.Contains("## Specialist Engineers & SME Agents", doc);
         Assert.Contains("### Security Auditor", doc);
         Assert.Contains("security-audit", doc);
         Assert.Contains("test-server", doc);

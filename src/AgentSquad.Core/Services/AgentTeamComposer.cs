@@ -131,6 +131,7 @@ public class AgentTeamComposer
         prompt.AppendLine("{");
         prompt.AppendLine("  \"projectSummary\": \"One-line summary of what this project does\",");
         prompt.AppendLine("  \"rationale\": \"2-3 sentences on why this team composition is optimal\",");
+        prompt.AppendLine("  \"skillGapAnalysis\": \"Identify domain expertise gaps: what skills does the project need that generic Software Engineers lack?\",");
         prompt.AppendLine("  \"builtInAgents\": [");
         prompt.AppendLine("    { \"role\": \"Researcher\", \"count\": 1, \"justification\": \"why\", \"roleDescription\": \"Optional: focus areas or persona adjustments for this agent\" },");
         prompt.AppendLine("    { \"role\": \"Architect\", \"count\": 1, \"justification\": \"why\" }");
@@ -138,23 +139,38 @@ public class AgentTeamComposer
         prompt.AppendLine("  \"existingTemplateIds\": [\"template-id-1\"],");
         prompt.AppendLine("  \"newSmeAgents\": [");
         prompt.AppendLine("    {");
-        prompt.AppendLine("      \"roleName\": \"Name of the specialist\",");
-        prompt.AppendLine("      \"systemPrompt\": \"You are a specialist in...\",");
-        prompt.AppendLine("      \"capabilities\": [\"cap1\", \"cap2\"],");
+        prompt.AppendLine("      \"roleName\": \"Name of the specialist (e.g., Front-End Developer, Cloud Infrastructure Engineer)\",");
+        prompt.AppendLine("      \"baseTemplate\": \"engineer\",");
+        prompt.AppendLine("      \"systemPrompt\": \"Detailed persona: You are a senior Front-End Developer with deep expertise in...\",");
+        prompt.AppendLine("      \"capabilities\": [\"frontend\", \"react\", \"css\", \"accessibility\"],");
         prompt.AppendLine("      \"mcpServers\": [\"server-name\"],");
         prompt.AppendLine("      \"knowledgeLinks\": [\"https://docs.example.com\"],");
         prompt.AppendLine("      \"modelTier\": \"standard\",");
-        prompt.AppendLine("      \"workflowMode\": \"OnDemand\",");
-        prompt.AppendLine("      \"justification\": \"Why this specialist is needed\"");
+        prompt.AppendLine("      \"workflowMode\": \"Continuous\",");
+        prompt.AppendLine("      \"justification\": \"Why this specialist is needed based on skill gap analysis\"");
         prompt.AppendLine("    }");
         prompt.AppendLine("  ]");
         prompt.AppendLine("}");
         prompt.AppendLine("```");
         prompt.AppendLine();
+        prompt.AppendLine("### baseTemplate values for newSmeAgents:");
+        prompt.AppendLine("- **\"engineer\"**: Creates a specialist with FULL engineering capabilities — rework loops, build/test ");
+        prompt.AppendLine("  verification, PR lifecycle, and clarification handling. Use this for domain-expert engineers who ");
+        prompt.AppendLine("  write code (Front-End Developer, Infrastructure Engineer, Database Specialist, etc.).");
+        prompt.AppendLine("- **\"custom\"**: Creates a lightweight advisory agent without engineering capabilities. Use for ");
+        prompt.AppendLine("  non-coding roles (Security Auditor, Compliance Reviewer, Documentation Specialist).");
+        prompt.AppendLine();
+        prompt.AppendLine("### Skill Gap Analysis Guidelines:");
+        prompt.AppendLine("1. Review the tech stack, PM spec, and research findings for domain-specific requirements");
+        prompt.AppendLine("2. Check if the project needs expertise that generic Software Engineers lack (e.g., advanced CSS/UX, ");
+        prompt.AppendLine("   cloud infrastructure, ML pipelines, database optimization)");
+        prompt.AppendLine("3. For each identified gap, propose a specialist with `baseTemplate: \"engineer\"` and matching capabilities");
+        prompt.AppendLine("4. Capabilities should use lowercase tags that match task skill annotations (e.g., \"frontend\", \"react\", \"azure\")");
+        prompt.AppendLine("5. The leader SE assigns tasks to specialists based on capability overlap — make capabilities specific");
+        prompt.AppendLine();
         prompt.AppendLine("IMPORTANT: Only propose SME agents when the project genuinely requires specialist expertise ");
         prompt.AppendLine("beyond what the built-in agents provide. The built-in team (PM, Researcher, Architect, Software Engineer, TE) ");
-        prompt.AppendLine("handles most standard software development projects well. Only add SME agents for domains like ");
-        prompt.AppendLine("security auditing, specialized databases, ML/AI, compliance, etc.");
+        prompt.AppendLine("handles most standard software development projects well.");
 
         return prompt.ToString();
     }
@@ -190,6 +206,7 @@ public class AgentTeamComposer
                 Capabilities = sme.Capabilities ?? [],
                 ModelTier = sme.ModelTier ?? "standard",
                 WorkflowMode = sme.WorkflowMode ?? SmeWorkflowMode.OnDemand,
+                BaseTemplate = sme.BaseTemplate ?? "custom",
                 CreatedByAgentId = createdByAgentId,
                 CreatedAt = DateTime.UtcNow
             }).ToList() ?? [];
@@ -242,10 +259,11 @@ public class AgentTeamComposer
 
         if (proposal.NewSmeAgents.Count > 0)
         {
-            sb.AppendLine("## New SME Agents");
+            sb.AppendLine("## Specialist Engineers & SME Agents");
             foreach (var sme in proposal.NewSmeAgents)
             {
                 sb.AppendLine($"### {sme.RoleName}");
+                sb.AppendLine($"- **Type:** {(sme.BaseTemplate == "engineer" ? "Specialist Engineer (full engineering capabilities)" : "Custom/Advisory Agent")}");
                 sb.AppendLine($"- **Tier:** {sme.ModelTier}");
                 sb.AppendLine($"- **Mode:** {sme.WorkflowMode}");
                 sb.AppendLine($"- **Capabilities:** {string.Join(", ", sme.Capabilities)}");
@@ -331,6 +349,7 @@ internal sealed class RawSmeAgentProposal
     public List<string>? McpServers { get; set; }
     public List<string>? KnowledgeLinks { get; set; }
     public string? ModelTier { get; set; }
+    public string? BaseTemplate { get; set; }
     public SmeWorkflowMode? WorkflowMode { get; set; }
     public string? Justification { get; set; }
 }
