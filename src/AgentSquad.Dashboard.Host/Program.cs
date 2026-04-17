@@ -43,11 +43,14 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<HttpDashboardDataS
 // HTTP-based configuration service (talks to Runner REST API)
 // Uses IHttpClientFactory directly (fresh client per request) to avoid stale connection issues
 // when the polling service shares the same handler pool.
+// Falls back to direct file I/O when the Runner is unreachable.
+var runnerAppSettingsPath = Path.GetFullPath(Path.Combine(
+    builder.Environment.ContentRootPath, "..", "AgentSquad.Runner", "appsettings.json"));
 builder.Services.AddSingleton<IConfigurationService>(sp =>
 {
     var factory = sp.GetRequiredService<IHttpClientFactory>();
     var logger = sp.GetRequiredService<ILogger<HttpConfigurationService>>();
-    return new HttpConfigurationService(factory, "RunnerApi", logger);
+    return new HttpConfigurationService(factory, "RunnerApi", logger, runnerAppSettingsPath);
 });
 
 // HTTP-based notification service (polls Runner for gate notifications)
