@@ -46,6 +46,9 @@
 34. [Standalone Dashboard Requirements](#34-standalone-dashboard-requirements)
 35. [Run Scoping Requirements](#35-run-scoping-requirements)
 36. [Appendix: Known Bugs Fixed](#appendix-known-bugs-fixed)
+37. [LLM-Based Semantic Skill Matching Requirements](#36-llm-based-semantic-skill-matching-requirements)
+38. [Per-Reviewer Rework Cycle Limits](#37-per-reviewer-rework-cycle-limits)
+39. [Visual Scaffold Placeholder Requirements](#38-visual-scaffold-placeholder-requirements)
 
 ---
 
@@ -2229,3 +2232,79 @@ These bugs were discovered during scenario analysis and fixed. Listed here as re
 | TE/SE port conflict on app start | CRITICAL | TE UI tests fail with "App did not respond at http://localhost:5100 within 90s" | All agents share the same `AppBaseUrl` port (5100). When SE and TE start apps simultaneously, second process can't bind the port. | Added `DeriveUniquePort(workspacePath)` — hashes workspace path to unique port in 5100–5899 range. Applied in both `RunUITestsAsync` and `CaptureAppScreenshotAsync`. |
 | Standalone dashboard shows no agents | CRITICAL | Dashboard on port 5051 shows empty agent list | Dashboard creates its own empty SQLite DB instead of reading Runner's DB. `agent_state` table is always empty (agents never persist checkpoints). | Fixed DB path to Runner's directory. Hydrate from `ai_usage` + `activity_log` tables. Added boot time filtering via `run_metadata.last_boot_utc`. |
 | Dashboard shows duplicate agents from old runs | MODERATE | Dashboard shows 48 agents instead of 8 — includes agents from all previous restarts | SQLite DB accumulates agent records across restarts. Each restart creates new agent GUIDs. | Added `RecordBoot()` to write `last_boot_utc` on each startup. Dashboard filters agents to only those with activity after boot time. |
+
+---
+
+## 36. LLM-Based Semantic Skill Matching Requirements
+
+**REQ-SKILL-001**: The SE leader agent MUST use LLM-based semantic matching (not exact string comparison) when assigning engineering tasks to specialist engineers.
+
+**REQ-SKILL-002**: The matching prompt MUST include each engineer's full identity (name, capabilities) and each task's full context (name, description, tags) in a single LLM call.
+
+**REQ-SKILL-003**: The LLM MUST return structured JSON assignments with reasoning for each match.
+
+**REQ-SKILL-004**: If LLM matching fails (timeout, parse error, empty result), the system MUST fall back to the existing exact-string skill matching as a degraded-but-functional path.
+
+**REQ-SKILL-005**: LLM skill matching MUST use the budget tier to minimize cost.
+
+**Scenario: Semantic Skill Match**
+```
+1. PM creates specialists: "Frontend Engineer" (capabilities: ["frontend", "css", "html"]) and "Cloud Engineer" (capabilities: ["azure", "infrastructure"])
+2. SE plan includes task "Build interactive timeline with React" tagged ["frontend", "react", "ui"]
+3. LLM matching recognizes "Frontend Engineer" is the best fit even though "react" isn't in their capabilities
+4. Task assigned to Frontend Engineer with reason: "Frontend specialist best matches UI/React task"
+5. If LLM call fails → fallback to exact-match (would match on "frontend" tag overlap)
+```
+
+---
+
+## 37. Per-Reviewer Rework Cycle Limits
+
+**REQ-REWORK-010**: Rework cycles MUST be tracked per (PR, reviewer) pair, not globally per PR.
+
+**REQ-REWORK-011**: Each reviewer gets their own independent cycle limit:
+- SE (default): 1 cycle (`MaxReworkCycles`)
+- Architect: 1 cycle (`MaxArchitectReworkCycles`)
+- PM: 1 cycle (`MaxPmReworkCycles`)
+- TE source-bug: 1 cycle (`MaxTestReworkCycles`)
+
+**REQ-REWORK-012**: A PR reviewed by multiple reviewers gets up to N total rework rounds where N = number of distinct reviewers (e.g., Architect + SE + PM = 3 rounds max).
+
+**REQ-REWORK-013**: When ANY reviewer's cycle limit is exhausted, the engineer MUST send a `FinalApproval` review request to trigger force-approval.
+
+**Scenario: Per-Reviewer Rework**
+```
+1. Engineer creates PR → Architect reviews → requests changes (Architect: 1/1)
+2. Engineer reworks → Architect limit exhausted → FinalApproval sent
+3. SE force-approves for Architect → SE now reviews → requests changes (SE: 1/1)  
+4. Engineer reworks → SE limit exhausted → FinalApproval sent
+5. SE force-approves → PM reviews → requests changes (PM: 1/1)
+6. Engineer reworks → PM limit exhausted → PR force-approved and merged
+```
+
+---
+
+## 38. Visual Scaffold Placeholder Requirements
+
+**REQ-SCAFFOLD-010**: For web/UI projects, the foundation task (T1) MUST create placeholder components that are VISUALLY DISTINCT when rendered.
+
+**REQ-SCAFFOLD-011**: Each placeholder component MUST use:
+- Colored background (not white)
+- Visible dashed border
+- Large bold label text identifying the component
+- A `.placeholder` CSS class with standardized styles
+
+**REQ-SCAFFOLD-012**: A Playwright screenshot of the scaffold MUST show a clear grid of labeled, colored sections — NEVER a blank white page.
+
+**REQ-SCAFFOLD-013**: Data files (e.g., `data.json`) MUST NOT be gitignored. They must be committed so the app works when cloned.
+
+**REQ-SCAFFOLD-014**: The `.gitignore` file is NOT preserved during reset — the scaffold PR creates it fresh.
+
+**Scenario: Visual Scaffold Verification**
+```
+1. T1 foundation task creates project structure with placeholder components
+2. Each component uses .placeholder CSS class with colored background + dashed border
+3. `dotnet run` starts the app → page shows labeled sections for each component area
+4. Playwright screenshot shows clear visual layout (not blank white)
+5. SE reviewer can visually verify all expected sections exist in screenshot
+```

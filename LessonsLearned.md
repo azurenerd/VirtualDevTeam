@@ -803,3 +803,69 @@ if (_gateCheck.RequiresHuman("pm_spec_review"))
 ---
 
 *This document was compiled from 80+ checkpoints, 400+ conversation turns, and 90+ end-to-end test runs across seven Copilot CLI sessions building the AgentSquad system.*
+
+---
+
+## 32. Exact String Skill Matching Fails for Semantic Concepts
+
+**Lesson:** The SE leader's task-to-engineer matching used `string.Equals` to compare task tags against engineer capabilities. This works when both sides use identical vocabulary (e.g., `frontend` ↔ `frontend`) but fails for semantic relationships: a `Frontend Engineer` with skills `[html, css, javascript]` won't match a task tagged `[react, ui, timeline]` even though they're the best candidate.
+
+**What happened:**
+- PM created a `Frontend Engineer` with capabilities like `html`, `css`, `javascript`
+- SE plan had a task tagged `react`, `ui`  
+- Exact match found zero overlapping tags → task assigned to a generalist instead
+
+**Fix:** Replaced exact-string matching with a single budget-tier LLM call that semantically matches all tasks to all engineers. The LLM naturally understands that a frontend developer should handle React work. Falls back to exact-match if the LLM call fails.
+
+**Rule:** When matching involves human-readable concepts (skills, roles, domains), use LLM-based semantic matching. Reserve exact-string matching for machine identifiers (IDs, enums, status codes).
+
+---
+
+## 33. Per-PR Rework Counting Causes Premature Exhaustion
+
+**Lesson:** Rework cycles were tracked globally per PR (one counter for all reviewers). With `MaxReworkCycles = 3` and 3 reviewers, the engineer could exhaust all cycles with just one reviewer's feedback, leaving other reviewers unable to request changes.
+
+**What happened:**
+- Architect requested changes → rework attempt 1
+- SE requested changes → rework attempt 2  
+- PM requested changes → rework attempt 3 → limit reached, force-approval
+- But each reviewer only got ONE round of feedback addressed
+
+**Fix:** Changed tracking to per `(PR, reviewer)` pairs. Each reviewer gets their own independent cycle limit (default: 1). A PR with 3 reviewers gets up to 3 total rework rounds. Reviewer-specific limits use config: `MaxArchitectReworkCycles`, `MaxPmReworkCycles`, `MaxReworkCycles` (SE default), `MaxTestReworkCycles`.
+
+**Rule:** When limiting retries in multi-party workflows, track limits per participant, not globally.
+
+---
+
+## 34. Blank Screenshots from Unstyled Placeholder Components
+
+**Lesson:** AI-generated scaffold code creates placeholder components like `<div>Heatmap placeholder</div>` with no CSS styling. The Blazor app compiles and runs, but the page renders as a blank white screen because there's no background color, border, or visible formatting. Playwright screenshots capture a white image, and the SE reviewer can't tell if the page is broken or just unstyled.
+
+**What happened:**
+- Foundation PR created valid components with placeholder text
+- `dotnet run` succeeded, app responded on its port
+- Playwright screenshot showed a completely blank white image
+- SE reviewer couldn't distinguish "working but unstyled" from "broken"
+
+**Fix:** Updated scaffold prompts (both SE plan and engineer step-1) to require visually distinct placeholders: colored backgrounds, dashed borders, padding, and bold labeled text. Added a `.placeholder` CSS class specification. Screenshots should now show a clear grid of labeled sections.
+
+**Rule:** For web/UI projects, placeholder components must be visually verifiable. "Valid but invisible" is not good enough for automated screenshot review.
+
+---
+
+## 35. Don't Gitignore Data Files — They Break Screenshots and Clones
+
+**Lesson:** AI-generated `.gitignore` files often exclude `data.json` (treating it as user-specific or sensitive). But for dashboard apps, `data.json` is the app's required input — without it, the app shows an error page or blank screen, producing misleading screenshots.
+
+**What happened:**
+- Scaffold PR created `.gitignore` with `data.json` excluded
+- `data.json` was created locally but not committed
+- When Playwright checked out the branch and ran the app, `data.json` was missing → error page
+- PlaywrightRunner had a workaround (copy `data.template.json` → `data.json`) but it didn't always find the template
+
+**Fix:** 
+1. Updated gitignore prompt rule: explicitly instruct "Do NOT gitignore data files"
+2. Removed `.gitignore` from reset preserve list — scaffold PR creates it fresh
+3. Removed hardcoded `.gitignore` preservation from `ConfigurationService.cs` reset logic
+
+**Rule:** Data files required for the app to function must be committed. Only ignore build artifacts, secrets, and user-specific config.
