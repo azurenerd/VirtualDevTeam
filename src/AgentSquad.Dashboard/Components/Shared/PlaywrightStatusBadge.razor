@@ -20,12 +20,18 @@
     private string StatusIcon => _isReady ? "🟢" : "🔴";
     private string TooltipText => _isReady
         ? $"Playwright ready — last validated {FormatTime(_lastValidated)}"
-        : $"Playwright not ready: {_reason ?? "unknown"}";
+        : $"Playwright not ready: {_reason ?? "checking..."}";
 
     protected override void OnInitialized()
     {
         _runner = ServiceProvider.GetService<PlaywrightRunner>();
-        _http = ServiceProvider.GetService<HttpClient>();
+
+        if (_runner is null)
+        {
+            // Standalone mode — use named HTTP client with correct base address
+            var factory = ServiceProvider.GetService<IHttpClientFactory>();
+            _http = factory?.CreateClient("RunnerApi");
+        }
 
         if (_runner is not null)
         {
