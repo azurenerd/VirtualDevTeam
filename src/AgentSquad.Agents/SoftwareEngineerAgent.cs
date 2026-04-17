@@ -2210,6 +2210,20 @@ public class SoftwareEngineerAgent : EngineerAgentBase
 
                 if (approved)
                 {
+                    // Submit formal GitHub APPROVE review for branch protection compatibility
+                    try
+                    {
+                        await GitHub.AddPullRequestReviewAsync(prNumber,
+                            $"✅ **[SoftwareEngineer] APPROVED**\n\n{reviewBody}", "APPROVE", ct);
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.LogWarning(ex, "Failed to submit formal SE APPROVE review on PR #{Number}", prNumber);
+                    }
+
+                    // Resolve any prior SE inline review threads
+                    await ResolveSEReviewThreadsAsync(prNumber, ct);
+
                     var requireTests = Config.Workspace.IsInlineTestWorkflow;
                     // Defer merge when FinalPRApproval gate requires human — we'll gate before merging
                     var deferMerge = _gateCheck.RequiresHuman(GateIds.FinalPRApproval);
@@ -4164,6 +4178,7 @@ public class SoftwareEngineerAgent : EngineerAgentBase
 
     /// <summary>
     /// Submits inline review comments as a GitHub PR review.
+    /// Tags each comment with [SoftwareEngineer] for ownership tracking.
     /// Falls back gracefully if the GitHub API call fails.
     /// </summary>
     private async Task SubmitInlineReviewCommentsAsync(
@@ -4173,12 +4188,19 @@ public class SoftwareEngineerAgent : EngineerAgentBase
         try
         {
             var maxComments = Config.Review.MaxInlineCommentsPerReview;
-            var toSubmit = comments.Take(maxComments).ToList();
+            var toSubmit = comments.Take(maxComments)
+                .Select(c => new InlineReviewComment
+                {
+                    FilePath = c.FilePath,
+                    Line = c.Line,
+                    Body = $"**[SoftwareEngineer]** {c.Body}"
+                })
+                .ToList();
 
             if (toSubmit.Count == 0) return;
 
             var eventType = approved ? "APPROVE" : "REQUEST_CHANGES";
-            var reviewBody = $"🔧 **SE Inline Review** — {(approved ? "APPROVED" : "CHANGES REQUESTED")}\n\n" +
+            var reviewBody = $"🔧 **[SoftwareEngineer] Inline Review** — {(approved ? "APPROVED" : "CHANGES REQUESTED")}\n\n" +
                 $"{summary}\n\n" +
                 $"_{toSubmit.Count} inline comment(s) below_";
 
@@ -4194,6 +4216,43 @@ public class SoftwareEngineerAgent : EngineerAgentBase
             Logger.LogWarning(ex,
                 "Failed to submit SE inline review comments on PR #{Number} — review body was still posted as comment",
                 prNumber);
+        }
+    }
+
+    /// <summary>
+    /// After approving a PR, resolve all open inline review threads left by this SE.
+    /// Only resolves threads tagged with [SoftwareEngineer] to avoid touching other reviewers' threads.
+    /// </summary>
+    private async Task ResolveSEReviewThreadsAsync(int prNumber, CancellationToken ct)
+    {
+        try
+        {
+            var threads = await GitHub.GetPullRequestReviewThreadsAsync(prNumber, ct);
+            var ownThreads = threads
+                .Where(t => !t.IsResolved && t.Body.Contains("[SoftwareEngineer]", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            if (ownThreads.Count == 0)
+            {
+                Logger.LogDebug("No unresolved SE review threads on PR #{Number}", prNumber);
+                return;
+            }
+
+            Logger.LogInformation("Resolving {Count} SE review threads on PR #{Number} after approval",
+                ownThreads.Count, prNumber);
+
+            foreach (var thread in ownThreads)
+            {
+                var replyBody = $"✅ **[SoftwareEngineer] Resolved** — Rework addressed this feedback. Approved.";
+                await GitHub.ReplyAndResolveReviewThreadAsync(
+                    prNumber, thread.Id, thread.NodeId, replyBody, ct);
+            }
+
+            LogActivity("review", $"🔒 Resolved {ownThreads.Count} SE inline review thread(s) on PR #{prNumber}");
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to resolve SE review threads on PR #{Number} — approval still proceeds", prNumber);
         }
     }
 
