@@ -105,11 +105,11 @@ else
             <div class="radial-agent @roleClass" style="left: @pos.Left; top: @pos.Top;">
                 <div class="team-desk @statusClass">
                     <div class="desk-avatar @($"avatar-{agent.Role.ToString().ToLowerInvariant()}")">
-                        @GetRoleInitials(agent.Role)
+                        @GetRoleInitials(agent.Role, agent.Specialty)
                         <span class="desk-status-dot @statusClass"></span>
                     </div>
                     <div class="desk-name">@agent.DisplayName</div>
-                    <div class="desk-role-label">@FormatRole(agent.Role)</div>
+                    <div class="desk-role-label">@FormatRole(agent.Role, agent.Specialty)</div>
                     @RenderBubble(agent)
                 </div>
             </div>
@@ -319,23 +319,33 @@ else
         _ => 99
     };
 
-    private static string GetRoleInitials(AgentRole role) => role switch
+    private static string GetRoleInitials(AgentRole role, string? specialty = null) => role switch
     {
         AgentRole.ProgramManager => "PM",
         AgentRole.Researcher => "RS",
         AgentRole.Architect => "AR",
         AgentRole.SoftwareEngineer => "SWE",
         AgentRole.TestEngineer => "TE",
+        AgentRole.Custom when !string.IsNullOrEmpty(specialty) => GetInitialsFromName(specialty),
         _ => "??"
     };
 
-    private static string FormatRole(AgentRole role) => role switch
+    private static string GetInitialsFromName(string name)
+    {
+        var words = name.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return words.Length >= 2
+            ? $"{words[0][0]}{words[1][0]}".ToUpperInvariant()
+            : name.Length >= 2 ? name[..2].ToUpperInvariant() : name.ToUpperInvariant();
+    }
+
+    private static string FormatRole(AgentRole role, string? specialty = null) => role switch
     {
         AgentRole.ProgramManager => "Program Manager",
         AgentRole.Researcher => "Researcher",
         AgentRole.Architect => "Architect",
         AgentRole.SoftwareEngineer => "Software Engineer",
         AgentRole.TestEngineer => "Test Engineer",
+        AgentRole.Custom when !string.IsNullOrEmpty(specialty) => "SME Specialist",
         _ => role.ToString()
     };
 

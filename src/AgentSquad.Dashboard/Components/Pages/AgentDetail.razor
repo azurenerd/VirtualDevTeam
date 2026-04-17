@@ -46,13 +46,22 @@ else
             <div class="detail-hero-info">
                 <h1 class="detail-agent-name">@_agent.DisplayName</h1>
                 <div class="detail-meta-row">
-                    <span class="detail-role-badge">@FormatRole(_agent.Role)</span>
+                    <span class="detail-role-badge">@FormatRole(_agent.Role, _agent.Specialty)</span>
                     <span class="detail-model-badge">@_agent.ModelTier</span>
                     <span class="status-badge @statusClass">
                         <span class="status-dot"></span>
                         @_agent.Status
                     </span>
                 </div>
+                @if (_agent.Capabilities.Count > 0)
+                {
+                    <div class="agent-capabilities" style="margin-top: 6px;">
+                        @foreach (var cap in _agent.Capabilities)
+                        {
+                            <span class="capability-tag">@cap</span>
+                        }
+                    </div>
+                }
                 <div class="detail-status-time">
                     Status since @_agent.LastStatusChange.ToString("HH:mm:ss UTC") · @FormatDuration(DateTime.UtcNow - _agent.LastStatusChange) ago
                 </div>
@@ -505,13 +514,14 @@ else
         _ => "??"
     };
 
-    private static string FormatRole(AgentRole role) => role switch
+    private static string FormatRole(AgentRole role, string? specialty = null) => role switch
     {
         AgentRole.ProgramManager => "Program Manager",
         AgentRole.Researcher => "Researcher",
         AgentRole.Architect => "Architect",
         AgentRole.SoftwareEngineer => "Software Engineer",
         AgentRole.TestEngineer => "Test Engineer",
+        AgentRole.Custom when !string.IsNullOrEmpty(specialty) => "SME Specialist",
         _ => role.ToString()
     };
 

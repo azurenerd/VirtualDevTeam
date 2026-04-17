@@ -596,6 +596,8 @@ main {
 .agent-avatar.role-seniorengineer { background: linear-gradient(135deg, #00d4ff, #0969da); }
 .agent-avatar.role-juniorengineer { background: linear-gradient(135deg, #79c0ff, #388bfd); }
 .agent-avatar.role-testengineer { background: linear-gradient(135deg, #d2a8ff, #8957e5); }
+.agent-avatar.role-custom { background: linear-gradient(135deg, #ff7eb3, #ff758c); }
+.agent-avatar.role-softwareengineer { background: linear-gradient(135deg, #3fb950, #238636); }
 
 .agent-info {
     flex: 1;
@@ -614,6 +616,28 @@ main {
 .agent-role {
     font-size: 0.75rem;
     color: var(--text-secondary);
+}
+
+.agent-capabilities {
+    display: flex;
+    gap: 4px;
+    margin-top: 2px;
+    flex-wrap: wrap;
+}
+
+.capability-tag {
+    font-size: 0.65rem;
+    padding: 1px 6px;
+    border-radius: 8px;
+    background: var(--surface-secondary, rgba(88, 166, 255, 0.15));
+    color: var(--text-link, #58a6ff);
+    white-space: nowrap;
+}
+
+.capability-more {
+    font-size: 0.65rem;
+    color: var(--text-secondary);
+    padding: 1px 4px;
 }
 
 /* ===== Status Badge ===== */

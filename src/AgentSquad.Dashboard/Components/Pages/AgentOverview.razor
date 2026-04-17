@@ -134,11 +134,24 @@ else
             <div class="agent-card @statusClass @selectedClass @approvalClass" @onclick="() => NavigateToAgent(agent.Id)">
                 <div class="agent-card-header">
                     <div class="agent-avatar @roleClass">
-                        @GetRoleInitials(agent.Role)
+                        @GetRoleInitials(agent.Role, agent.Specialty)
                     </div>
                     <div class="agent-info">
                         <div class="agent-name" title="@agent.DisplayName">@agent.DisplayName</div>
-                        <div class="agent-role">@FormatRole(agent.Role)</div>
+                        <div class="agent-role">@FormatRole(agent.Role, agent.Specialty)</div>
+                        @if (agent.Capabilities.Count > 0)
+                        {
+                            <div class="agent-capabilities">
+                                @foreach (var cap in agent.Capabilities.Take(3))
+                                {
+                                    <span class="capability-tag">@cap</span>
+                                }
+                                @if (agent.Capabilities.Count > 3)
+                                {
+                                    <span class="capability-more">+@(agent.Capabilities.Count - 3)</span>
+                                }
+                            </div>
+                        }
                     </div>
                     <span class="status-badge @statusClass">
                         <span class="status-dot"></span>
@@ -504,23 +517,33 @@ else
     private string HealthLabel => _hasDeadlock ? "Deadlock" :
         _agents.Any(a => a.Status == AgentStatus.Blocked) ? "Degraded" : "Healthy";
 
-    private static string GetRoleInitials(AgentRole role) => role switch
+    private static string GetRoleInitials(AgentRole role, string? specialty = null) => role switch
     {
         AgentRole.ProgramManager => "PM",
         AgentRole.Researcher => "RS",
         AgentRole.Architect => "AR",
         AgentRole.SoftwareEngineer => "SWE",
         AgentRole.TestEngineer => "TE",
+        AgentRole.Custom when !string.IsNullOrEmpty(specialty) => GetInitialsFromName(specialty),
         _ => "??"
     };
 
-    private static string FormatRole(AgentRole role) => role switch
+    private static string GetInitialsFromName(string name)
+    {
+        var words = name.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return words.Length >= 2
+            ? $"{words[0][0]}{words[1][0]}".ToUpperInvariant()
+            : name.Length >= 2 ? name[..2].ToUpperInvariant() : name.ToUpperInvariant();
+    }
+
+    private static string FormatRole(AgentRole role, string? specialty = null) => role switch
     {
         AgentRole.ProgramManager => "Program Manager",
         AgentRole.Researcher => "Researcher",
         AgentRole.Architect => "Architect",
         AgentRole.SoftwareEngineer => "Software Engineer",
         AgentRole.TestEngineer => "Test Engineer",
+        AgentRole.Custom when !string.IsNullOrEmpty(specialty) => "SME Specialist",
         _ => role.ToString()
     };
 

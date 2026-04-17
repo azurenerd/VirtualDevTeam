@@ -24,6 +24,12 @@ public sealed record AgentSnapshot
     public DateTime LastStatusChange { get; set; } = DateTime.UtcNow;
     public int ErrorCount { get; init; }
 
+    /// <summary>For SME/custom agents, the specialty name (e.g., "Blazor UI Developer").</summary>
+    public string? Specialty { get; init; }
+
+    /// <summary>Skill/domain capabilities (e.g., "frontend", "blazor", "css").</summary>
+    public List<string> Capabilities { get; init; } = [];
+
     // Self-diagnostic
     public string? DiagnosticSummary { get; init; }
     public string? DiagnosticJustification { get; init; }
@@ -814,6 +820,10 @@ public sealed class DashboardDataService : BackgroundService, IDashboardDataServ
             StatusReason = agent.StatusReason,
             CreatedAt = agent.Identity.CreatedAt,
             AssignedPullRequest = agent.Identity.AssignedPullRequest,
+            Specialty = agent.Identity.Role == AgentRole.Custom
+                ? agent.Identity.DisplayName
+                : null,
+            Capabilities = agent.Identity.Capabilities,
             ActiveModel = _modelRegistry.GetEffectiveModel(agent.Identity.Id),
             LastStatusChange = DateTime.UtcNow,
             ErrorCount = agent.RecentErrors.Count,
