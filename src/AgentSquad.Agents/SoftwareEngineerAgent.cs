@@ -3601,7 +3601,9 @@ public class SoftwareEngineerAgent : EngineerAgentBase
                 : null;
             history.AddSystemMessage(reviewSys ??
                 "You are a Software Engineer doing a technical code review.\n\n" +
-                "SCOPE: This PR is ONE task. Review the ACTUAL CODE against its stated scope.\n\n" +
+                "SCOPE: You are reviewing EXACTLY ONE PR. Do NOT mention or review other PRs, " +
+                "other tasks, or other engineers' work. Every issue you raise MUST reference a " +
+                "file that appears in THIS PR's diff. If a file is not in the diff, do not comment on it.\n\n" +
                 "CHECK: architecture compliance, implementation completeness, code quality, " +
                 "bugs/logic errors, missing validation, test coverage.\n\n" +
                 "ACCEPTANCE CRITERIA FILE COMPLETENESS CHECK (critical):\n" +
@@ -3696,6 +3698,15 @@ public class SoftwareEngineerAgent : EngineerAgentBase
 
             reviewContextBuilder.Append(issueContext);
             reviewContextBuilder.AppendLine($"## Pull Request #{pr.Number}: {pr.Title}\n{pr.Body}\n");
+
+            // Hard scoping barrier — prevents AI from cross-reviewing other PRs
+            reviewContextBuilder.AppendLine("---");
+            reviewContextBuilder.AppendLine($"⚠️ SCOPE CONSTRAINT: You are reviewing ONLY PR #{pr.Number} (\"{pr.Title}\").");
+            reviewContextBuilder.AppendLine("Do NOT comment on other PRs, other tasks, or other engineers' work.");
+            reviewContextBuilder.AppendLine("Every review item must reference a file that is CHANGED IN THIS PR.");
+            reviewContextBuilder.AppendLine("If you mention a file not in this PR's diff, your review is WRONG.");
+            reviewContextBuilder.AppendLine("---\n");
+
             reviewContextBuilder.Append(codeContext);
 
             // Add screenshots as vision content if available
