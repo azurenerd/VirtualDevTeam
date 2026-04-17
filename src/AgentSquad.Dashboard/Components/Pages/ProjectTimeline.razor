@@ -338,13 +338,13 @@ else
     }
 
     /// <summary>
-    /// Gentle background poll — refreshes timeline every 30s so new issues/PRs
-    /// appear without the user needing to reload. Uses cached data from
-    /// DashboardDataService so it only hits GitHub when the cache expires.
+    /// Background poll — refreshes timeline every 15s so new issues/PRs
+    /// appear quickly. Uses cached data from DashboardDataService so it
+    /// only hits GitHub when the cache expires.
     /// </summary>
     private async Task PollForUpdatesAsync(CancellationToken ct)
     {
-        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(60));
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
         try
         {
             while (await timer.WaitForNextTickAsync(ct))

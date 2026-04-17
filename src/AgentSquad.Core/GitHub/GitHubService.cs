@@ -4,6 +4,7 @@ using Microsoft.Extensions.Options;
 using Octokit;
 using AgentSquad.Core.Configuration;
 using AgentSquad.Core.GitHub.Models;
+using AgentSquad.Core.Persistence;
 
 namespace AgentSquad.Core.GitHub;
 
@@ -14,6 +15,7 @@ public class GitHubService : IGitHubService
     private readonly string _repo;
     private readonly ILogger<GitHubService> _logger;
     private readonly RateLimitManager _rl;
+    private readonly DateTime? _runStartedUtc;
 
     /// <summary>Label automatically added to every issue and PR created by the agent system.</summary>
     internal const string AiGeneratedLabel = "AI-Generated";
@@ -71,10 +73,12 @@ public class GitHubService : IGitHubService
 
     public string RepositoryFullName => $"{_owner}/{_repo}";
 
-    public GitHubService(IOptions<AgentSquadConfig> config, RateLimitManager rateLimitManager, ILogger<GitHubService> logger)
+    public GitHubService(IOptions<AgentSquadConfig> config, RateLimitManager rateLimitManager, ILogger<GitHubService> logger,
+        AgentStateStore? stateStore = null)
     {
         _logger = logger;
         _rl = rateLimitManager;
+        _runStartedUtc = stateStore?.RunStartedUtc;
 
         var projectConfig = config.Value.Project;
         var repoParts = projectConfig.GitHubRepo.Split('/', 2);
@@ -247,7 +251,10 @@ public class GitHubService : IGitHubService
                 var prs = await _client.PullRequest.GetAllForRepository(_owner, _repo,
                     new PullRequestRequest { State = ItemStateFilter.All, SortDirection = SortDirection.Descending });
                 TrackRateLimit();
-                return prs.Select(pr => MapPullRequest(pr, pr.Labels.Select(l => l.Name).ToList())).ToList();
+                var mapped = prs.Select(pr => MapPullRequest(pr, pr.Labels.Select(l => l.Name).ToList())).ToList();
+                if (_runStartedUtc.HasValue)
+                    mapped = mapped.Where(pr => pr.CreatedAt >= _runStartedUtc.Value).ToList();
+                return mapped;
             }, ct);
 
             _allPrsCache = result;
@@ -766,8 +773,10 @@ public class GitHubService : IGitHubService
 
             var result = await _rl.ExecuteAsync(async _ =>
             {
-                var issues = await _client.Issue.GetAllForRepository(_owner, _repo,
-                    new RepositoryIssueRequest { State = ItemStateFilter.All, SortDirection = SortDirection.Descending });
+                var request = new RepositoryIssueRequest { State = ItemStateFilter.All, SortDirection = SortDirection.Descending };
+                if (_runStartedUtc.HasValue)
+                    request.Since = new DateTimeOffset(_runStartedUtc.Value, TimeSpan.Zero);
+                var issues = await _client.Issue.GetAllForRepository(_owner, _repo, request);
                 TrackRateLimit();
                 return (IReadOnlyList<AgentIssue>)issues.Where(i => i.PullRequest == null).Select(i => MapIssue(i)).ToList();
             }, ct);

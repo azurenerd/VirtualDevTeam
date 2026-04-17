@@ -122,7 +122,7 @@ public sealed class DashboardDataService : BackgroundService, IDashboardDataServ
     private DateTime _lastPrFetchUtc = DateTime.MinValue;
     private IReadOnlyList<AgentIssue> _cachedIssues = Array.Empty<AgentIssue>();
     private DateTime _lastIssueFetchUtc = DateTime.MinValue;
-    private static readonly TimeSpan PrCacheExpiry = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan PrCacheExpiry = TimeSpan.FromSeconds(30);
 
     public DashboardDataService(
         AgentRegistry registry,
