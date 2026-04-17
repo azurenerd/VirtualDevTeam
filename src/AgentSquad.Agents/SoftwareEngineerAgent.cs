@@ -558,6 +558,9 @@ public class SoftwareEngineerAgent : EngineerAgentBase
             "Every property in the C# record must have a corresponding JSON field with the correct casing and structure. " +
             "If DashboardData has a 'milestoneStreams' property of type List<MilestoneStream>, the JSON must have 'milestoneStreams' as an array of matching objects. " +
             "A schema mismatch between data.json and the data model will cause runtime validation errors.\n" +
+            "- CRITICAL: data.json MUST be committed to the repository, NOT gitignored. " +
+            "The app needs this file to start and render content. Do NOT create data.example.json or data.template.json as the primary file — " +
+            "create data.json directly with sample data. The .gitignore must NOT exclude data.json.\n" +
             "- Create configuration files (launchSettings.json, appsettings.json) with correct ports and settings\n\n" +
             "The goal: after T1 merges, `dotnet build` (or equivalent) succeeds, `dotnet run` starts the app, " +
             "and the app renders a working shell with VISUALLY DISTINCT placeholder sections — " +

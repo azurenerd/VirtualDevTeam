@@ -836,6 +836,34 @@ public class PlaywrightRunner
                     "$1// [PlaywrightRunner] $2.UseUrls(\"$3\") — removed so ASPNETCORE_URLS env var controls the port",
                     System.Text.RegularExpressions.RegexOptions.Multiline);
 
+                // Handle ConfigureKestrel with ListenLocalhost(port) — common in AI-generated Blazor apps
+                // This pattern overrides ASPNETCORE_URLS, so we must comment it out.
+                // Matches: builder.WebHost.ConfigureKestrel(o => o.ListenLocalhost(5000));
+                //          options.ListenLocalhost(5000)  (multi-line ConfigureKestrel blocks)
+                patched = System.Text.RegularExpressions.Regex.Replace(
+                    patched,
+                    @"^(\s*)(.+\.ConfigureKestrel\(.+\bListenLocalhost\(\d+\).*);",
+                    "$1// [PlaywrightRunner] $2; — removed so ASPNETCORE_URLS env var controls the port",
+                    System.Text.RegularExpressions.RegexOptions.Multiline);
+
+                // Handle multi-line ConfigureKestrel blocks:
+                //   builder.WebHost.ConfigureKestrel(options =>
+                //   {
+                //       options.ListenLocalhost(5000);
+                //   });
+                patched = System.Text.RegularExpressions.Regex.Replace(
+                    patched,
+                    @"^(\s*)\w+\.ListenLocalhost\(\d+\);",
+                    "$1// [PlaywrightRunner] removed ListenLocalhost — ASPNETCORE_URLS controls port",
+                    System.Text.RegularExpressions.RegexOptions.Multiline);
+
+                // Handle Listen(IPAddress.Loopback, port) pattern
+                patched = System.Text.RegularExpressions.Regex.Replace(
+                    patched,
+                    @"^(\s*)\w+\.Listen\(IPAddress\.Loopback,\s*\d+\);",
+                    "$1// [PlaywrightRunner] removed Listen(IPAddress.Loopback) — ASPNETCORE_URLS controls port",
+                    System.Text.RegularExpressions.RegexOptions.Multiline);
+
                 if (patched != content)
                 {
                     File.WriteAllText(programFile, patched);
@@ -1370,6 +1398,11 @@ public class PlaywrightRunner
             // Ensure data files exist so the app doesn't show an error page
             EnsureSampleDataExists(workspacePath);
 
+            // Patch hardcoded port bindings (ConfigureKestrel, UseUrls, etc.)
+            // so ASPNETCORE_URLS env var controls the port — same as UI test path
+            var envVarsForPatch = new Dictionary<string, string>();
+            PatchHardcodedPortBindings(workspacePath, envVarsForPatch);
+
             // Derive unique port per workspace to prevent conflicts when agents run simultaneously
             var uniquePort = DeriveUniquePort(workspacePath);
             var (portUrl, _) = RewritePort(config.AppBaseUrl, null, uniquePort);
@@ -1425,6 +1458,19 @@ public class PlaywrightRunner
 
             var ready = await WaitForAppReadyAsync(screenshotUrl, config.AppStartupTimeoutSeconds, ct, appProcess);
 
+            // Fallback: if unique port didn't respond, try the configured base URL
+            if (!ready)
+            {
+                var configuredUrl = config.AppBaseUrl;
+                if (!string.Equals(screenshotUrl, configuredUrl, StringComparison.OrdinalIgnoreCase))
+                {
+                    _logger.LogInformation("Screenshot: unique port {UniquePort} not responding, trying configured URL {ConfiguredUrl}",
+                        screenshotUrl, configuredUrl);
+                    ready = await WaitForAppReadyAsync(configuredUrl, 5, ct, appProcess);
+                    if (ready) screenshotUrl = configuredUrl;
+                }
+            }
+
             if (!ready)
             {
                 _logger.LogWarning("App not ready for screenshot at {Url} — attempting build first", screenshotUrl);
@@ -1458,7 +1504,19 @@ public class PlaywrightRunner
 
                 if (!ready)
                 {
-                    _logger.LogDebug("App still not ready after build+restart, giving up on screenshot");
+                    // Fallback: try the original configured base URL (app may have ignored our unique port)
+                    var configuredUrl = config.AppBaseUrl;
+                    if (!string.Equals(screenshotUrl, configuredUrl, StringComparison.OrdinalIgnoreCase))
+                    {
+                        _logger.LogInformation("Screenshot: trying configured URL {ConfiguredUrl} as fallback", configuredUrl);
+                        ready = await WaitForAppReadyAsync(configuredUrl, 5, ct, appProcess);
+                        if (ready) screenshotUrl = configuredUrl;
+                    }
+                }
+
+                if (!ready)
+                {
+                    _logger.LogDebug("App still not ready after build+restart+fallback, giving up on screenshot");
                     return null;
                 }
             }
@@ -1724,6 +1782,7 @@ public class PlaywrightRunner
             var candidatePaths = new[]
             {
                 Path.Combine(appDir, "data.json"),
+                Path.Combine(appDir, "Data", "data.json"),
                 Path.Combine(appDir, "wwwroot", "data.json"),
                 Path.Combine(appDir, "wwwroot", "data", "data.json"),
             };
@@ -1731,11 +1790,15 @@ public class PlaywrightRunner
             if (candidatePaths.Any(File.Exists))
                 continue; // Already has data somewhere
 
-            // Strategy 1: Copy data.template.json from anywhere in the workspace
+            // Strategy 1: Copy data.template.json or data.example.json from the workspace
             var templateCandidates = new[]
             {
                 Path.Combine(appDir, "data.template.json"),
                 Path.Combine(workspacePath, "data.template.json"),
+                Path.Combine(appDir, "data.example.json"),
+                Path.Combine(workspacePath, "data.example.json"),
+                Path.Combine(appDir, "Data", "data.example.json"),
+                Path.Combine(appDir, "Data", "data.template.json"),
             };
 
             var template = templateCandidates.FirstOrDefault(File.Exists);
