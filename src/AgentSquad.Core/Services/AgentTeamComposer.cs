@@ -139,7 +139,7 @@ public class AgentTeamComposer
         prompt.AppendLine("  \"existingTemplateIds\": [\"template-id-1\"],");
         prompt.AppendLine("  \"newSmeAgents\": [");
         prompt.AppendLine("    {");
-        prompt.AppendLine("      \"roleName\": \"Name of the specialist (e.g., Front-End Developer, Cloud Infrastructure Engineer)\",");
+        prompt.AppendLine("      \"roleName\": \"High-level role name WITHOUT specific technologies (e.g., Frontend Engineer, Cloud Engineer, Infrastructure Engineer, UX Engineer, Data Engineer). Put technology specifics in capabilities instead.\",");
         prompt.AppendLine("      \"baseTemplate\": \"engineer\",");
         prompt.AppendLine("      \"systemPrompt\": \"Detailed persona: You are a senior Front-End Developer with deep expertise in...\",");
         prompt.AppendLine("      \"capabilities\": [\"frontend\", \"react\", \"css\", \"accessibility\"],");
@@ -167,6 +167,9 @@ public class AgentTeamComposer
         prompt.AppendLine("3. For each identified gap, propose a specialist with `baseTemplate: \"engineer\"` and matching capabilities");
         prompt.AppendLine("4. Capabilities should use lowercase tags that match task skill annotations (e.g., \"frontend\", \"react\", \"azure\")");
         prompt.AppendLine("5. The leader SE assigns tasks to specialists based on capability overlap — make capabilities specific");
+        prompt.AppendLine("6. **Naming rule**: roleName must be a broad role category (Frontend Engineer, Cloud Engineer, UX Engineer, ");
+        prompt.AppendLine("   Infrastructure Engineer, Data Engineer, Security Engineer, etc.) — NEVER include specific technology names ");
+        prompt.AppendLine("   (React, CSS, Azure, Kubernetes) in the roleName. Technology specifics belong ONLY in the capabilities array.");
         prompt.AppendLine();
         prompt.AppendLine("IMPORTANT: Only propose SME agents when the project genuinely requires specialist expertise ");
         prompt.AppendLine("beyond what the built-in agents provide. The built-in team (PM, Researcher, Architect, Software Engineer, TE) ");
