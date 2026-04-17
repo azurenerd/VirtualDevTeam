@@ -971,7 +971,7 @@ public class ArchitectAgent : AgentBase
                 {
                     // Phase 1 complete: Architect approved → add architect-approved label, do NOT merge.
                     // The TE will pick up the PR next (Phase 2), then PM reviews last (Phase 3).
-                    var approvalComment = $"**[Architect] APPROVED**\n\n🏗️ Architecture Review: {reasoning}{riskSuffix}";
+                    var approvalComment = $"**[Architect] APPROVED**\n\n🏗️ Architecture Review: {reasoning}";
                     await _github.AddPullRequestCommentAsync(pr.Number, approvalComment, ct);
 
                     // Submit inline comments as a GitHub review

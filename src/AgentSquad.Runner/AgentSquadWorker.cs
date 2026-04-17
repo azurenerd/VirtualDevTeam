@@ -2,6 +2,7 @@ using AgentSquad.Core.Agents;
 using AgentSquad.Core.Configuration;
 using AgentSquad.Core.GitHub;
 using AgentSquad.Core.Persistence;
+using AgentSquad.Core.Services;
 using AgentSquad.Orchestrator;
 using Microsoft.Extensions.Options;
 
@@ -17,6 +18,7 @@ public class AgentSquadWorker : BackgroundService
     private readonly AgentStateStore _stateStore;
     private readonly ILogger<AgentSquadWorker> _logger;
     private readonly AgentSquadConfig _config;
+    private readonly SMEAgentDefinitionService? _definitionService;
     private readonly List<Task> _agentTasks = new();
 
     public AgentSquadWorker(
@@ -27,7 +29,8 @@ public class AgentSquadWorker : BackgroundService
         IGateCheckService gateCheck,
         AgentStateStore stateStore,
         ILogger<AgentSquadWorker> logger,
-        IOptions<AgentSquadConfig> config)
+        IOptions<AgentSquadConfig> config,
+        SMEAgentDefinitionService? definitionService = null)
     {
         _spawnManager = spawnManager ?? throw new ArgumentNullException(nameof(spawnManager));
         _registry = registry ?? throw new ArgumentNullException(nameof(registry));
@@ -37,6 +40,7 @@ public class AgentSquadWorker : BackgroundService
         _stateStore = stateStore ?? throw new ArgumentNullException(nameof(stateStore));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _config = config?.Value ?? throw new ArgumentNullException(nameof(config));
+        _definitionService = definitionService;
     }
 
     protected override async Task ExecuteAsync(CancellationToken ct)
@@ -122,6 +126,40 @@ public class AgentSquadWorker : BackgroundService
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to spawn custom agent '{Name}'", customAgent.Name);
+            }
+        }
+
+        // Respawn persisted SME agents from previous runs (Continuous mode only)
+        if (_definitionService is not null && _config.SmeAgents.Enabled)
+        {
+            try
+            {
+                var allDefs = await _definitionService.GetAllAsync(ct);
+                var continuousDefs = allDefs.Values
+                    .Where(d => d.WorkflowMode == SmeWorkflowMode.Continuous)
+                    .ToList();
+
+                if (continuousDefs.Count > 0)
+                {
+                    _logger.LogInformation("Found {Count} persisted Continuous SME agent(s) to respawn", continuousDefs.Count);
+                    foreach (var def in continuousDefs)
+                    {
+                        try
+                        {
+                            var smeIdentity = await _spawnManager.SpawnSmeAgentAsync(def, ct: ct);
+                            if (smeIdentity != null)
+                                _logger.LogInformation("Respawned SME agent: {Name} ({DefId})", smeIdentity.DisplayName, def.DefinitionId);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError(ex, "Failed to respawn SME agent '{RoleName}' ({DefId})", def.RoleName, def.DefinitionId);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to load persisted SME definitions for respawn");
             }
         }
 

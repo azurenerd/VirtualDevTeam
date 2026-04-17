@@ -26,6 +26,9 @@ public class RoleContextProvider
     private readonly ConcurrentDictionary<string, string> _knowledgeCache = new();
     private readonly ConcurrentDictionary<string, bool> _initialized = new();
 
+    // Runtime role description overrides (set by PM during team composition)
+    private readonly ConcurrentDictionary<string, string> _roleDescriptionOverrides = new();
+
     private const int MaxPerLinkBytes = 50_000;
     private const int FetchTimeoutSeconds = 10;
 
@@ -86,6 +89,18 @@ public class RoleContextProvider
     }
 
     /// <summary>
+    /// Sets a runtime role description override for a built-in agent role.
+    /// Used by the PM during team composition to give agents project-specific focus.
+    /// Takes effect immediately for subsequent calls to <see cref="GetRoleSystemContext"/>.
+    /// </summary>
+    public void SetRoleDescriptionOverride(AgentRole role, string roleDescription)
+    {
+        var cacheKey = GetCacheKey(role, customAgentName: null);
+        _roleDescriptionOverrides[cacheKey] = roleDescription;
+        _logger.LogInformation("Set runtime role description override for {Role}", role);
+    }
+
+    /// <summary>
     /// Returns the composite role context string for a specific agent (built-in or custom).
     /// Uses tier-based knowledge budgets when model tier is available.
     /// </summary>
@@ -97,8 +112,10 @@ public class RoleContextProvider
 
         var maxRoleDescChars = KnowledgeBudget.GetMaxRoleDescriptionChars(modelTier ?? config.ModelTier);
 
-        // Inject custom role description
-        var roleDesc = config.RoleDescription?.Trim();
+        // Inject custom role description (runtime override takes precedence over config)
+        var roleDesc = _roleDescriptionOverrides.TryGetValue(cacheKey, out var overrideDesc)
+            ? overrideDesc?.Trim()
+            : config.RoleDescription?.Trim();
         if (!string.IsNullOrEmpty(roleDesc))
         {
             if (roleDesc.Length > maxRoleDescChars)

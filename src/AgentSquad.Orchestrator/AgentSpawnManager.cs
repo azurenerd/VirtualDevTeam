@@ -2,6 +2,7 @@ namespace AgentSquad.Orchestrator;
 
 using AgentSquad.Core.Agents;
 using AgentSquad.Core.Configuration;
+using AgentSquad.Core.Services;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -18,6 +19,7 @@ public class AgentSpawnManager
     private readonly IGateCheckService _gateCheck;
     private readonly AgentSquadConfig _config;
     private readonly ILogger<AgentSpawnManager> _logger;
+    private readonly SMEAgentDefinitionService? _definitionService;
 
     private readonly object _lock = new();
     private readonly Dictionary<AgentRole, int> _spawnCounts = new();
@@ -38,13 +40,15 @@ public class AgentSpawnManager
         IAgentFactory agentFactory,
         IGateCheckService gateCheck,
         IOptions<AgentSquadConfig> config,
-        ILogger<AgentSpawnManager> logger)
+        ILogger<AgentSpawnManager> logger,
+        SMEAgentDefinitionService? definitionService = null)
     {
         _registry = registry ?? throw new ArgumentNullException(nameof(registry));
         _agentFactory = agentFactory ?? throw new ArgumentNullException(nameof(agentFactory));
         _gateCheck = gateCheck ?? throw new ArgumentNullException(nameof(gateCheck));
         _config = config?.Value ?? throw new ArgumentNullException(nameof(config));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _definitionService = definitionService;
     }
 
     /// <summary>
@@ -310,6 +314,25 @@ public class AgentSpawnManager
             _logger.LogInformation(
                 "SME agent '{AgentId}' ({RoleName}) spawned and initialized.",
                 identity.Id, definition.RoleName);
+
+            // Persist the definition so the agent can be re-spawned on restart
+            if (_definitionService is not null)
+            {
+                try
+                {
+                    var saveResult = await _definitionService.SaveAsync(definition, ct);
+                    if (saveResult.IsValid)
+                        _logger.LogInformation("Persisted SME definition '{DefId}' for restart recovery", definition.DefinitionId);
+                    else
+                        _logger.LogWarning("Failed to persist SME definition '{DefId}': {Errors}",
+                            definition.DefinitionId, string.Join(", ", saveResult.Errors));
+                }
+                catch (Exception persistEx)
+                {
+                    _logger.LogWarning(persistEx, "Failed to persist SME definition '{DefId}' — agent is running but won't survive restart",
+                        definition.DefinitionId);
+                }
+            }
 
             // Optionally assign to a task
             if (assignToIssue.HasValue)

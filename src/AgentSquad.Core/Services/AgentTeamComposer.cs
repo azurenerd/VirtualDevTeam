@@ -132,7 +132,7 @@ public class AgentTeamComposer
         prompt.AppendLine("  \"projectSummary\": \"One-line summary of what this project does\",");
         prompt.AppendLine("  \"rationale\": \"2-3 sentences on why this team composition is optimal\",");
         prompt.AppendLine("  \"builtInAgents\": [");
-        prompt.AppendLine("    { \"role\": \"Researcher\", \"count\": 1, \"justification\": \"why\" },");
+        prompt.AppendLine("    { \"role\": \"Researcher\", \"count\": 1, \"justification\": \"why\", \"roleDescription\": \"Optional: focus areas or persona adjustments for this agent\" },");
         prompt.AppendLine("    { \"role\": \"Architect\", \"count\": 1, \"justification\": \"why\" }");
         prompt.AppendLine("  ],");
         prompt.AppendLine("  \"existingTemplateIds\": [\"template-id-1\"],");

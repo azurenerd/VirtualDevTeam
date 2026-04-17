@@ -193,4 +193,11 @@ public record BuiltInAgentRequest
     public required AgentRole Role { get; init; }
     public required int Count { get; init; }
     public string? Justification { get; init; }
+
+    /// <summary>
+    /// Optional role description override that the PM assigns to this agent role
+    /// during team composition. Stored in <see cref="Configuration.AgentConfig.RoleDescription"/>
+    /// and injected as [ROLE CUSTOMIZATION] into every system prompt for this role.
+    /// </summary>
+    public string? RoleDescription { get; init; }
 }

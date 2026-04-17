@@ -2023,6 +2023,19 @@ public class ProgramManagerAgent : AgentBase
                 "PM: Add team composition document", ct);
             Logger.LogInformation("TeamComposition.md saved");
 
+            // Apply PM-assigned role description overrides for built-in agents
+            if (RoleContext is not null)
+            {
+                foreach (var builtIn in proposal.BuiltInAgents)
+                {
+                    if (!string.IsNullOrWhiteSpace(builtIn.RoleDescription))
+                    {
+                        RoleContext.SetRoleDescriptionOverride(builtIn.Role, builtIn.RoleDescription);
+                        Logger.LogInformation("Applied PM role description override for {Role}", builtIn.Role);
+                    }
+                }
+            }
+
             // Spawn any new SME agents from the approved proposal
             foreach (var smeDef in proposal.NewSmeAgents)
             {

@@ -1,5 +1,6 @@
 @page "/configuration"
 @using AgentSquad.Core.Configuration
+@using AgentSquad.Core.Services
 @using AgentSquad.Core.Workspace
 @using AgentSquad.Dashboard.Services
 @using Microsoft.Extensions.Options
@@ -10,6 +11,7 @@
 @inject IPromptTemplateService PromptService
 @inject IOptions<AgentSquadConfig> SquadConfig
 @inject ILogger<Configuration> Logger
+@inject IServiceProvider ServiceProvider
 @rendermode InteractiveServer
 
 <div class="page-header">
@@ -312,12 +314,26 @@ else if (_config is not null)
                                     <div class="config-agent-details" @onclick:stopPropagation="true">
                                         @* Role Description *@
                                         <div class="config-field">
-                                            <label title="Custom role description that augments the agent's default persona. This is prepended to every AI system prompt, giving the agent a specialized identity and behavioral guidelines. Leave empty to use the default role.">
+                                            <label title="Custom role description that augments the agent's default persona. This is prepended to every AI system prompt, giving the agent a specialized identity and behavioral guidelines.">
                                                 Role Description <span class="config-hint">(augments default persona)</span>
                                             </label>
                                             <textarea @bind="agent.Config.RoleDescription" class="config-textarea" rows="3"
-                                                placeholder="e.g., 'You specialize in security-first architecture. Always consider OWASP top 10 in your designs...'"
-                                                title="Custom instructions prepended to every AI prompt for this agent. Defines specialized behavior, domain expertise, or organizational standards."></textarea>
+                                                placeholder="@GetDefaultRoleDescription(agentName)"
+                                                title="Custom instructions prepended to every AI prompt for this agent. Click 'Load Default' to start from the built-in persona."></textarea>
+                                            <div class="config-field-actions">
+                                                @if (string.IsNullOrWhiteSpace(agent.Config.RoleDescription))
+                                                {
+                                                    <button class="config-btn-inline" @onclick="() => LoadDefaultRoleDescription(agent.Config, agentName)" title="Populate with the built-in default persona so you can tweak it">
+                                                        📋 Load Default
+                                                    </button>
+                                                }
+                                                else
+                                                {
+                                                    <button class="config-btn-inline config-btn-inline-warn" @onclick="() => agent.Config.RoleDescription = string.Empty" title="Clear customization and revert to built-in default">
+                                                        🔄 Reset
+                                                    </button>
+                                                }
+                                            </div>
                                         </div>
 
                                         @* MCP Servers *@
@@ -336,9 +352,25 @@ else if (_config is not null)
                                                     <button class="config-btn-remove" @onclick="() => RemoveMcpServer(agent.Config, idx)" title="Remove this MCP server">✕</button>
                                                 </div>
                                             }
-                                            <button class="config-btn-add" @onclick="() => AddMcpServer(agent.Config)" title="Add an MCP server for this agent">
-                                                + Add MCP Server
-                                            </button>
+                                            @{
+                                                var availableMcp = GetAvailableMcpServers(agent.Config);
+                                            }
+                                            @if (availableMcp.Count > 0)
+                                            {
+                                                <div class="config-mcp-available">
+                                                    @foreach (var mcp in availableMcp)
+                                                    {
+                                                        <button class="config-btn-mcp-add" @onclick="() => { agent.Config.McpServers.Add(mcp); }"
+                                                            title="Add '@mcp' to this agent">+ @mcp</button>
+                                                    }
+                                                </div>
+                                            }
+                                            else
+                                            {
+                                                <button class="config-btn-add" @onclick="() => AddMcpServer(agent.Config)" title="Add an MCP server for this agent">
+                                                    + Add MCP Server
+                                                </button>
+                                            }
                                         </div>
 
                                         @* Knowledge Links *@
@@ -995,6 +1027,76 @@ else if (_config is not null)
             }
         </div>
 
+        @* Persisted SME Agents (PM-created or saved from previous runs) *@
+        @if (_persistedSmeDefinitions is not null && _persistedSmeDefinitions.Count > 0)
+        {
+            var nonTemplateDefs = _persistedSmeDefinitions
+                .Where(kv => _config?.SmeAgents.Templates.ContainsKey(kv.Key) != true)
+                .ToList();
+
+            @if (nonTemplateDefs.Count > 0)
+            {
+                <div class="config-card">
+                    <div class="config-card-header" @onclick="() => _persistedSmeExpanded = !_persistedSmeExpanded">
+                        <span class="config-card-icon">🤖</span>
+                        <span class="config-card-title">Active SME Agents</span>
+                        <span class="sme-count-badge">@nonTemplateDefs.Count</span>
+                        <span class="config-card-chevron @(_persistedSmeExpanded ? "expanded" : "")">▶</span>
+                    </div>
+                    @if (_persistedSmeExpanded)
+                    {
+                        <div class="config-card-body">
+                            <p class="config-hint" style="margin-bottom: 0.75rem">
+                                SME agents created by the PM during team composition or spawned from templates.
+                                These are persisted and will be respawned on restart (Continuous mode).
+                            </p>
+                            <div class="sme-template-list">
+                                @foreach (var (id, def) in nonTemplateDefs)
+                                {
+                                    <div class="sme-template-card">
+                                        <div class="sme-template-header">
+                                            <span class="sme-template-name">@def.RoleName</span>
+                                            @if (!string.IsNullOrWhiteSpace(def.CreatedByAgentId))
+                                            {
+                                                <span class="sme-created-badge">PM-created</span>
+                                            }
+                                            <span class="sme-template-id">@id</span>
+                                        </div>
+                                        <div class="sme-template-details">
+                                            <span>Tier: @def.ModelTier</span>
+                                            <span>Mode: @def.WorkflowMode</span>
+                                            <span>Max: @def.MaxInstances</span>
+                                        </div>
+                                        @if (!string.IsNullOrWhiteSpace(def.SystemPrompt))
+                                        {
+                                            <div class="sme-template-prompt">
+                                                @(def.SystemPrompt.Length > 200 ? def.SystemPrompt[..200] + "…" : def.SystemPrompt)
+                                            </div>
+                                        }
+                                        @if (def.Capabilities.Count > 0)
+                                        {
+                                            <div class="mcp-capabilities">
+                                                @foreach (var cap in def.Capabilities)
+                                                {
+                                                    <span class="mcp-cap-tag">@cap</span>
+                                                }
+                                            </div>
+                                        }
+                                        @if (def.McpServers.Count > 0)
+                                        {
+                                            <div class="sme-template-servers">
+                                                MCP: @string.Join(", ", def.McpServers)
+                                            </div>
+                                        }
+                                    </div>
+                                }
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+        }
+
         @* ── Review Settings ── *@
         <div class="config-card">
             <div class="config-card-header" @onclick="() => _reviewExpanded = !_reviewExpanded">
@@ -1427,6 +1529,7 @@ else if (_config is not null)
     private bool _humanInteractionExpanded;
     private bool _mcpServersExpanded;
     private bool _smeTemplatesExpanded;
+    private bool _persistedSmeExpanded;
     private bool _reviewExpanded;
     private bool _decisionGatingExpanded;
     private bool _agenticLoopExpanded;
@@ -1465,6 +1568,9 @@ else if (_config is not null)
     private PatValidationResult? _patValidation;
     private bool _validatingPat;
 
+    // Persisted SME definitions (loaded from SMEAgentDefinitionService)
+    private IReadOnlyDictionary<string, SMEAgentDefinition>? _persistedSmeDefinitions;
+
     // Prompt template editor state
     private List<string>? _promptRoles;
     private readonly Dictionary<string, List<string>> _promptTemplates = new();
@@ -1499,6 +1605,8 @@ else if (_config is not null)
         await Task.Yield(); // ensure UI renders before long network call
         _ = ScanRepoBackground();
         _ = LoadPromptRolesBackground();
+        _ = LoadRoleDescriptionsBackground();
+        _ = LoadPersistedSmeDefinitionsBackground();
     }
 
     private async Task ScanRepoBackground()
@@ -1517,6 +1625,35 @@ else if (_config is not null)
         {
             _scanning = false;
             await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task LoadRoleDescriptionsBackground()
+    {
+        try
+        {
+            await LoadRoleDescriptionsAsync();
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to load role descriptions from prompt files");
+        }
+    }
+
+    private async Task LoadPersistedSmeDefinitionsBackground()
+    {
+        try
+        {
+            var defService = ServiceProvider.GetService<SMEAgentDefinitionService>();
+            if (defService is null) return;
+
+            _persistedSmeDefinitions = await defService.GetAllAsync();
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to load persisted SME definitions");
         }
     }
 
@@ -1679,6 +1816,51 @@ else if (_config is not null)
             ModelTier = "standard",
             Enabled = true
         });
+    }
+
+    private readonly Dictionary<string, string> _roleDescriptionCache = new();
+
+    private static string AgentNameToPromptDir(string agentName) => agentName switch
+    {
+        "Program Manager" => "pm",
+        "Researcher" => "researcher",
+        "Architect" => "architect",
+        "Software Engineer" => "software-engineer",
+        "Test Engineer" => "test-engineer",
+        _ => agentName.ToLowerInvariant().Replace(' ', '-')
+    };
+
+    private string GetDefaultRoleDescription(string agentName)
+    {
+        if (_roleDescriptionCache.TryGetValue(agentName, out var cached))
+            return cached;
+        return ""; // loaded async, placeholder until OnInitializedAsync completes
+    }
+
+    private async Task LoadRoleDescriptionsAsync()
+    {
+        var roles = new[] { "Program Manager", "Researcher", "Architect", "Software Engineer", "Test Engineer" };
+        foreach (var role in roles)
+        {
+            var dir = AgentNameToPromptDir(role);
+            var content = await PromptService.GetRawContentAsync($"{dir}/role-description", CancellationToken.None);
+            if (!string.IsNullOrWhiteSpace(content))
+                _roleDescriptionCache[role] = content.Trim();
+        }
+    }
+
+    private void LoadDefaultRoleDescription(AgentConfig config, string agentName)
+    {
+        config.RoleDescription = GetDefaultRoleDescription(agentName);
+    }
+
+    private List<string> GetAvailableMcpServers(AgentConfig config)
+    {
+        if (_config?.McpServers is null) return new();
+        return _config.McpServers.Keys
+            .Where(name => !config.McpServers.Contains(name, StringComparer.OrdinalIgnoreCase))
+            .OrderBy(n => n)
+            .ToList();
     }
 
     private void RemoveCustomAgent(CustomAgentConfig agent)
