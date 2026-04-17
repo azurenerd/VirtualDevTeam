@@ -385,6 +385,14 @@ public class ReviewConfig
     public bool EnableInlineComments { get; set; } = true;
 
     /// <summary>
+    /// When true, reviewers submit formal GitHub APPROVE/REQUEST_CHANGES reviews
+    /// via the Reviews API (shows green checkmark, counts for branch protection).
+    /// Only useful when agents have separate GitHub accounts.
+    /// Default: false (single-PAT setup can't approve own PRs).
+    /// </summary>
+    public bool EnableFormalReviews { get; set; } = false;
+
+    /// <summary>
     /// When true, reviews include a risk assessment (Low/Medium/High) in the review body.
     /// Default: true.
     /// </summary>
