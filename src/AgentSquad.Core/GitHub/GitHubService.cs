@@ -458,17 +458,36 @@ public class GitHubService : IGitHubService
                 {
                     var errorBody = await response.Content.ReadAsStringAsync(ct);
                     _logger.LogWarning(
-                        "Line-based review API returned {StatusCode} on PR #{Number}: {Error}. Falling back to body-only review.",
+                        "Line-based review API returned {StatusCode} on PR #{Number}: {Error}. Falling back.",
                         (int)response.StatusCode, prNumber, errorBody);
 
-                    // Fallback: submit review without inline comments
-                    var reviewEvent = eventType.ToUpperInvariant() switch
+                    // If "own pull request" error, downgrade to COMMENT event and inline the feedback
+                    bool isOwnPrError = errorBody.Contains("own pull request", StringComparison.OrdinalIgnoreCase);
+                    var reviewEvent = isOwnPrError
+                        ? PullRequestReviewEvent.Comment
+                        : eventType.ToUpperInvariant() switch
+                        {
+                            "APPROVE" => PullRequestReviewEvent.Approve,
+                            "REQUEST_CHANGES" => PullRequestReviewEvent.RequestChanges,
+                            _ => PullRequestReviewEvent.Comment
+                        };
+
+                    // Append inline comments as formatted text so feedback isn't lost
+                    var fullBody = body;
+                    if (isOwnPrError && mappedComments.Count > 0)
                     {
-                        "APPROVE" => PullRequestReviewEvent.Approve,
-                        "REQUEST_CHANGES" => PullRequestReviewEvent.RequestChanges,
-                        _ => PullRequestReviewEvent.Comment
-                    };
-                    var fallbackReview = new PullRequestReviewCreate { Body = body, Event = reviewEvent };
+                        var sb = new System.Text.StringBuilder(body);
+                        sb.AppendLine("\n\n---\n**Inline comments (could not post as review on own PR):**\n");
+                        foreach (var c in comments)
+                        {
+                            sb.AppendLine($"- **`{c.FilePath}:{c.Line}`** — {c.Body}");
+                        }
+                        fullBody = sb.ToString();
+                        _logger.LogInformation("Downgraded {Event} to COMMENT on own PR #{Number}, appended {Count} inline comments to body",
+                            eventType, prNumber, comments.Count);
+                    }
+
+                    var fallbackReview = new PullRequestReviewCreate { Body = fullBody, Event = reviewEvent };
                     await _client.PullRequest.Review.Create(_owner, _repo, prNumber, fallbackReview);
                     TrackRateLimit();
                 }
