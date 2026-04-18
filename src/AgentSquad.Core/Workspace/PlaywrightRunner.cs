@@ -1,8 +1,26 @@
 using System.Diagnostics;
+using System.Net;
 using System.Net.Http;
+using System.Net.Sockets;
 using Microsoft.Extensions.Logging;
 
 namespace AgentSquad.Core.Workspace;
+
+/// <summary>
+/// Result of launching and verifying an app under test.
+/// Carries the process handle, the verified URL where the app is listening,
+/// and diagnostic information for troubleshooting port-related failures.
+/// </summary>
+public sealed record AppLaunchResult
+{
+    public required Process Process { get; init; }
+    public required string VerifiedUrl { get; init; }
+    public required int Port { get; init; }
+    public string? DetectedUrl { get; init; }
+    public bool UsedFallback { get; init; }
+    public List<string> PatchedFiles { get; init; } = [];
+    public List<string> DiagnosticNotes { get; init; } = [];
+}
 
 /// <summary>
 /// Manages Playwright browser installation and UI test execution in agent workspaces.
@@ -389,36 +407,22 @@ public class PlaywrightRunner
         CancellationToken ct = default)
     {
         var browsersPath = config.GetPlaywrightBrowsersPath();
-
-        // Derive unique port per workspace to prevent conflicts when agents run simultaneously
-        var uniquePort = DeriveUniquePort(workspacePath);
-        var (baseUrl, rewrittenCommand) = RewritePort(config.AppBaseUrl, config.AppStartCommand, uniquePort);
-        _logger.LogInformation("UI tests using unique port {Port} (workspace: {Path})", uniquePort, workspacePath);
-
-        // Temporarily override config command with port-rewritten version
         var originalCommand = config.AppStartCommand;
-        if (rewrittenCommand is not null) config.AppStartCommand = rewrittenCommand;
 
         // Environment variables for headless Playwright
         var envVars = new Dictionary<string, string>
         {
             ["PLAYWRIGHT_BROWSERS_PATH"] = browsersPath,
             ["HEADED"] = config.PlaywrightHeadless ? "0" : "1",
-            ["BASE_URL"] = baseUrl,
             ["BROWSER"] = "chromium",
-            ["ASPNETCORE_URLS"] = baseUrl,
             // Force Development environment so Kestrel logs "Now listening on:" to stdout.
-            // AI-generated apps often hardcode UseUrls()/app.Urls.Add() which overrides
-            // ASPNETCORE_URLS — URL detection from stdout is our fallback to discover the
-            // actual listening port.
             ["ASPNETCORE_ENVIRONMENT"] = "Development",
             ["DOTNET_ENVIRONMENT"] = "Development",
-            // Ensure hosting lifetime logs (including "Now listening on:") are emitted even
-            // if the app configures a higher minimum log level.
+            // Ensure hosting lifetime logs are emitted even with high minimum log level.
             ["Logging__Console__LogLevel__Microsoft.Hosting.Lifetime"] = "Information"
         };
 
-        // Video recording: set env vars so test fixtures can configure BrowserNewContextOptions
+        // Video recording
         var testResultsPath = Path.Combine(workspacePath, config.TestResultsDir);
         Directory.CreateDirectory(testResultsPath);
 
@@ -427,137 +431,39 @@ public class PlaywrightRunner
             envVars["PWVIDEO_DIR"] = Path.Combine(testResultsPath, "videos");
             Directory.CreateDirectory(envVars["PWVIDEO_DIR"]);
         }
-
         if (config.RecordTestTraces)
         {
             envVars["PWTRACE_DIR"] = Path.Combine(testResultsPath, "traces");
             Directory.CreateDirectory(envVars["PWTRACE_DIR"]);
         }
-
-        // Standard Playwright test output directory
         envVars["PLAYWRIGHT_TEST_RESULTS_DIR"] = testResultsPath;
 
-        Process? appProcess = null;
+        AppLaunchResult? launchResult = null;
         try
         {
             // Ensure data files exist so the app doesn't show an error page
             EnsureSampleDataExists(workspacePath);
 
-            // Start app under test if configured
+            // Start and verify the app using the unified pipeline
             if (!string.IsNullOrWhiteSpace(config.AppStartCommand))
             {
-                var (proc, detectedUrl) = await StartAppUnderTestAsync(workspacePath, config, envVars, ct);
-                appProcess = proc;
+                launchResult = await LaunchVerifiedAppAsync(workspacePath, config, envVars, ct);
 
-                // Use detected URL if the app overrode our configured port
-                var effectiveUrl = detectedUrl ?? baseUrl;
-                if (detectedUrl is not null && detectedUrl != baseUrl)
+                if (launchResult is null)
                 {
-                    _logger.LogInformation("App listening on {DetectedUrl} instead of configured {BaseUrl}, using detected URL",
-                        detectedUrl, baseUrl);
-                    baseUrl = detectedUrl;
-                    envVars["BASE_URL"] = baseUrl;
-                }
-
-                // Wait for app readiness
-                var ready = await WaitForAppReadyAsync(
-                    baseUrl, config.AppStartupTimeoutSeconds, ct, appProcess);
-
-                if (!ready)
-                {
-                    // Fallback: AI-generated apps may hardcode UseUrls()/app.Urls.Add()
-                    // which overrides ASPNETCORE_URLS. If URL detection also failed (e.g.,
-                    // Production log level suppressed the "Now listening on:" message), try
-                    // the original configured port as a last resort.
-                    var configuredUrl = config.AppBaseUrl;
-                    if (!string.Equals(baseUrl, configuredUrl, StringComparison.OrdinalIgnoreCase))
+                    return new TestResult
                     {
-                        _logger.LogInformation(
-                            "Derived port {DerivedUrl} not responding, trying configured base URL {ConfiguredUrl}",
-                            baseUrl, configuredUrl);
-                        ready = await WaitForAppReadyAsync(configuredUrl, 5, ct);
-                        if (ready)
-                        {
-                            _logger.LogInformation(
-                                "App responded on configured URL {ConfiguredUrl} — hardcoded port likely overrides ASPNETCORE_URLS",
-                                configuredUrl);
-                            baseUrl = configuredUrl;
-                            envVars["BASE_URL"] = baseUrl;
-                        }
-                    }
-                }
-
-                if (!ready)
-                {
-                    // Capture diagnostic info about why the app didn't start
-                    var exitInfo = "";
-                    if (appProcess is not null)
-                    {
-                        if (appProcess.HasExited)
-                            exitInfo = $" Process exited with code {appProcess.ExitCode}.";
-                        else
-                            exitInfo = " Process is still running but not responding on expected port.";
-                    }
-
-                    _logger.LogWarning("App under test did not become ready at {Url} within {Timeout}s.{ExitInfo} — attempting build first",
-                        baseUrl, config.AppStartupTimeoutSeconds, exitInfo);
-
-                    // Kill the failed process and try building before re-starting
-                    try { if (appProcess is not null && !appProcess.HasExited) appProcess.Kill(entireProcessTree: true); } catch { }
-                    appProcess?.Dispose();
-                    appProcess = null;
-
-                    // Build first, then retry app start
-                    var buildCommand = config.BuildCommand ?? "dotnet build --verbosity quiet";
-                    var (buildExe, buildArgs) = BuildRunner.ParseCommand(buildCommand);
-                    var buildPsi = new ProcessStartInfo(buildExe, buildArgs)
-                    {
-                        WorkingDirectory = workspacePath,
-                        RedirectStandardOutput = true,
-                        RedirectStandardError = true,
-                        UseShellExecute = false,
-                        CreateNoWindow = true
+                        Success = false,
+                        Output = $"App under test failed to start — see PORT DIAGNOSTIC logs for details",
+                        Passed = 0, Failed = 0, Skipped = 0,
+                        Duration = TimeSpan.Zero,
+                        Tier = TestTier.UI,
+                        FailureDetails = [$"App failed to start and respond on any port within timeout"]
                     };
-                    var buildProc = Process.Start(buildPsi);
-                    if (buildProc is not null)
-                    {
-                        await buildProc.WaitForExitAsync(ct);
-                        if (buildProc.ExitCode == 0)
-                        {
-                            _logger.LogInformation("Build succeeded, retrying app start for UI tests");
-                            var (proc2, detectedUrl2) = await StartAppUnderTestAsync(workspacePath, config, envVars, ct);
-                            appProcess = proc2;
-                            var retryUrl = detectedUrl2 ?? baseUrl;
-                            if (detectedUrl2 is not null) { baseUrl = detectedUrl2; envVars["BASE_URL"] = baseUrl; }
-                            ready = await WaitForAppReadyAsync(retryUrl, config.AppStartupTimeoutSeconds, ct, appProcess);
-                        }
-                        else
-                        {
-                            var buildStderr = await buildProc.StandardError.ReadToEndAsync(ct);
-                            _logger.LogWarning("Build failed with code {Code} before UI test retry: {Stderr}",
-                                buildProc.ExitCode, buildStderr.Length > 1000 ? buildStderr[..1000] : buildStderr);
-                        }
-                    }
-
-                    if (!ready)
-                    {
-                        var finalExitInfo = "";
-                        if (appProcess is not null && appProcess.HasExited)
-                            finalExitInfo = $" Process exited with code {appProcess.ExitCode}.";
-
-                        return new TestResult
-                        {
-                            Success = false,
-                            Output = $"App under test failed to start at {baseUrl}.{finalExitInfo}",
-                            Passed = 0, Failed = 0, Skipped = 0,
-                            Duration = TimeSpan.Zero,
-                            Tier = TestTier.UI,
-                            FailureDetails = [$"App did not respond at {baseUrl} within {config.AppStartupTimeoutSeconds}s.{finalExitInfo}"]
-                        };
-                    }
                 }
 
-                _logger.LogInformation("App under test is ready at {Url}", baseUrl);
+                envVars["BASE_URL"] = launchResult.VerifiedUrl;
+                _logger.LogInformation("App under test is ready at {Url}", launchResult.VerifiedUrl);
             }
 
             // Install browsers matching the test project's Playwright NuGet version.
@@ -607,14 +513,14 @@ public class PlaywrightRunner
         finally
         {
             // Always kill the app process
-            if (appProcess is not null)
+            if (launchResult is not null)
             {
                 try
                 {
-                    if (!appProcess.HasExited)
+                    if (!launchResult.Process.HasExited)
                     {
-                        appProcess.Kill(entireProcessTree: true);
-                        _logger.LogDebug("Killed app under test (PID {Pid})", appProcess.Id);
+                        launchResult.Process.Kill(entireProcessTree: true);
+                        _logger.LogDebug("Killed app under test (PID {Pid})", launchResult.Process.Id);
                     }
                 }
                 catch (Exception ex)
@@ -623,7 +529,7 @@ public class PlaywrightRunner
                 }
                 finally
                 {
-                    appProcess.Dispose();
+                    launchResult.Process.Dispose();
                 }
             }
 
@@ -813,7 +719,8 @@ public class PlaywrightRunner
                 // Check if it has hardcoded port bindings
                 if (!content.Contains("app.Urls.Add") && !content.Contains("Urls.Add(") &&
                     !content.Contains(".UseUrls(") && !content.Contains("ConfigureKestrel") &&
-                    !content.Contains("ListenLocalhost") && !content.Contains("Listen(IPAddress"))
+                    !content.Contains("ListenLocalhost") && !content.Contains("Listen(IPAddress") &&
+                    !content.Contains("ListenAnyIP") && !content.Contains("app.Run(\"http"))
                     continue;
 
                 var relPath = Path.GetRelativePath(workspacePath, programFile);
@@ -877,6 +784,32 @@ public class PlaywrightRunner
                     "$1// [PlaywrightRunner] removed Listen(IPAddress.Loopback) — ASPNETCORE_URLS controls port",
                     System.Text.RegularExpressions.RegexOptions.Multiline);
 
+                // Handle Listen(IPAddress.Any, port) and ListenAnyIP(port) patterns
+                patched = System.Text.RegularExpressions.Regex.Replace(
+                    patched,
+                    @"^(\s*)\w+\.Listen\(IPAddress\.Any,\s*\d+\);",
+                    "$1// [PlaywrightRunner] removed Listen(IPAddress.Any) — ASPNETCORE_URLS controls port",
+                    System.Text.RegularExpressions.RegexOptions.Multiline);
+                patched = System.Text.RegularExpressions.Regex.Replace(
+                    patched,
+                    @"^(\s*)\w+\.ListenAnyIP\(\d+\);",
+                    "$1// [PlaywrightRunner] removed ListenAnyIP — ASPNETCORE_URLS controls port",
+                    System.Text.RegularExpressions.RegexOptions.Multiline);
+
+                // Handle app.Run("http://...") — overrides everything when URL is passed directly
+                patched = System.Text.RegularExpressions.Regex.Replace(
+                    patched,
+                    @"^(\s*)app\.Run\(""(https?://[^""]+)""\);",
+                    "$1// [PlaywrightRunner] app.Run(\"$2\"); — removed so ASPNETCORE_URLS controls port\n$1app.Run();",
+                    System.Text.RegularExpressions.RegexOptions.Multiline);
+
+                // Handle WebApplication.Urls property assignment patterns
+                patched = System.Text.RegularExpressions.Regex.Replace(
+                    patched,
+                    @"^(\s*)(?:app|builder)\.Configuration\[""(?:urls|server\.urls)""\]\s*=\s*""[^""]*"";",
+                    "$1// [PlaywrightRunner] removed config URL override — ASPNETCORE_URLS controls port",
+                    System.Text.RegularExpressions.RegexOptions.Multiline | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
                 if (patched != content)
                 {
                     File.WriteAllText(programFile, patched);
@@ -934,6 +867,351 @@ public class PlaywrightRunner
         {
             _logger.LogDebug(ex, "Failed to restore patched files in {Path}", workspacePath);
         }
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    //  PORT VALIDATION & SELF-HEALING INFRASTRUCTURE
+    // ──────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Advisory check: is the port free? Returns true if available, false if occupied.
+    /// This is TOCTOU (port could be taken between check and use), so treat as advisory only.
+    /// The real source of truth is post-start verification.
+    /// </summary>
+    internal static bool IsPortAvailable(int port)
+    {
+        try
+        {
+            using var listener = new TcpListener(IPAddress.Loopback, port);
+            listener.Start();
+            listener.Stop();
+            return true;
+        }
+        catch (SocketException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Neutralize launchSettings.json files in the workspace to prevent them from
+    /// overriding ASPNETCORE_URLS. Belt-and-suspenders with --no-launch-profile.
+    /// Backs up files as *.playwright-bak for restoration.
+    /// </summary>
+    private List<string> NeutralizeLaunchSettings(string workspacePath)
+    {
+        var neutralized = new List<string>();
+        try
+        {
+            var launchSettingsFiles = Directory.EnumerateFiles(
+                workspacePath, "launchSettings.json", SearchOption.AllDirectories)
+                .Where(f => !Path.GetRelativePath(workspacePath, f)
+                    .Contains("test", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            foreach (var file in launchSettingsFiles)
+            {
+                var backupPath = file + ".playwright-bak";
+                if (!File.Exists(backupPath))
+                {
+                    File.Copy(file, backupPath);
+                    File.Delete(file);
+                    var relPath = Path.GetRelativePath(workspacePath, file);
+                    _logger.LogInformation(
+                        "Neutralized {File} (backed up) to prevent port override", relPath);
+                    neutralized.Add(relPath);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Error neutralizing launchSettings in {Path}", workspacePath);
+        }
+        return neutralized;
+    }
+
+    /// <summary>
+    /// Detect and neutralize Kestrel endpoint configuration in appsettings*.json files.
+    /// Only removes narrowly-scoped localhost endpoint bindings, not all config.
+    /// </summary>
+    private List<string> PatchAppSettingsKestrelEndpoints(string workspacePath, int targetPort)
+    {
+        var patched = new List<string>();
+        try
+        {
+            var appSettingsFiles = Directory.EnumerateFiles(workspacePath, "appsettings*.json", SearchOption.AllDirectories)
+                .Where(f => !Path.GetRelativePath(workspacePath, f)
+                    .Contains("test", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            foreach (var file in appSettingsFiles)
+            {
+                var content = File.ReadAllText(file);
+
+                // Check for Kestrel endpoint configuration with hardcoded URLs
+                if (!content.Contains("Kestrel", StringComparison.OrdinalIgnoreCase) ||
+                    !content.Contains("Endpoints", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                var relPath = Path.GetRelativePath(workspacePath, file);
+
+                // Look for "Url": "http://localhost:XXXX" patterns inside Kestrel config
+                var urlPattern = new System.Text.RegularExpressions.Regex(
+                    @"""Url""\s*:\s*""(https?://(?:localhost|\*|0\.0\.0\.0|127\.0\.0\.1):\d+)""");
+                if (!urlPattern.IsMatch(content))
+                {
+                    _logger.LogInformation(
+                        "Detected Kestrel endpoints config in {File} but no hardcoded URLs — leaving as-is", relPath);
+                    continue;
+                }
+
+                // Backup
+                var backupPath = file + ".playwright-bak";
+                if (!File.Exists(backupPath))
+                    File.Copy(file, backupPath);
+
+                // Replace hardcoded localhost URLs with our target port
+                var replaced = urlPattern.Replace(content, $@"""Url"": ""http://localhost:{targetPort}""");
+
+                if (replaced != content)
+                {
+                    File.WriteAllText(file, replaced);
+                    _logger.LogInformation(
+                        "Patched Kestrel endpoint URL in {File} to use port {Port}", relPath, targetPort);
+                    patched.Add(relPath);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Error patching appsettings Kestrel endpoints in {Path}", workspacePath);
+        }
+        return patched;
+    }
+
+    /// <summary>
+    /// Log comprehensive port diagnostics when the app fails to respond on the expected port.
+    /// </summary>
+    private void LogPortDiagnostics(string expectedUrl, int expectedPort, Process? appProcess,
+        string workspacePath, Dictionary<string, string> envVars)
+    {
+        _logger.LogError("PORT DIAGNOSTIC: App failed to respond at {Url}", expectedUrl);
+        _logger.LogError("PORT DIAGNOSTIC: Expected port={Port}, ASPNETCORE_URLS={AspUrl}",
+            expectedPort, envVars.GetValueOrDefault("ASPNETCORE_URLS", "(not set)"));
+
+        // Check what Program.cs contains
+        try
+        {
+            var programFiles = Directory.EnumerateFiles(workspacePath, "Program.cs", SearchOption.AllDirectories)
+                .Where(f => !Path.GetRelativePath(workspacePath, f).Contains("test", StringComparison.OrdinalIgnoreCase));
+            foreach (var pf in programFiles)
+            {
+                var content = File.ReadAllText(pf);
+                var relPath = Path.GetRelativePath(workspacePath, pf);
+                var portPatterns = new[] { "UseUrls", "Urls.Add", "Urls.Clear", "ListenLocalhost",
+                    "Listen(IPAddress", "ListenAnyIP", "ConfigureKestrel", ".Run(\"http" };
+                var found = portPatterns.Where(p => content.Contains(p, StringComparison.OrdinalIgnoreCase)).ToList();
+                if (found.Count > 0)
+                    _logger.LogError("PORT DIAGNOSTIC: {File} still contains port patterns: {Patterns}",
+                        relPath, string.Join(", ", found));
+                else
+                    _logger.LogInformation("PORT DIAGNOSTIC: {File} is clean of port override patterns", relPath);
+            }
+        }
+        catch { /* best effort */ }
+
+        // Check if launchSettings.json exists
+        try
+        {
+            var launchFiles = Directory.EnumerateFiles(workspacePath, "launchSettings.json", SearchOption.AllDirectories);
+            foreach (var lf in launchFiles)
+            {
+                var relPath = Path.GetRelativePath(workspacePath, lf);
+                _logger.LogError("PORT DIAGNOSTIC: launchSettings.json still exists at {File}", relPath);
+            }
+        }
+        catch { /* best effort */ }
+
+        // Check process state
+        if (appProcess is not null)
+        {
+            if (appProcess.HasExited)
+                _logger.LogError("PORT DIAGNOSTIC: Process exited with code {Code}", appProcess.ExitCode);
+            else
+                _logger.LogError("PORT DIAGNOSTIC: Process PID {Pid} still running but not responding", appProcess.Id);
+        }
+    }
+
+    /// <summary>
+    /// Unified app launch pipeline used by BOTH RunUITestsAsync and CaptureAppScreenshotAsync.
+    /// Handles: port derivation → pre-flight validation → patching → start → post-launch verification →
+    /// fallback to detected/configured URL → build-and-retry → comprehensive diagnostics on failure.
+    /// Returns null if the app could not be started and verified.
+    /// </summary>
+    internal async Task<AppLaunchResult?> LaunchVerifiedAppAsync(
+        string workspacePath,
+        WorkspaceConfig config,
+        Dictionary<string, string> envVars,
+        CancellationToken ct)
+    {
+        var diagnosticNotes = new List<string>();
+        var patchedFiles = new List<string>();
+
+        // ── Step 1: Derive unique port ──
+        var uniquePort = DeriveUniquePort(workspacePath);
+        var (baseUrl, rewrittenCommand) = RewritePort(config.AppBaseUrl, config.AppStartCommand, uniquePort);
+        _logger.LogInformation("LaunchVerified: using port {Port} for workspace {Path}", uniquePort, workspacePath);
+
+        // ── Step 2: Advisory port check ──
+        if (!IsPortAvailable(uniquePort))
+        {
+            _logger.LogWarning("Port {Port} appears occupied — will proceed but may need fallback", uniquePort);
+            diagnosticNotes.Add($"Port {uniquePort} was occupied at pre-check");
+        }
+
+        // Override env vars with correct port
+        envVars["ASPNETCORE_URLS"] = baseUrl;
+        envVars["BASE_URL"] = baseUrl;
+
+        // Override config command with port-rewritten version
+        var originalCommand = config.AppStartCommand;
+        if (rewrittenCommand is not null) config.AppStartCommand = rewrittenCommand;
+
+        // ── Step 3: Pre-flight patching (all override vectors) ──
+        PatchHardcodedPortBindings(workspacePath, envVars);
+        var neutralizedLaunchSettings = NeutralizeLaunchSettings(workspacePath);
+        patchedFiles.AddRange(neutralizedLaunchSettings.Select(f => $"launchSettings: {f}"));
+        var patchedAppSettings = PatchAppSettingsKestrelEndpoints(workspacePath, uniquePort);
+        patchedFiles.AddRange(patchedAppSettings.Select(f => $"appsettings: {f}"));
+
+        // ── Step 4: Start app and detect URL ──
+        var (proc, detectedUrl) = await StartAppUnderTestAsync(workspacePath, config, envVars, ct);
+
+        var effectiveUrl = baseUrl;
+        if (detectedUrl is not null && detectedUrl != baseUrl)
+        {
+            _logger.LogInformation("App listening on {DetectedUrl} instead of configured {BaseUrl}", detectedUrl, baseUrl);
+            effectiveUrl = detectedUrl;
+            envVars["BASE_URL"] = effectiveUrl;
+            diagnosticNotes.Add($"URL detection override: {detectedUrl}");
+        }
+
+        // ── Step 5: Post-start verification ──
+        var ready = await WaitForAppReadyAsync(effectiveUrl, config.AppStartupTimeoutSeconds, ct, proc);
+
+        // Fallback 1: try configured base URL (app may have hardcoded a port we didn't catch)
+        if (!ready)
+        {
+            var configuredUrl = config.AppBaseUrl;
+            if (!string.Equals(effectiveUrl, configuredUrl, StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.LogInformation("Port {Port} not responding, trying configured URL {ConfiguredUrl}",
+                    uniquePort, configuredUrl);
+                ready = await WaitForAppReadyAsync(configuredUrl, 5, ct, proc);
+                if (ready)
+                {
+                    effectiveUrl = configuredUrl;
+                    envVars["BASE_URL"] = effectiveUrl;
+                    diagnosticNotes.Add($"Fallback to configured URL: {configuredUrl}");
+                }
+            }
+        }
+
+        // ── Step 6: Self-healing — kill, build, re-patch, restart ──
+        if (!ready)
+        {
+            _logger.LogWarning("App not ready — attempting build+restart recovery");
+            diagnosticNotes.Add("Triggered build+restart recovery");
+
+            try { if (!proc.HasExited) proc.Kill(entireProcessTree: true); } catch { }
+            proc.Dispose();
+
+            // Build first
+            var buildCommand = config.BuildCommand ?? "dotnet build --verbosity quiet";
+            var (buildExe, buildArgs) = BuildRunner.ParseCommand(buildCommand);
+            var buildPsi = new ProcessStartInfo(buildExe, buildArgs)
+            {
+                WorkingDirectory = workspacePath,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            var buildProc = Process.Start(buildPsi);
+            if (buildProc is not null)
+            {
+                await buildProc.WaitForExitAsync(ct);
+                if (buildProc.ExitCode == 0)
+                {
+                    _logger.LogInformation("Recovery build succeeded, retrying app start");
+                    var (proc2, detectedUrl2) = await StartAppUnderTestAsync(workspacePath, config, envVars, ct);
+                    proc = proc2;
+                    if (detectedUrl2 is not null)
+                    {
+                        effectiveUrl = detectedUrl2;
+                        envVars["BASE_URL"] = effectiveUrl;
+                    }
+                    ready = await WaitForAppReadyAsync(effectiveUrl, config.AppStartupTimeoutSeconds, ct, proc);
+
+                    // One more fallback after rebuild
+                    if (!ready)
+                    {
+                        var configuredUrl = config.AppBaseUrl;
+                        if (!string.Equals(effectiveUrl, configuredUrl, StringComparison.OrdinalIgnoreCase))
+                        {
+                            ready = await WaitForAppReadyAsync(configuredUrl, 5, ct, proc);
+                            if (ready)
+                            {
+                                effectiveUrl = configuredUrl;
+                                envVars["BASE_URL"] = effectiveUrl;
+                                diagnosticNotes.Add("Fallback to configured URL after rebuild");
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    var buildStderr = await buildProc.StandardError.ReadToEndAsync(ct);
+                    _logger.LogWarning("Recovery build failed with code {Code}: {Stderr}",
+                        buildProc.ExitCode, buildStderr.Length > 1000 ? buildStderr[..1000] : buildStderr);
+                    diagnosticNotes.Add($"Build failed with exit code {buildProc.ExitCode}");
+
+                    // Still need a valid process reference for cleanup
+                    var (proc3, _) = await StartAppUnderTestAsync(workspacePath, config, envVars, ct);
+                    proc = proc3;
+                }
+            }
+        }
+
+        // ── Step 7: Final verdict ──
+        if (!ready)
+        {
+            LogPortDiagnostics(effectiveUrl, uniquePort, proc, workspacePath, envVars);
+
+            // Clean up the failed process
+            try { if (!proc.HasExited) proc.Kill(entireProcessTree: true); } catch { }
+            proc.Dispose();
+
+            // Restore config
+            config.AppStartCommand = originalCommand;
+            return null;
+        }
+
+        // Extract port from the effective URL for the result
+        var effectivePort = uniquePort;
+        try { effectivePort = new Uri(effectiveUrl).Port; } catch { }
+
+        _logger.LogInformation("App verified and ready at {Url} (port {Port})", effectiveUrl, effectivePort);
+        return new AppLaunchResult
+        {
+            Process = proc,
+            VerifiedUrl = effectiveUrl,
+            Port = effectivePort,
+            DetectedUrl = detectedUrl,
+            UsedFallback = effectiveUrl != baseUrl,
+            PatchedFiles = patchedFiles,
+            DiagnosticNotes = diagnosticNotes
+        };
     }
 
     /// <summary>
@@ -1123,8 +1401,10 @@ public class PlaywrightRunner
             try
             {
                 var response = await _httpClient.GetAsync(baseUrl, ct);
-                if (response.IsSuccessStatusCode)
-                    return true;
+                // Accept ANY HTTP response — the app is running. Don't require 200.
+                // Real apps often return 302 (redirect to login), 401, or 404 at /
+                // and are still fully healthy. The goal is "app is listening and responding."
+                return true;
             }
             catch
             {
@@ -1396,7 +1676,7 @@ public class PlaywrightRunner
         WorkspaceConfig config,
         CancellationToken ct = default)
     {
-        Process? appProcess = null;
+        AppLaunchResult? launchResult = null;
         string? originalCommand = config.AppStartCommand;
         try
         {
@@ -1411,128 +1691,38 @@ public class PlaywrightRunner
             // Ensure data files exist so the app doesn't show an error page
             EnsureSampleDataExists(workspacePath);
 
-            // Patch hardcoded port bindings (ConfigureKestrel, UseUrls, etc.)
-            // so ASPNETCORE_URLS env var controls the port — same as UI test path
-            var envVarsForPatch = new Dictionary<string, string>();
-            PatchHardcodedPortBindings(workspacePath, envVarsForPatch);
-
-            // Derive unique port per workspace to prevent conflicts when agents run simultaneously
-            var uniquePort = DeriveUniquePort(workspacePath);
-            var (portUrl, _) = RewritePort(config.AppBaseUrl, null, uniquePort);
-            _logger.LogInformation("Screenshot using unique port {Port} (workspace: {Path})", uniquePort, workspacePath);
-
-            // Derive or use configured app start command
-            var appStartCommand = config.AppStartCommand;
-            if (string.IsNullOrWhiteSpace(appStartCommand))
+            // If no app start command configured, auto-detect the project
+            if (string.IsNullOrWhiteSpace(config.AppStartCommand))
             {
-                // Auto-detect — prefer web projects (Sdk.Web) over class libraries
                 var nonTestProjects = Directory.EnumerateFiles(workspacePath, "*.csproj", SearchOption.AllDirectories)
                     .Where(f => !Path.GetRelativePath(workspacePath, f).Contains("test", StringComparison.OrdinalIgnoreCase));
                 var csproj = RankCsprojCandidates(nonTestProjects).FirstOrDefault();
-                if (csproj is not null)
-                {
-                    _logger.LogInformation("Auto-detected app project: {Project}", Path.GetRelativePath(workspacePath, csproj));
-                    appStartCommand = $"dotnet run --no-launch-profile --project \"{csproj}\" --urls {portUrl}";
-                }
-                else
-                    return null; // Can't start app without a command
-            }
-            else
-            {
-                // Use ResolveAppStartCommand then rewrite port
-                appStartCommand = ResolveAppStartCommand(workspacePath, config);
-                var configuredUri = new Uri(config.AppBaseUrl);
-                if (configuredUri.Port > 0)
-                    appStartCommand = appStartCommand.Replace($":{configuredUri.Port}", $":{uniquePort}");
+                if (csproj is null) return null;
+
+                var uniquePort = DeriveUniquePort(workspacePath);
+                var (portUrl, _) = RewritePort(config.AppBaseUrl, null, uniquePort);
+                _logger.LogInformation("Auto-detected app project: {Project}", Path.GetRelativePath(workspacePath, csproj));
+                config.AppStartCommand = $"dotnet run --no-launch-profile --project \"{csproj}\" --urls {portUrl}";
             }
 
             var envVars = new Dictionary<string, string>
             {
                 ["PLAYWRIGHT_BROWSERS_PATH"] = browsersPath,
-                ["ASPNETCORE_URLS"] = portUrl,
-                ["DOTNET_ENVIRONMENT"] = "Development"
+                ["ASPNETCORE_ENVIRONMENT"] = "Development",
+                ["DOTNET_ENVIRONMENT"] = "Development",
+                ["Logging__Console__LogLevel__Microsoft.Hosting.Lifetime"] = "Information"
             };
 
-            var screenshotUrl = portUrl;
+            // Use the unified launch pipeline
+            launchResult = await LaunchVerifiedAppAsync(workspacePath, config, envVars, ct);
 
-            // Override config command with port-rewritten version (restored in finally)
-            config.AppStartCommand = appStartCommand;
-
-            var (proc, detectedUrl) = await StartAppUnderTestAsync(workspacePath, config, envVars, ct);
-            appProcess = proc;
-
-            // Use detected URL if the app overrode our configured port
-            if (detectedUrl is not null && detectedUrl != screenshotUrl)
+            if (launchResult is null)
             {
-                _logger.LogInformation("Screenshot: app listening on {DetectedUrl} instead of configured {BaseUrl}",
-                    detectedUrl, screenshotUrl);
-                screenshotUrl = detectedUrl;
+                _logger.LogDebug("App failed to start for screenshot — see PORT DIAGNOSTIC logs");
+                return null;
             }
 
-            var ready = await WaitForAppReadyAsync(screenshotUrl, config.AppStartupTimeoutSeconds, ct, appProcess);
-
-            // Fallback: if unique port didn't respond, try the configured base URL
-            if (!ready)
-            {
-                var configuredUrl = config.AppBaseUrl;
-                if (!string.Equals(screenshotUrl, configuredUrl, StringComparison.OrdinalIgnoreCase))
-                {
-                    _logger.LogInformation("Screenshot: unique port {UniquePort} not responding, trying configured URL {ConfiguredUrl}",
-                        screenshotUrl, configuredUrl);
-                    ready = await WaitForAppReadyAsync(configuredUrl, 5, ct, appProcess);
-                    if (ready) screenshotUrl = configuredUrl;
-                }
-            }
-
-            if (!ready)
-            {
-                _logger.LogWarning("App not ready for screenshot at {Url} — attempting build first", screenshotUrl);
-                // Kill the failed process and try building before starting
-                try { if (!appProcess.HasExited) appProcess.Kill(entireProcessTree: true); } catch { }
-                appProcess.Dispose();
-                appProcess = null;
-
-                // Build first using dotnet build, then retry start
-                var buildPsi = new ProcessStartInfo("dotnet", "build --verbosity quiet")
-                {
-                    WorkingDirectory = workspacePath,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                };
-                var buildProc = Process.Start(buildPsi);
-                if (buildProc is not null)
-                {
-                    await buildProc.WaitForExitAsync(ct);
-                    if (buildProc.ExitCode == 0)
-                    {
-                        _logger.LogInformation("Build succeeded, retrying app start");
-                        var (proc2, detectedUrl2) = await StartAppUnderTestAsync(workspacePath, config, envVars, ct);
-                        appProcess = proc2;
-                        if (detectedUrl2 is not null) screenshotUrl = detectedUrl2;
-                        ready = await WaitForAppReadyAsync(screenshotUrl, config.AppStartupTimeoutSeconds, ct, appProcess);
-                    }
-                }
-
-                if (!ready)
-                {
-                    // Fallback: try the original configured base URL (app may have ignored our unique port)
-                    var configuredUrl = config.AppBaseUrl;
-                    if (!string.Equals(screenshotUrl, configuredUrl, StringComparison.OrdinalIgnoreCase))
-                    {
-                        _logger.LogInformation("Screenshot: trying configured URL {ConfiguredUrl} as fallback", configuredUrl);
-                        ready = await WaitForAppReadyAsync(configuredUrl, 5, ct, appProcess);
-                        if (ready) screenshotUrl = configuredUrl;
-                    }
-                }
-
-                if (!ready)
-                {
-                    _logger.LogDebug("App still not ready after build+restart+fallback, giving up on screenshot");
-                    return null;
-                }
-            }
+            var screenshotUrl = launchResult.VerifiedUrl;
 
             // Use Playwright to take a full-page screenshot
             var playwright = await Microsoft.Playwright.Playwright.CreateAsync();
@@ -1589,15 +1779,15 @@ public class PlaywrightRunner
             // Restore any patched Program.cs files
             RestoreOriginalPortBindings(workspacePath);
 
-            if (appProcess is not null)
+            if (launchResult is not null)
             {
                 try
                 {
-                    if (!appProcess.HasExited)
-                        appProcess.Kill(entireProcessTree: true);
+                    if (!launchResult.Process.HasExited)
+                        launchResult.Process.Kill(entireProcessTree: true);
                 }
                 catch { }
-                finally { appProcess.Dispose(); }
+                finally { launchResult.Process.Dispose(); }
             }
         }
     }
