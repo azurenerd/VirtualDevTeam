@@ -3099,8 +3099,16 @@ public abstract class EngineerAgentBase : AgentBase
         WorkspaceConfig wsConfig,
         int stepNumber, int totalSteps, string stepDescription,
         AgentPullRequest pr,
-        CancellationToken ct)
+        CancellationToken ct,
+        int removalDepth = 0)
     {
+        const int MaxRemovalPasses = 3;
+        if (removalDepth >= MaxRemovalPasses)
+        {
+            Logger.LogWarning("{Role} {Name} test removal exhausted after {Max} passes — proceeding with {Failed} failing tests",
+                Identity.Role, Identity.DisplayName, MaxRemovalPasses, lastTestResult.Failed);
+            return false;
+        }
         var failureSummary = lastTestResult.FailureDetails.Count > 0
             ? string.Join("\n", lastTestResult.FailureDetails.Take(20))
             : lastTestResult.Output.Length > 3000 ? lastTestResult.Output[^3000..] : lastTestResult.Output;
@@ -3170,11 +3178,11 @@ public abstract class EngineerAgentBase : AgentBase
                 Workspace.RepoPath, wsConfig.TestCommand, wsConfig.TestTimeoutSeconds, ct);
             if (!finalTestResult.Success)
             {
-                Logger.LogWarning("{Role} {Name} some tests still failing after removal — attempting one more removal pass",
-                    Identity.Role, Identity.DisplayName);
+                Logger.LogWarning("{Role} {Name} some tests still failing after removal — attempting removal pass {Pass}/{Max}",
+                    Identity.Role, Identity.DisplayName, removalDepth + 2, MaxRemovalPasses);
 
-                // One more recursive pass to catch any remaining failures
-                return await RemoveFailingTestsAsync(finalTestResult, chat, wsConfig, stepNumber, totalSteps, stepDescription, pr, ct);
+                // Recursive pass with depth guard
+                return await RemoveFailingTestsAsync(finalTestResult, chat, wsConfig, stepNumber, totalSteps, stepDescription, pr, ct, removalDepth + 1);
             }
 
             // Document what was removed on the PR
