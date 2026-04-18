@@ -189,6 +189,26 @@ public class SoftwareEngineerAgent : EngineerAgentBase
         return Task.FromResult($"## Engineering Tasks\n{taskSummary}\n\n");
     }
 
+    /// <summary>
+    /// Append visual design context to an implementation prompt if the task involves UI work.
+    /// Gates on task/issue content to avoid injecting HTML into non-UI tasks (data models, tests, etc.).
+    /// </summary>
+    private async Task AppendDesignContextIfRelevantAsync(
+        StringBuilder ctx, string? taskName, string? taskDescription, string? issueBody, CancellationToken ct)
+    {
+        // Heuristic: only inject design context for UI-related tasks
+        var combined = $"{taskName} {taskDescription} {issueBody}".ToLowerInvariant();
+        var uiKeywords = new[] { "ui", "layout", "css", "component", "razor", "blazor", "page", "header",
+            "timeline", "heatmap", "dashboard", "display", "render", "visual", "style", "svg", "html",
+            "frontend", "shell", "scaffold", "foundation" };
+        if (!uiKeywords.Any(k => combined.Contains(k)))
+            return;
+
+        var designCtx = await GetDesignContextAsync(ct);
+        if (!string.IsNullOrWhiteSpace(designCtx))
+            ctx.AppendLine(designCtx + "\n");
+    }
+
     #region Lifecycle Overrides
 
     /// <summary>PE has a custom set of subscriptions for orchestration.</summary>
@@ -1084,6 +1104,9 @@ public class SoftwareEngineerAgent : EngineerAgentBase
         // REQ-PE-009: Validate all PM enhancements have engineering tasks
         await ValidateEnhancementCoverageAsync(enhancementIssues, ct);
 
+        // Validate engineering plan structure: wave dependencies, issue links, design references
+        await ValidateEngineeringPlanStructureAsync(ct);
+
         // === Gate: EngineeringPlan — human reviews plan before finalization ===
         // Skip gate on resume if tasks are already loaded (plan was already approved)
         if (_taskManager.TotalCount > 0 && _taskManager.Tasks.Any(t => t.AssignedTo is not null))
@@ -1276,6 +1299,148 @@ public class SoftwareEngineerAgent : EngineerAgentBase
         catch (Exception ex)
         {
             Logger.LogWarning(ex, "Enhancement coverage validation failed — continuing without validation");
+        }
+    }
+
+    /// <summary>
+    /// Validate the engineering plan structure: wave dependencies are correct,
+    /// all tasks have GitHub issues, blocking links match expected wave order,
+    /// and UI tasks reference the design file.
+    /// </summary>
+    private async Task ValidateEngineeringPlanStructureAsync(CancellationToken ct)
+    {
+        try
+        {
+            var tasks = _taskManager.Tasks.ToList();
+            if (tasks.Count == 0) return;
+
+            var issues = new List<string>();
+            var warnings = new List<string>();
+
+            // 1. Verify all tasks have GitHub issues created
+            var missingIssues = tasks.Where(t => !t.IssueNumber.HasValue).ToList();
+            if (missingIssues.Count > 0)
+            {
+                issues.Add($"❌ {missingIssues.Count} tasks have no GitHub issue: " +
+                    string.Join(", ", missingIssues.Select(t => t.Id)));
+            }
+
+            // 2. Verify wave structure: W2+ tasks should be blocked by at least one earlier wave task
+            var tasksByWave = new Dictionary<string, List<EngineeringTask>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var task in tasks)
+            {
+                var wave = task.Wave ?? "W1";
+                if (!tasksByWave.ContainsKey(wave))
+                    tasksByWave[wave] = new List<EngineeringTask>();
+                tasksByWave[wave].Add(task);
+            }
+
+            var sortedWaves = tasksByWave.Keys.OrderBy(w => w).ToList();
+            if (sortedWaves.Count > 1)
+            {
+                for (var i = 1; i < sortedWaves.Count; i++)
+                {
+                    var wave = sortedWaves[i];
+                    var prevWaves = sortedWaves.Take(i).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                    var prevTaskIds = tasks
+                        .Where(t => prevWaves.Contains(t.Wave ?? "W1"))
+                        .Select(t => t.Id)
+                        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+                    foreach (var task in tasksByWave[wave])
+                    {
+                        var hasDepOnPrevWave = task.Dependencies.Any(d => prevTaskIds.Contains(d));
+                        if (!hasDepOnPrevWave && task.DependencyIssueNumbers.Count == 0)
+                        {
+                            issues.Add($"❌ {task.Id} ({task.Name}) is in {wave} but has NO dependency on any {string.Join("/", prevWaves)} task — should be blocked");
+                        }
+                    }
+                }
+            }
+
+            // 3. Verify GitHub dependency links are resolved for tasks with declared dependencies
+            foreach (var task in tasks.Where(t => t.Dependencies.Count > 0 && t.IssueNumber.HasValue))
+            {
+                if (task.DependencyIssueNumbers.Count == 0)
+                {
+                    warnings.Add($"⚠️ {task.Id} declares dependencies [{string.Join(", ", task.Dependencies)}] but has no resolved issue numbers");
+                }
+            }
+
+            // 4. Check UI tasks reference design file
+            var uiKeywords = new[] { "ui", "layout", "css", "component", "razor", "header",
+                "timeline", "heatmap", "dashboard", "display", "svg", "shell", "scaffold", "foundation" };
+            foreach (var task in tasks)
+            {
+                var combined = $"{task.Name} {task.Description}".ToLowerInvariant();
+                if (uiKeywords.Any(k => combined.Contains(k)))
+                {
+                    var hasDesignRef = combined.Contains("design") || combined.Contains("originaldesignconcept");
+                    if (!hasDesignRef)
+                    {
+                        warnings.Add($"⚠️ {task.Id} ({task.Name}) appears to be a UI task but doesn't reference OriginalDesignConcept.html");
+                    }
+                }
+            }
+
+            // Log and report results
+            if (issues.Count == 0 && warnings.Count == 0)
+            {
+                Logger.LogInformation(
+                    "✅ Engineering plan validation passed: {TaskCount} tasks, {WaveCount} waves, all dependencies correct",
+                    tasks.Count, tasksByWave.Count);
+                LogActivity("planning", $"✅ Plan validation passed: {tasks.Count} tasks, {tasksByWave.Count} waves");
+            }
+            else
+            {
+                if (issues.Count > 0)
+                {
+                    Logger.LogWarning(
+                        "Engineering plan structure has {IssueCount} issues:\n{Issues}",
+                        issues.Count, string.Join("\n", issues));
+                    LogActivity("planning", $"⚠️ Plan validation: {issues.Count} issues, {warnings.Count} warnings");
+
+                    // Attempt repair: re-link dependencies for tasks missing links
+                    Logger.LogInformation("Attempting to repair engineering plan dependency links...");
+                    await _taskManager.LinkTaskDependenciesAsync(tasks, ct);
+                    Logger.LogInformation("Dependency link repair complete");
+                }
+
+                if (warnings.Count > 0)
+                {
+                    Logger.LogInformation(
+                        "Engineering plan warnings ({Count}):\n{Warnings}",
+                        warnings.Count, string.Join("\n", warnings));
+                }
+
+                // Post validation report on the first task issue for visibility
+                var report = new StringBuilder();
+                report.AppendLine("## 📋 Engineering Plan Validation Report\n");
+                if (issues.Count > 0)
+                {
+                    report.AppendLine("### Structural Issues (auto-repaired where possible)");
+                    foreach (var issue in issues)
+                        report.AppendLine($"- {issue}");
+                    report.AppendLine();
+                }
+                if (warnings.Count > 0)
+                {
+                    report.AppendLine("### Warnings");
+                    foreach (var warning in warnings)
+                        report.AppendLine($"- {warning}");
+                }
+
+                var firstTaskIssue = tasks.FirstOrDefault(t => t.IssueNumber.HasValue);
+                if (firstTaskIssue?.IssueNumber is not null)
+                {
+                    await GitHub.AddIssueCommentAsync(firstTaskIssue.IssueNumber.Value,
+                        report.ToString(), ct);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Engineering plan structure validation failed — continuing without validation");
         }
     }
 
@@ -1885,6 +2050,9 @@ public class SoftwareEngineerAgent : EngineerAgentBase
                         ctx.AppendLine($"## Task: {task.Name}\n{task.Description}\n");
                         ctx.AppendLine($"## PR Description\n{pr.Body}\n");
 
+                        // Include visual design reference for UI-related tasks
+                        await AppendDesignContextIfRelevantAsync(ctx, task.Name, task.Description, sourceIssue?.Body, ct);
+
                         if (completedSteps.Count > 0)
                         {
                             ctx.AppendLine("## Previously Completed Steps");
@@ -1963,6 +2131,11 @@ public class SoftwareEngineerAgent : EngineerAgentBase
                     ? $"\n\n## GitHub Issue #{sourceIssue.Number}: {sourceIssue.Title}\n{sourceIssue.Body}"
                     : "";
 
+                // Build design context for UI-related tasks
+                var designCtxBuilder = new StringBuilder();
+                await AppendDesignContextIfRelevantAsync(designCtxBuilder, task.Name, task.Description, sourceIssue?.Body, ct);
+                var designContext = designCtxBuilder.ToString();
+
                 var singlePassUser = PromptService is not null
                     ? await PromptService.RenderAsync("software-engineer/single-pass-implementation",
                         new Dictionary<string, string>
@@ -1970,6 +2143,7 @@ public class SoftwareEngineerAgent : EngineerAgentBase
                             ["pm_spec"] = pmSpecDoc,
                             ["architecture"] = architectureDoc,
                             ["issue_context"] = issueContext,
+                            ["design_context"] = designContext,
                             ["task_name"] = task.Name,
                             ["task_description"] = task.Description,
                             ["tech_stack"] = techStack
@@ -1979,6 +2153,7 @@ public class SoftwareEngineerAgent : EngineerAgentBase
                     $"## PM Specification\n{pmSpecDoc}\n\n" +
                     $"## Architecture\n{architectureDoc}" +
                     issueContext +
+                    (string.IsNullOrWhiteSpace(designContext) ? "" : $"\n\n{designContext}") +
                     $"\n\n## Task: {task.Name}\n{task.Description}\n\n" +
                     "Implement ONLY the files needed for this specific task. " +
                     "Output each file using this exact format:\n\n" +
@@ -2768,6 +2943,9 @@ public class SoftwareEngineerAgent : EngineerAgentBase
                 if (!string.IsNullOrEmpty(existingFiles))
                     ctx.AppendLine($"## Existing Files in PR (may have build errors — fix or replace as needed)\n{existingFiles}\n");
 
+                // Include visual design reference for UI-related tasks
+                await AppendDesignContextIfRelevantAsync(ctx, pr.Title, pr.Body, sourceIssue?.Body, ct);
+
                 ctx.AppendLine("Implement ONLY the files needed for this specific task. " +
                     "Output each file using this exact format:\n\n" +
                     "FILE: path/to/file.ext\n```language\n<file content>\n```\n\n" +
@@ -2858,6 +3036,9 @@ public class SoftwareEngineerAgent : EngineerAgentBase
                 if (sourceIssue is not null)
                     ctx.AppendLine($"## Issue #{sourceIssue.Number}: {sourceIssue.Title}\n{sourceIssue.Body}\n");
                 ctx.AppendLine($"## PR Description\n{pr.Body}\n");
+
+                // Include visual design reference for UI-related tasks
+                await AppendDesignContextIfRelevantAsync(ctx, pr.Title, pr.Body, sourceIssue?.Body, ct);
 
                 if (!string.IsNullOrEmpty(existingFiles) || completedSteps.Count > 0)
                 {
