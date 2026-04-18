@@ -27,7 +27,7 @@ public static class ModelPricing
         return model switch
         {
             // Anthropic Claude models
-            "claude-opus-4.6" or "claude-opus-4.5" => (15.00m, 75.00m),
+            "claude-opus-4.7" or "claude-opus-4.6" or "claude-opus-4.5" => (15.00m, 75.00m),
             "claude-sonnet-4.6" or "claude-sonnet-4.5" or "claude-sonnet-4" => (3.00m, 15.00m),
             "claude-haiku-4.5" => (0.80m, 4.00m),
 

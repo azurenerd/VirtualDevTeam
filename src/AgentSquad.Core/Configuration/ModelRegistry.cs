@@ -36,6 +36,7 @@ public class ModelRegistry
         "claude-sonnet-4.6",
         "claude-opus-4.5",
         "claude-opus-4.6",
+        "claude-opus-4.7",
     ];
 
     public ModelRegistry(

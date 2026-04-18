@@ -24,6 +24,8 @@ AgentSquad is a .NET 8 multi-agent AI system that manages a full software develo
 - **Full Development Lifecycle** — From a single project description, agents autonomously produce Research.md → PMSpec.md → Architecture.md → EngineeringPlan.md → implemented PRs → test PRs → reviewed and merged code
 - **Dynamic SME Agents** — The PM and SE can spawn Subject Matter Expert agents on-demand (security auditors, database specialists, etc.) with custom personas, MCP tool servers, and external knowledge sources — driven by AI assessment of project needs. Dashboard displays specialty, capabilities, and custom-derived initials for each SME
 - **Multi-Tier Test Automation** — The Test Engineer generates and runs unit tests, integration tests, and Playwright UI/E2E tests in local workspaces, with AI-powered failure classification (test bug vs source bug) and automatic retry/fix cycles
+- **Self-Healing Playwright Launch Pipeline** — Every UI test and screenshot capture flows through a unified `LaunchVerifiedAppAsync` pipeline that automatically resolves agent-generated port conflicts. It patches hardcoded bindings (`app.Run`, `Listen`, `ListenAnyIP`, `Configuration["urls"]`, `ConfigureKestrel` variants, `launchSettings.json` `applicationUrl`), accepts any HTTP response as readiness (302, 401, 404 all count as "listening"), and self-heals via kill → build → restart cascades. Ports are hash-derived per workspace in the 5100–5899 range, so UI tests no longer require any specific port
+- **Background Port Health Monitoring** — `PlaywrightHealthService` runs every 5 minutes as a `HostedService` — it samples ports, validates browser installs, and cleans up stale `.playwright-bak` backup files older than 1 hour. Live status is exposed via the `/health/playwright` endpoint (`OccupiedPortCount`, `LastPortCheckUtc`)
 - **Human Gate Checkpoints** — Configurable gates pause workflow at critical points for human approval. Three presets (Full Auto, Supervised, Full Control) with hot-reloadable config via `IOptionsMonitor`
 - **GitHub Copilot CLI as AI Backend** — All model tiers route through the `copilot` CLI binary by default — no API keys required. Process-per-request with concurrency limiting, MCP server passthrough, and automatic fallback to direct API providers
 - **Agent Memory & Learning** — SQLite-backed persistent memory records agent decisions, learnings, and operator instructions. Agents recall up to 30 recent entries across restarts for context continuity
@@ -47,6 +49,8 @@ AgentSquad is a .NET 8 multi-agent AI system that manages a full software develo
 - **GitHub-Native Coordination** — Dual-layer communication: in-process message bus (<1ms, real-time) + GitHub API (durable PRs/Issues, human-visible). All work products are real GitHub artifacts
 - **Multi-Model Support** — Anthropic Claude, OpenAI GPT, Azure OpenAI, and local Ollama with four configurable tiers (premium / standard / budget / local) assigned per agent role
 - **Operational Resilience** — 60s TTL API cache (~90% reduction in GitHub calls), deadlock detection via wait-for graph analysis, health monitoring with stuck-agent detection, graceful shutdown with state persistence
+- **Robust Review Workflow** — Duplicate `ready-for-review` comment guard across Architect and PM reviews, inline review comments preserved even when GitHub returns 422 on own-PR review submission, per-reviewer rework iteration counts surfaced in review threads, and AI screenshot descriptions rendered on dashboard cards for at-a-glance review
+- **Design Context Propagation** — SE implementation prompts receive the full research/spec/architecture context, and the engineering plan is validated against the design documents before tasks are assigned — so implementation stays grounded in PMSpec and Architecture decisions
 
 ## Architecture
 
@@ -78,7 +82,9 @@ AgentSquad is a .NET 8 multi-agent AI system that manages a full software develo
 │              GitHubService (60s TTL cache) · REST API                     │
 │              CopilotCliChatCompletionService · MCP Servers                │
 │              AgentStateStore (SQLite) · AgentMemoryStore                  │
-│              LocalWorkspace · BuildRunner · TestRunner · Playwright       │
+│              LocalWorkspace · BuildRunner · TestRunner                    │
+│              PlaywrightRunner.LaunchVerifiedAppAsync (self-healing)       │
+│              PlaywrightHealthService (background port/browser monitor)    │
 └──────────────────────────┬────────────────┬─────────────────────────────┘
                            │                │
             ┌──────────────┴───────┐  ┌─────┴──────────────────────────────┐
@@ -156,9 +162,9 @@ When `CopilotCli.Enabled` is `true` (default), all model tiers route through the
 {
   "AgentSquad": {
     "Models": {
-      "premium":  { "Provider": "Anthropic", "Model": "claude-opus-4-20250514", "ApiKey": "sk-ant-..." },
-      "standard": { "Provider": "Anthropic", "Model": "claude-sonnet-4-20250514", "ApiKey": "sk-ant-..." },
-      "budget":   { "Provider": "OpenAI",    "Model": "gpt-4o-mini",            "ApiKey": "sk-..." },
+      "premium":  { "Provider": "Anthropic", "Model": "claude-opus-4.7",   "ApiKey": "sk-ant-..." },
+      "standard": { "Provider": "Anthropic", "Model": "claude-sonnet-4.6", "ApiKey": "sk-ant-..." },
+      "budget":   { "Provider": "OpenAI",    "Model": "gpt-4o-mini",       "ApiKey": "sk-..." },
       "local":    { "Provider": "Ollama",    "Model": "qwen2.5-coder:14b",     "Endpoint": "http://localhost:11434" }
     }
   }
@@ -378,7 +384,10 @@ AgentSquad/
 │   ├── runner-status.ps1               # Check Runner health
 │   ├── start-dashboard.ps1             # Start standalone dashboard
 │   ├── fresh-reset.ps1                 # Full cleanup: close PRs/Issues, delete branches, reset DB
-│   └── reset-runner.ps1                # Reset Runner state
+│   ├── minimal-reset.ps1               # Mini reset — preserves startup docs (OriginalDesignConcept.html,
+│   │                                   #   Research.md, PMSpec.md, Architecture.md) for fast-forward to
+│   │                                   #   the engineering phase without re-running research/architecture
+│   └── reset-runner.ps1                # Process-only reset (restart Runner without touching state)
 │
 ├── prompts/                            # Externalized AI prompt templates (.md)
 │   ├── researcher/                     # 10 templates (research phases, synthesis)
@@ -431,15 +440,34 @@ cd src/AgentSquad.Runner
 dotnet run
 ```
 
-### Fresh Reset
+### Reset Scripts
 
-To clean all GitHub artifacts and start over:
+Three reset levels are available depending on how much state you want to preserve:
 
 ```powershell
+# Full reset — closes all PRs/Issues, deletes agent branches, removes repo files, resets SQLite DB
 ./scripts/fresh-reset.ps1
+
+# Minimal reset — same cleanup, but preserves the startup design docs so the team fast-forwards
+# past research/architecture. Keeps: OriginalDesignConcept.html, Research.md, PMSpec.md, Architecture.md
+./scripts/minimal-reset.ps1
+
+# Process-only reset — restarts the Runner without touching any state or GitHub artifacts
+./scripts/reset-runner.ps1
 ```
 
-This closes all PRs/Issues, deletes agent branches, removes repo files, and resets the SQLite database.
+### Health Endpoints
+
+The Runner exposes lightweight health endpoints for monitoring and debugging:
+
+| Endpoint | Description |
+|----------|-------------|
+| `/health` | Overall Runner health, agent counts, workflow phase |
+| `/health/playwright` | Playwright subsystem status — `OccupiedPortCount`, `LastPortCheckUtc`, browser validity, stale `.playwright-bak` cleanup stats (refreshed every 5 minutes by `PlaywrightHealthService`) |
+
+### Roadmap
+
+- **Interactive CLI A/B/C testing framework** — parallel multi-option agent testing to compare prompt/model/tool variants on identical tasks. See [docs/InteractiveCLIPlan.md](docs/InteractiveCLIPlan.md) for the full design.
 
 ## Technology Stack
 

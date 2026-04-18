@@ -310,8 +310,8 @@ public class CopilotCliConfig
         set => RequestTimeoutSeconds = value;
     }
 
-    /// <summary>Model to request from Copilot CLI (e.g., "claude-opus-4.6").</summary>
-    public string ModelName { get; set; } = "claude-opus-4.6";
+    /// <summary>Model to request from Copilot CLI (e.g., "claude-opus-4.7").</summary>
+    public string ModelName { get; set; } = "claude-opus-4.7";
 
     /// <summary>Alias for ModelName (backwards compatibility with appsettings).</summary>
     public string DefaultModel

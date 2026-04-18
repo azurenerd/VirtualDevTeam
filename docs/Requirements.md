@@ -49,6 +49,7 @@
 37. [LLM-Based Semantic Skill Matching Requirements](#36-llm-based-semantic-skill-matching-requirements)
 38. [Per-Reviewer Rework Cycle Limits](#37-per-reviewer-rework-cycle-limits)
 39. [Visual Scaffold Placeholder Requirements](#38-visual-scaffold-placeholder-requirements)
+40. [Planned Future Work](#39-planned-future-work)
 
 ---
 
@@ -351,6 +352,7 @@ Each phase has gate conditions that must be met before advancing:
 - **REQ-SE-002h**: Only the leader SE creates engineering-task issues. This is idempotent — if issues already exist (e.g., from a prior run), the leader loads them instead of recreating.
 - **REQ-SE-002i**: **Foundation-First Planning:** The first engineering task (T1) MUST be a project foundation/scaffolding task with NO dependencies. All other tasks MAY depend on T1. If the AI-generated T1 is not a foundation task, the SE searches the task list for keywords (`foundation`, `scaffold`, `setup`, `structure`, `skeleton`, `template`, `infrastructure`, `project setup`) and promotes the matching task to position 0. T1's dependencies are always cleared.
 - **REQ-SE-002j**: The SE prompt includes guidance to create tasks suitable for parallel work with minimal overlap and merge conflict potential. Tasks should target different modules, directories, or components.
+- **REQ-SE-002k**: **Engineering plan validation pass.** After the leader SE generates the initial task list, it MUST run a validation pass that cross-checks the plan against the design documents (Research.md, PMSpec.md, Architecture.md). The validator confirms: (1) every Enhancement Issue has at least one engineering task covering it, (2) each task description cites the relevant PMSpec user story or Architecture component, and (3) T1's foundation scope covers the tech stack implied by Architecture.md. Tasks failing validation are regenerated or flagged before any GitHub Issues are created.
 
 **Scenario: Foundation-First Task Ordering**
 1. AI generates engineering plan: T1="Implement auth endpoints", T2="Create project scaffold", T3="Build user CRUD"
@@ -391,6 +393,7 @@ Each phase has gate conditions that must be met before advancing:
 - **REQ-SE-004d**: PR body includes `Closes #{IssueNumber}` to auto-close the Issue on merge.
 - **REQ-SE-004e**: SE commits implementation and marks PR ready-for-review.
 - **REQ-SE-004f**: Non-leader PEs skip the "defer to spawning engineers" guard — they always seek work immediately. Only the leader SE defers non-High tasks during the spawn cooldown window.
+- **REQ-SE-004g**: **Design context in SE implementation prompts.** Every SE implementation prompt (own-task and assigned-task) MUST be built with design context pulled from Research.md, PMSpec.md, and Architecture.md — not just the engineering-task issue body. The AI must be told which Architecture component, which PMSpec user story, and which research finding the task traces back to, so implementation stays aligned with upstream design decisions. This replaces the older pattern of prompting purely from task title/description.
 
 ### REQ-SE-005: PR Review (Technical Quality)
 
@@ -579,7 +582,7 @@ Each phase has gate conditions that must be met before advancing:
 - **REQ-TEST-009a**: When `WorkspaceConfig.EnableUITests` is true and UI tests are needed, the `PlaywrightRunner` manages Playwright infrastructure.
 - **REQ-TEST-009b**: Chromium browsers are auto-installed idempotently — checks for `chromium*` directory in shared cache at `{RootPath}/.playwright-browsers/`. Install uses `pwsh playwright.ps1 install chromium` (.NET) or `npx playwright install chromium` (Node).
 - **REQ-TEST-009c**: All UI tests run **headless only** (`CreateNoWindow = true`, `HEADED=0` env var, `PlaywrightHeadless = true` config). Tests MUST NOT take over the user's screen.
-- **REQ-TEST-009d**: App-under-test lifecycle: start application process → poll HTTP 200 readiness (up to `AppStartupTimeoutSeconds`) → run tests → kill process tree on completion.
+- **REQ-TEST-009d**: App-under-test lifecycle: start application process → poll HTTP readiness via `WaitForAppReadyAsync` (up to `AppStartupTimeoutSeconds`) → run tests → kill process tree on completion. Readiness is signalled by **ANY HTTP response** (2xx, 3xx redirect, 401, 404 are all acceptable) — the test is that the socket is accepting connections and the Kestrel pipeline is live, not that the default route returns 200. This tolerates apps that redirect to login, require auth, or have a different default path.
 - **REQ-TEST-009e**: When UI tests are needed and no Playwright test project exists in the workspace, auto-scaffold one via `PlaywrightRunner.GeneratePlaywrightTestScaffold()` (creates `.csproj` with Playwright + xUnit packages, `PlaywrightFixture` base class with browser lifecycle management).
 - **REQ-TEST-009f**: `AppBaseUrl` is configurable (default `http://localhost:5000`) for the app-under-test address.
 
@@ -587,19 +590,48 @@ Each phase has gate conditions that must be met before advancing:
 
 - **REQ-TEST-010a**: Each TE workspace gets a unique port via `DeriveUniquePort(workspacePath)` — hashes workspace path to a port in range 5100–5899 to prevent conflicts when multiple agents test simultaneously.
 - **REQ-TEST-010b**: `ASPNETCORE_URLS` environment variable is set to `http://localhost:{uniquePort}` on the app-under-test process.
-- **REQ-TEST-010c**: `PatchHardcodedPortBindings()` MUST scan all `Program.cs` files in the workspace before starting the app. AI-generated code frequently contains `app.Urls.Clear()` and `app.Urls.Add("http://localhost:XXXX")` which are **programmatic overrides** that defeat ALL external configuration (env vars, CLI args, appsettings).
-- **REQ-TEST-010d**: Patching strategy: **comment out** the `app.Urls.Add()` and `app.Urls.Clear()` lines entirely (do NOT replace with env-var-reading code — `dotnet run` may skip recompilation). Backup originals to `.playwright-bak` files. Restore after tests complete via `RestoreOriginalPortBindings()`.
+- **REQ-TEST-010c**: `PatchHardcodedPortBindings()` MUST scan all `Program.cs` files in the workspace before starting the app. AI-generated code frequently contains programmatic bindings that defeat ALL external configuration (env vars, CLI args, appsettings). The patcher detects and neutralises all of the following patterns (commenting them out, never rewriting):
+  - `app.Urls.Clear()` and `app.Urls.Add("http://localhost:XXXX")`
+  - `ConfigureKestrel(...)` with `Listen(...)` / `ListenAnyIP(...)` / `ListenLocalhost(...)` calls
+  - `app.Run("http://...")` / `app.Run("https://...")` with an embedded URL argument
+  - `webBuilder.UseUrls(...)` / `builder.WebHost.UseUrls(...)`
+  - `Configuration["urls"] = "..."` and `Configuration["Urls"] = "..."` assignments
+- **REQ-TEST-010d**: Patching strategy: **comment out** the offending lines entirely (do NOT replace with env-var-reading code — `dotnet run` may skip recompilation). Backup originals to `*.playwright-bak` files alongside the source file. Restore after tests complete via `RestoreOriginalPortBindings()` inside a `finally` block so backups are restored even if the launch or tests throw.
 - **REQ-TEST-010e**: After patching, delete both `bin/` and `obj/` directories in the patched project to force full recompilation. Without this, `dotnet run` may use cached build output that still contains hardcoded ports.
 - **REQ-TEST-010f**: The `AppStartCommand` from config (e.g., `dotnet run --project ... --urls http://localhost:5100`) has its port rewritten via `RewritePort()` to match the derived unique port.
+- **REQ-TEST-010g**: The `--no-launch-profile` flag MUST be injected into every `dotnet run` invocation that starts the app-under-test. `launchSettings.json` can override `ASPNETCORE_URLS` and silently bind to a profile-defined port; `--no-launch-profile` disables that path. `NeutralizeLaunchSettings` additionally patches any in-tree `launchSettings.json` files (backed up to `*.playwright-bak`) as a belt-and-suspenders guard.
+- **REQ-TEST-010h**: `PatchAppSettingsKestrelEndpoints` neutralises any `Kestrel:Endpoints:*:Url` entries in `appsettings*.json` files that would otherwise force a specific port at runtime.
+- **REQ-TEST-010i**: `IsPortAvailable(port)` is used as an **advisory** pre-flight probe (log a warning if the derived port appears occupied) — not a hard gate. The launch pipeline relies on the verified readiness check (REQ-TEST-009d) + self-heal fallback for correctness, because transient port states can race with the probe.
 
-**Scenario: UI Test Port Isolation**
+### REQ-TEST-012: Unified Verified App Launch Pipeline
+
+- **REQ-TEST-012a**: Both `RunUITestsAsync` and `CaptureAppScreenshotAsync` MUST launch the target app through the single `LaunchVerifiedAppAsync` pipeline. There is exactly **one** code path for "start the app, prove it is responding, and hand back a handle"; the two call sites are not allowed to reimplement subsets of it. (This consolidation removed ~230 lines of duplicated launch logic.)
+- **REQ-TEST-012b**: `LaunchVerifiedAppAsync` returns an `AppLaunchResult` diagnostic record (process handle, derived port, detected URL, readiness outcome, any self-heal actions taken) so callers and logs can reconstruct exactly what happened during launch.
+- **REQ-TEST-012c**: Pipeline stages (in order):
+  1. Derive hash-based unique port in range 5100–5899 from the workspace path.
+  2. Advisory `IsPortAvailable` check — log a warning if occupied, but continue.
+  3. `PatchHardcodedPortBindings` (REQ-TEST-010c) across all `Program.cs` files.
+  4. `NeutralizeLaunchSettings` on every `launchSettings.json` in the workspace.
+  5. `PatchAppSettingsKestrelEndpoints` on every `appsettings*.json`.
+  6. Start the process with `--no-launch-profile` injected and `ASPNETCORE_URLS` set.
+  7. Parse stdout for "Now listening on: …" — detected URL takes precedence over the derived port (REQ-WS-005e).
+  8. `WaitForAppReadyAsync` — poll HTTP until any response arrives (REQ-TEST-009d).
+  9. Fallback cascade on failure: retry on an alternate derived port, then self-heal (kill process tree, `dotnet build`, restart) before giving up.
+  10. Emit an `AppLaunchResult` with full diagnostics regardless of success/failure.
+- **REQ-TEST-012d**: All `*.playwright-bak` backups created during the pipeline MUST be restored in the `finally` block of the caller, so a crash/timeout cannot leave the workspace with patched source files.
+
+**Scenario: UI Test Port Isolation (Unified Verified Launch)**
 1. TE starts UI tests for PR #35 in workspace `/agents/software-engineer-1/ws`
-2. `DeriveUniquePort` hashes workspace path → port 5490
-3. `PatchHardcodedPortBindings` scans `Program.cs` → finds `app.Urls.Add("http://localhost:5050")` → comments it out
-4. Deletes `bin/` and `obj/` → forces full recompilation
-5. Starts app with `ASPNETCORE_URLS=http://localhost:5490` → app listens on 5490 (not hardcoded 5050)
-6. Playwright tests navigate to `http://localhost:5490` → tests pass
-7. `RestoreOriginalPortBindings` restores `.playwright-bak` files → source code reverted
+2. `LaunchVerifiedAppAsync` is invoked (the **only** launch path — `CaptureAppScreenshotAsync` uses the same method)
+3. `DeriveUniquePort` hashes workspace path → port 5490; `IsPortAvailable(5490)` advisory check logs a warning if occupied but continues
+4. `PatchHardcodedPortBindings` scans `Program.cs` → finds `app.Urls.Add("http://localhost:5050")` AND `builder.WebHost.UseUrls("http://localhost:7000")` → comments BOTH out, backs up originals to `*.playwright-bak`
+5. `NeutralizeLaunchSettings` patches `launchSettings.json`; `PatchAppSettingsKestrelEndpoints` patches `appsettings.json` Kestrel endpoints
+6. Deletes `bin/` and `obj/` → forces full recompilation
+7. Starts app via `dotnet run --no-launch-profile --project … --urls http://localhost:5490` with `ASPNETCORE_URLS=http://localhost:5490`
+8. Stdout shows "Now listening on: http://localhost:5490" → detected URL takes precedence
+9. `WaitForAppReadyAsync` polls the URL → app returns HTTP 302 redirect to `/login` → treated as ready (any HTTP response counts)
+10. Playwright tests navigate to `http://localhost:5490` → tests pass
+11. `finally` block: `RestoreOriginalPortBindings` restores all `*.playwright-bak` files; `AppLaunchResult` is logged with process handle, port, detected URL, and readiness outcome for diagnostics
 
 ### REQ-TEST-011: PR Number in Test Engineer Status Messages
 
@@ -746,6 +778,7 @@ Code PRs go through a **sequential three-phase** review pipeline. Each phase has
 - **REQ-REV-004c**: `HasAgentReviewedAsync` returns true for ANY review (approved OR changes-requested) — prevents duplicate reviews.
 - **REQ-REV-004d**: Architect MUST call `NeedsReviewFromAsync` before reviewing to prevent duplicate reviews across restarts. The in-memory `_reviewedPrNumbers` is lost on restart; `NeedsReviewFromAsync` checks GitHub comments as source of truth.
 - **REQ-REV-004e**: Architect skips PRs that already have the `architect-approved` label (prevents re-reviewing already-approved PRs).
+- **REQ-REV-004f**: **Duplicate ready-for-review comment guard.** Any agent that posts a state-transition comment to a PR (e.g., PM posting "ready for review", Architect posting architect-approval) MUST first check the PR's existing comments for an equivalent state marker by the same author and skip posting if one is already present. In particular, Architect approval MUST NOT trigger a second "ready for review" comment on a PR that already has one — this previously caused duplicate/infinite comment loops between Architect and PM. The comment history on GitHub is the single source of truth for this dedup check; in-memory state alone is insufficient (it is lost on restart).
 
 ### REQ-REV-005: SE-Authored PR Reviewer Substitution
 
@@ -782,10 +815,10 @@ Code PRs go through a **sequential three-phase** review pipeline. Each phase has
 5. SE's `MergeTestedPRsAsync` → sees `pm-approved` + `tests-added` → squash merge → delete branch → Issue auto-closes
 
 **Scenario: Architect Requests Changes (Phase 1 Rework)**
-1. Engineer marks PR #35 ready-for-review
+1. Engineer marks PR #35 ready-for-review (guarded by REQ-REV-004f — a single "ready for review" comment is posted even across restarts)
 2. Architect reviews → CHANGES REQUESTED ("component doesn't follow Architecture §4.2 pattern") → sends `ChangesRequestedMessage`
 3. Engineer reworks → commits fixes → re-marks ready-for-review → sends new `ReviewRequestMessage`
-4. Architect re-reviews → APPROVED → adds `architect-approved` label → TE proceeds to Phase 2
+4. Architect re-reviews → APPROVED → adds `architect-approved` label → **does NOT post a second "ready for review" comment** (REQ-REV-004f) → TE proceeds to Phase 2
 5. Max `MaxArchitectReworkCycles` (default 3) rework attempts before force-approval
 
 **Scenario: PM Requests Changes (Phase 3 Rework)**
@@ -985,6 +1018,7 @@ Each phase of the sequential pipeline has its **own independent retry limit**:
 - **REQ-IDEM-005d**: The fresh reset MUST close all GitHub issues by adding appropriate labels (e.g., `stale-cleanup`) so they don't appear as open work in future runs.
 - **REQ-IDEM-005e**: The fresh reset MUST close all open PRs before deleting branches to avoid GitHub API errors on branch deletion.
 - **REQ-IDEM-005f**: After a fresh reset, the runner starts from the Initialization phase with no prior state — identical to a first-ever run.
+- **REQ-IDEM-005g**: **Minimal reset (`scripts/minimal-reset.ps1`).** In addition to `fresh-reset.ps1`, a `minimal-reset.ps1` script MUST exist for mid-session fast-forward resets. It performs the same GitHub cleanup (close issues/PRs, delete agent branches), wipes SQLite databases and local workspaces, but **preserves the startup design documents**: `OriginalDesignConcept.html`, `Research.md`, `PMSpec.md`, and `Architecture.md`. On the next runner start, the document-idempotency checks (REQ-IDEM-001) see those files are populated, skip re-generation, and the pipeline fast-forwards to the Engineering Planning phase. This is the preferred reset path when the design is good but the implementation has drifted.
 
 **Scenario: System Restart Recovery**
 1. System crashes while Software Engineer 1 has PR #35 (ready-for-review) and Software Engineer 1 has PR #36 (in-progress)
@@ -1107,6 +1141,13 @@ Each phase of the sequential pipeline has its **own independent retry limit**:
 4. Toggles "Allow agent-created definitions" OFF → SE can no longer generate new SME definitions at runtime
 5. Scrolls to "Custom Agents" → clicks "Add Custom Agent" → enters "APIDesigner" → configures role description and assigns "docs-reader" MCP server
 
+### REQ-DASH-012: Playwright Health Monitoring
+
+- **REQ-DASH-012a**: `PlaywrightHealthService` is registered as an `IHostedService` in the Runner (`AddHostedService<PlaywrightHealthService>()`). It runs a background loop that **every 5 minutes** invokes (1) `PlaywrightRunner.ValidateAsync` for browser/binary health and (2) `PlaywrightRunner.ValidatePortHealth(WorkspaceConfig)` for port-space health.
+- **REQ-DASH-012b**: `ValidatePortHealth` samples 20 ports across the 5100–5899 range and records `OccupiedPortCount` and `LastPortCheckUtc` on `PlaywrightRunner`. It MUST log a warning when more than 50% of the sampled ports are occupied, and MUST log a warning when the base/derived port itself is occupied — these signals indicate resource exhaustion or a leaked app-under-test process.
+- **REQ-DASH-012c**: `CleanupStaleBackups(rootPath)` is invoked by the health service. It scans the workspace root for `*.playwright-bak` files older than 1 hour and restores them (recovering the original source file / launchSettings / appsettings). This self-heals the "agent crashed mid-launch and left source files patched" failure mode.
+- **REQ-DASH-012d**: The `/health/playwright` REST endpoint on the Runner (mapped in `Program.cs`) exposes the current browser health plus `OccupiedPortCount` and `LastPortCheckUtc` so the dashboard `PlaywrightStatusBadge` and external monitoring can surface port-space pressure in real time.
+
 ---
 
 ## 18. AI Provider Requirements
@@ -1121,7 +1162,7 @@ Each phase of the sequential pipeline has its **own independent retry limit**:
 - **REQ-AI-001f**: `CliInteractiveWatchdog` auto-responds to y/n prompts, selection menus, "press enter" prompts.
 - **REQ-AI-001g**: Fail-fast on credential prompts or auth failures.
 - **REQ-AI-001h**: `CliOutputParser` strips ANSI codes, CLI chrome (banners, separators), resolves carriage-return overwrites.
-- **REQ-AI-001i**: Model IDs use dots: `claude-opus-4.6`, `claude-sonnet-4.6`, `gpt-5.2` (not dashes).
+- **REQ-AI-001i**: Model IDs use dots: `claude-opus-4.7`, `claude-sonnet-4.6`, `gpt-5.2` (not dashes).
 
 ### REQ-AI-002: Fallback
 
@@ -1132,6 +1173,12 @@ Each phase of the sequential pipeline has its **own independent retry limit**:
 
 - **REQ-AI-003a**: Generating from scratch always beats a draft→fix pipeline in cost, speed, and quality.
 - **REQ-AI-003b**: Prefer single high-quality generation passes over iterative refinement with cheaper models.
+
+### REQ-AI-004: Default Model Tier Values
+
+- **REQ-AI-004a**: The default **premium** tier model is `claude-opus-4.7`. All default config (`appsettings.json`, `AgentSquadConfig`, `ConfigWizard`, the dashboard `Configuration.razor`, and `copilot-instructions.md`) MUST reference `claude-opus-4.7` as the premium default, not a prior Opus version.
+- **REQ-AI-004b**: `ModelRegistry`'s Copilot CLI allowlist accepts the family `claude-opus-4.5`, `claude-opus-4.6`, and `claude-opus-4.7`. Older Opus revisions remain selectable for rollback but are not the default.
+- **REQ-AI-004c**: `ModelPricing` returns premium-tier pricing for `claude-opus-4.7` identical to `claude-opus-4.6` / `claude-opus-4.5` — any new Opus revision added to the allowlist must be given matching premium pricing so cost reporting keeps working.
 
 ---
 
@@ -1657,7 +1704,7 @@ Each phase of the sequential pipeline has its **own independent retry limit**:
 
 **Scenario: Agent Uses MCP Server via Copilot CLI**
 1. SE agent config has `McpServers: ["github-search"]`
-2. SE makes AI call → `CopilotCliChatCompletionService` builds command: `copilot --allow-all --no-ask-user --mcp-server github-search --model claude-opus-4.6`
+2. SE makes AI call → `CopilotCliChatCompletionService` builds command: `copilot --allow-all --no-ask-user --mcp-server github-search --model claude-opus-4.7`
 3. Copilot CLI loads github-search MCP server → AI can use code search tools during generation
 4. AI response includes tool calls to github-search → results incorporated into code generation
 
@@ -2232,6 +2279,14 @@ These bugs were discovered during scenario analysis and fixed. Listed here as re
 | TE/SE port conflict on app start | CRITICAL | TE UI tests fail with "App did not respond at http://localhost:5100 within 90s" | All agents share the same `AppBaseUrl` port (5100). When SE and TE start apps simultaneously, second process can't bind the port. | Added `DeriveUniquePort(workspacePath)` — hashes workspace path to unique port in 5100–5899 range. Applied in both `RunUITestsAsync` and `CaptureAppScreenshotAsync`. |
 | Standalone dashboard shows no agents | CRITICAL | Dashboard on port 5051 shows empty agent list | Dashboard creates its own empty SQLite DB instead of reading Runner's DB. `agent_state` table is always empty (agents never persist checkpoints). | Fixed DB path to Runner's directory. Hydrate from `ai_usage` + `activity_log` tables. Added boot time filtering via `run_metadata.last_boot_utc`. |
 | Dashboard shows duplicate agents from old runs | MODERATE | Dashboard shows 48 agents instead of 8 — includes agents from all previous restarts | SQLite DB accumulates agent records across restarts. Each restart creates new agent GUIDs. | Added `RecordBoot()` to write `last_boot_utc` on each startup. Dashboard filters agents to only those with activity after boot time. |
+| Duplicate ready-for-review after architect approval | MODERATE | PM and Architect re-posted "ready for review" comments after each scan, spamming the PR | State-transition comment guard was in-memory only; on the next loop the agent didn't see its own prior comment and posted again | Comprehensive dedup guard reads existing PR comments as single source of truth before posting any state-transition marker (covers PM + Architect + other reviewer paths). See REQ-REV-004f. |
+| MarkDoneAsync crash on already-closed issue | MODERATE | Runner crashed mid-loop when SE tried to close an issue that GitHub had already auto-closed via `Closes #N` merge | `MarkDoneAsync` threw on the Octokit 422 "issue already closed" response | Swallow the already-closed condition; treat as success |
+| Inline review comments lost on own-PR 422 | MODERATE | When SE/PM reviewed their own PR and the review-submit API returned 422, the inline comment payload was dropped entirely | Comment flow aborted on the outer review-submit failure | Fall back to per-comment create API so inline feedback is preserved even when the consolidated review submit 422s |
+| UI test port 5000 failure | CRITICAL | `dotnet run` silently bound to port 5000 (or whatever was in `launchSettings.json`) instead of the derived unique port, so Playwright tests saw "App did not respond" | `launchSettings.json` overrides `ASPNETCORE_URLS` and the `--urls` argument when a launch profile is active | Inject `--no-launch-profile` into every `dotnet run` app-start invocation; also `NeutralizeLaunchSettings` as belt-and-suspenders. See REQ-TEST-010g. |
+| Agent-crashed patched source left in workspace | MODERATE | If the agent crashed during UI test launch, `*.playwright-bak` files were never restored and the source tree stayed patched (comments around `app.Urls.Add`, etc.) | No janitor for stale backups | `PlaywrightHealthService.CleanupStaleBackups` restores any `*.playwright-bak` older than 1 hour during its 5-minute health sweep. See REQ-DASH-012c. |
+| Non-200 readiness check wrongly failed UI tests | CRITICAL | Apps that redirect to `/login` on the root URL returned 302 and `WaitForAppReadyAsync` treated that as "not ready" until timeout | Readiness check required 2xx only | Any HTTP response now counts as readiness (socket + pipeline live). See REQ-TEST-009d. |
+| Test removal infinite recursion | CRITICAL | Removing a generated test file triggered a re-scan that regenerated it, then removed it, etc. | Test-removal loop didn't exclude the file it had just removed | Track removed files in the loop scope so they're not re-scanned in the same pass |
+| Engineering tasks not aligned with design | MODERATE | SE's task list occasionally missed Enhancement issues or cited Architecture components that didn't exist | No validation pass between AI task generation and GitHub issue creation | Added engineering-plan validation pass against Research.md / PMSpec.md / Architecture.md. See REQ-SE-002k. |
 
 ---
 
@@ -2308,3 +2363,12 @@ These bugs were discovered during scenario analysis and fixed. Listed here as re
 4. Playwright screenshot shows clear visual layout (not blank white)
 5. SE reviewer can visually verify all expected sections exist in screenshot
 ```
+
+---
+
+## 39. Planned Future Work
+
+### REQ-FUTURE-001: Interactive CLI A/B/C Testing Framework
+
+- **REQ-FUTURE-001a**: `docs/InteractiveCLIPlan.md` captures the design for an A/B/C multi-option parallel-agent testing framework (three agent configurations running side-by-side against the same task so their outputs can be compared). This is planned future work — the plan document is the source of truth for that effort and this Requirements.md only references it.
+- **REQ-FUTURE-001b**: Any new requirement IDs produced while implementing the Interactive CLI framework MUST be added to this section (or a dedicated numbered section) rather than silently muting existing requirements.

@@ -134,7 +134,7 @@ When `CopilotCli.Enabled` is `true` (the default), all tiers route through the `
 **Architecture**: Process-per-request model. Each `GetChatMessageContentsAsync()` call spawns a fresh `copilot` process with autonomous-operation flags:
 
 ```bash
-copilot --allow-all --no-ask-user --silent --no-color --no-auto-update --no-custom-instructions --model claude-opus-4.6
+copilot --allow-all --no-ask-user --silent --no-color --no-auto-update --no-custom-instructions --model claude-opus-4.7
 ```
 
 Prompts are piped via stdin (avoids shell escaping issues with long multi-KB prompts). SemaphoreSlim limits concurrency (configurable `MaxConcurrentRequests`, default 4).
@@ -147,7 +147,7 @@ Key components in `AgentSquad.Core/AI/`:
 
 Fallback: if `copilot` isn't found at startup, `ModelRegistry` automatically falls back to the API-key provider configured for each tier. Fallback can also be triggered at runtime via `ModelRegistry.TriggerFallback()`.
 
-**Model IDs use dots**: `claude-opus-4.6`, `claude-sonnet-4.6`, `claude-haiku-4.5`, `gpt-5.2` (not dashes).
+**Model IDs use dots**: `claude-opus-4.7`, `claude-sonnet-4.6`, `claude-haiku-4.5`, `gpt-5.2` (not dashes).
 
 ### Testing
 

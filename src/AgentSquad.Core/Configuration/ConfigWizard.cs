@@ -43,7 +43,7 @@ public static partial class ConfigWizard
             config.Models["premium"] = new ModelConfig
             {
                 Provider = "anthropic",
-                Model = Prompt("Premium model name", "claude-opus-4.6"),
+                Model = Prompt("Premium model name", "claude-opus-4.7"),
                 ApiKey = apiKey,
                 MaxTokensPerRequest = 8192,
                 Temperature = 0.3,

@@ -432,6 +432,8 @@ The agents will not "figure out" what you want from a high-level description. Th
 
 ## 20. Hardcoded Port Bindings Break Automated UI Testing
 
+> **UPDATED (April 2026):** The "patch and retry" approach described here proved insufficient long-term — AI agents found new ways to hardcode ports in every subsequent generation (`ListenAnyIP`, `Configuration["urls"]`, `ConfigureKestrel`, `launchSettings.json applicationUrl`). Superseded by the unified `LaunchVerifiedAppAsync` pipeline — see **Lesson 36**.
+
 **Lesson:** AI-generated ASP.NET apps frequently include `app.Urls.Clear(); app.Urls.Add("http://localhost:5050")` which is a **programmatic override** that defeats ALL external configuration — `ASPNETCORE_URLS` env var, `--urls` CLI args, `launchSettings.json`, everything. This silently breaks any test infrastructure that starts apps on unique ports.
 
 ### What happened:
@@ -869,3 +871,180 @@ if (_gateCheck.RequiresHuman("pm_spec_review"))
 3. Removed hardcoded `.gitignore` preservation from `ConfigurationService.cs` reset logic
 
 **Rule:** Data files required for the app to function must be committed. Only ignore build artifacts, secrets, and user-specific config.
+
+
+---
+
+# April 2026 Session — Playwright Robustness, Comment Guards, Context Propagation
+
+## 36. Port-Binding Bugs Are a Recurring Class — Unify the Launch Pipeline
+
+**Lesson:** Port-binding bugs in AI-generated apps have broken UI tests **25+ times across prior sessions**. Each new project discovered a new pattern to hardcode a port: `app.Run("url")`, `ListenAnyIP`, `Configuration["urls"]`, `ConfigureKestrel` variants, `launchSettings.json` `applicationUrl`, hardcoded `builder.WebHost.UseUrls`. Chasing each variant with a new regex patch is a losing game.
+
+**What happened:**
+- Over many sessions, each Playwright failure triggered a targeted fix for whatever pattern that run used.
+- The fixes accumulated into 6+ layers of regex-based source mutation inside `PlaywrightRunner`.
+- Despite the layers, new generations kept finding untouched patterns.
+- Rubber-duck critique identified the real problem: scattered fixes with no single verification point.
+
+**Fix (PR 68618e0 + 409276d):**
+- Introduced `LaunchVerifiedAppAsync` as the **single canonical launch path**. All callers (TE UI tests, SE screenshot capture, foundation smoke test) funnel through it.
+- The pipeline runs: (1) patch known hardcoded-port patterns, (2) inject `--no-launch-profile` into `dotnet run` to bypass `launchSettings.json`, (3) start the process with `ASPNETCORE_URLS` env var, (4) poll the expected port, (5) accept **ANY** HTTP response (including 404, 500) as proof "the app is listening on this port," (6) if unhealthy, self-heal by killing the process, backing up `launchSettings.json` (`.playwright-bak`), deleting `bin/` + `obj/`, and retrying.
+- **Do not strip `CreateBuilder(args)`** — it's required for configuration binding; earlier attempts to remove it broke DI.
+- File renames/backups use a mutex so concurrent agents don't clobber each other's `.playwright-bak` files.
+
+**Rule:** For any failure class that has recurred 3+ times with different surface symptoms, stop patching symptoms and consolidate to a single verified pipeline. The verification step (accept any HTTP response) is more valuable than any source-patching heuristic.
+
+---
+
+## 37. Layer Periodic Health Checks on Top of Event-Driven Ones
+
+**Lesson:** Event-driven healing only runs when agents invoke UI tests. If the UI-test subsystem is broken (stale `.playwright-bak` files, missing browser binaries, port already held by a dead process), the system stays quietly broken between test invocations — sometimes for hours.
+
+**What happened:**
+- Playwright healing logic was added to `LaunchVerifiedAppAsync` (reactive).
+- User flagged: "What if nothing invokes the launcher for an hour? The system could be dead and we wouldn't know."
+- Evidence: several sessions had tests silently failing because a previous run left `.playwright-bak` files in place, corrupting the next launch.
+
+**Fix (PR 68618e0):**
+- Added `PlaywrightHealthService` (a `BackgroundService`) running every **5 minutes**.
+- On each tick: sample the expected port range, clean up `.playwright-bak` files older than **1 hour**, validate Playwright browser binaries exist and are executable, log anomalies to the activity log.
+- Reactive checks still run inside `LaunchVerifiedAppAsync`; the periodic service is the safety net.
+
+**Rule:** For any critical invariant, have **both** reactive (on-demand) and proactive (periodic) verification. Event-only checks mean you discover breakage only when a user-triggered action exposes it.
+
+---
+
+## 38. Duplicate-Action Guards Are Mandatory for Multi-Agent State Transitions
+
+**Lesson:** When multiple agents can react to the same state transition, you **will** get duplicate actions unless every agent checks state before acting.
+
+**What happened (PR 4ea4e38 + 2e051c2):**
+- PM posts `ready-for-review` comment when a PR is ready.
+- Architect approves the PR and ALSO posts `ready-for-review`.
+- Result: two identical comments on the PR, confusing downstream reviewers and triggering duplicate notifications.
+
+**Fix:**
+- Before posting any phase-transition comment, agents must check existing PR comments for a matching marker string.
+- The comment includes a stable marker (e.g., `<!-- agent-squad:ready-for-review -->`) so presence detection is exact, not fuzzy.
+- Applied symmetrically across PM, Architect, and SE — not just the agent that caused the reported bug.
+
+**Rule:** When adding a state-change side-effect to one agent, audit **every other agent** that can observe the same state and add the same guard. Duplicate-notification bugs are a symptom of asymmetric guards. The marker comment (HTML comment with stable ID) is the idiomatic implementation.
+
+---
+
+## 39. Re-Inject Source Artifacts at Every Prompt Hop > 1
+
+**Lesson:** Each prompt layer downstream of the source loses fidelity. If SE prompts only see the engineering plan's summary of the architecture, they hallucinate requirements that contradict the architecture itself.
+
+**What happened (PR b00d00b):**
+- Research → PMSpec → Architecture → EngineeringPlan → SE task PR. Five hops.
+- SE implementations started diverging from architectural decisions because the engineering plan's summary had drifted.
+- Specific bug: engineer generated a REST endpoint with a completely different response shape than Architecture.md specified, because the EngineeringPlan paraphrased it inaccurately.
+
+**Fix:**
+- SE implementation prompts now include the **full relevant sections** of Research.md, PMSpec.md, and Architecture.md — not just the engineering plan's summary.
+- Added a validation pass: the engineering plan itself is checked against the design docs before PRs are created. Contradictions block plan approval.
+
+**Rule:** Any prompt more than **one hop** from a source artifact should re-inject the source, not rely on the intermediate summary. Intermediate summaries are navigation aids for humans; LLMs should see the primary source.
+
+---
+
+## 40. Every GitHub API Call Must Assume the Target State Has Changed
+
+**Lesson:** A cluster of bugs all shared the same root cause: code assumed a GitHub resource was in the state it was in when the agent first observed it. Between observation and action, humans, other agents, or retries mutate state.
+
+**What happened (PRs 522d429, dde0cdd, and related):**
+- `MarkDoneAsync` crashed with HTTP 422 when the issue was already closed (closed by a human between the agent's read and write).
+- Inline review comments were **lost** when posting a PR comment on one's own PR returned 422 — the code threw and bailed before falling back to a regular comment.
+- Infinite recursion in the test-removal loop when the same test kept re-appearing after "removal" because the removal wasn't idempotent.
+
+**Fix:**
+- `MarkDoneAsync`: treat "already closed" as success, not failure. Catch `ApiException` with 422/409/404 and inspect the current state.
+- Own-PR comment path: on 422, fall back to posting an issue comment with the same body so review content is never lost.
+- Test removal: check for actual change in the post-state, break the loop if no progress after N iterations.
+
+**Rule:** Idempotent success conditions are the default: "already in the desired state" = success, not failure. Catch-and-fallback for 422/409/404 is mandatory, not optional. Never throw from a "did we complete the side-effect?" function — return a richer result type.
+
+---
+
+## 41. Surface AI Reasoning in the UI, Not Just the Logs
+
+**Lesson:** When an AI evaluates an artifact (screenshot, code, design), the human triaging failures needs to see *what the AI thought it saw* at a glance — not dig through log files.
+
+**What happened (PR 13ac013):**
+- Dashboard cards showed screenshots but not the AI's description of them.
+- When a PR was rejected "due to screenshot issues," the human had to open logs, find the relevant AI call, and read the description to understand why.
+- Triage time per failed PR was 3-5 minutes just to locate the reasoning.
+
+**Fix:**
+- Dashboard cards now render the AI-generated screenshot description inline.
+- Description is persisted alongside the screenshot artifact, not re-derived.
+
+**Rule:** If an AI's judgment drives a decision, surface the one-paragraph "why" in the UI next to the artifact. This is not a nice-to-have — it's the difference between 30-second and 5-minute triage.
+
+---
+
+## 42. Partial-Reset Scripts Dramatically Speed Up Late-Stage Debugging
+
+**Lesson:** A full pipeline reset re-runs Research → PMSpec → Architecture (20-40 minutes, significant token cost) before reaching the engineering phase where the bug actually lives. For late-stage debugging, this is a massive waste.
+
+**What happened:**
+- Debugging the engineering/testing phases required 20+ iterations per session.
+- Each iteration required a fresh reset to reproduce, burning 30+ minutes and dollars of token spend on phases that were already validated.
+
+**Fix (`scripts/minimal-reset.ps1`):**
+- Preserves `OriginalDesignConcept.html`, `Research.md`, `PMSpec.md`, `Architecture.md`.
+- Clears engineering artifacts (PRs, issues, workspace directories, SQLite activity log).
+- Pipeline fast-forwards to the `EngineeringPlanning` phase on next start.
+
+**Rule:** For any multi-phase pipeline with expensive upstream phases, provide a partial-reset option that preserves phases that are known-good. Full reset remains available for clean-slate runs.
+
+---
+
+## 43. MCP Server Auth Changes Require Process Restart
+
+**Lesson:** Running `enghub-mcp auth` (or equivalent) successfully does **not** make a running MCP server pick up the new credentials. The server continues returning "No cached credentials" until it's restarted.
+
+**What happened:**
+- `enghub-mcp auth` completed successfully, user confirmed token stored.
+- All subsequent MCP calls returned `No cached credentials` errors.
+- Wasted ~20 minutes debugging before the restart hypothesis was tested.
+
+**Fix / workaround:**
+- Documented in the session notes: after MCP `auth` commands, restart the host (VS Code, Copilot CLI) to reload the MCP server.
+- Candidate improvement: MCP servers should hot-reload credentials from the store on each request, or expose a `reload-credentials` RPC.
+
+**Rule:** Assume cached-credential MCP servers require a full restart after auth changes. If you're debugging "credentials should work but don't," restart first, investigate second.
+
+---
+
+## 44. Centralize Model Version Strings to a Single Constant
+
+**Lesson:** Upgrading `claude-opus-4.6 → claude-opus-4.7` required edits in **8+ files**: `appsettings.json`, `AgentSquadConfig.cs`, `ConfigWizard.cs`, `ModelRegistry` allowlist, `ModelPricing.cs`, `Configuration.razor`, `copilot-instructions.md`, `Requirements.md`. Every missed location causes a runtime allowlist rejection or incorrect cost math.
+
+**What happened:**
+- First pass of the upgrade missed `ModelPricing.cs`, resulting in `$0` cost calculations for runs using the new model.
+- Second pass missed `ConfigWizard.cs` defaults, so new installs kept defaulting to the old model.
+- Each miss required a targeted fix and re-validation.
+
+**Fix (next time):**
+- Introduce `ModelDefaults.PremiumModel`, `ModelDefaults.StandardModel`, etc. as `public const string` references.
+- All config files reference the constant by key name; all code paths read from the single source.
+- Next model upgrade becomes a one-line change plus a pricing-table entry.
+
+**Rule:** Any string that appears in 3+ files and represents a versioned external identifier must live in a single `const` declaration. Scattered model/version strings are a maintenance tax that compounds with every upgrade.
+
+---
+
+## 45. Rubber-Duck Critique Between Plan and Implementation Prevents Over-Engineering
+
+**Lesson:** Critique agents are most valuable **between plan approval and implementation start** — not after the code is written. Post-hoc critique finds bugs; pre-implementation critique prevents entire architectural detours.
+
+**What happened:**
+- Initial Playwright robustness plan proposed **6 layers of regex + file mutation** to chase every hardcoded-port pattern an AI might generate.
+- A rubber-duck critique agent pushed back: "Why are you pattern-matching source code? The proof is whether the app answers HTTP. Verify the outcome, not the input."
+- Revised plan: single unified launch pipeline (`LaunchVerifiedAppAsync`) + "any HTTP response = listening" check + self-heal loop.
+- Final implementation was ~40% smaller and more reliable than the original plan.
+
+**Rule:** Insert a critique gate between planning and implementation for any non-trivial change. The critique prompt should explicitly ask "is there a simpler invariant we could verify instead of enumerating all failure modes?" Post-implementation critique still has value for correctness, but architectural simplification has to happen before the code is written.
