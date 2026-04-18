@@ -1661,7 +1661,7 @@ public abstract class EngineerAgentBase : AgentBase
                         await GitHub.AddPullRequestCommentAsync(pr.Number, commentBody, ct);
 
                         // Reply to open inline review threads explaining what was addressed
-                        await ReplyToInlineReviewThreadsAsync(pr.Number, changesSummary, codeFiles, ct);
+                        await ReplyToInlineReviewThreadsAsync(pr.Number, changesSummary, codeFiles, attempts, maxCycles, ct);
 
                         await SyncBranchWithMainAsync(pr.Number, ct);
                         await PrWorkflow.MarkReadyForReviewAsync(pr.Number, Identity.DisplayName, ct);
@@ -1731,7 +1731,8 @@ public abstract class EngineerAgentBase : AgentBase
     /// The reviewer will later resolve these threads when approving.
     /// </summary>
     private async Task ReplyToInlineReviewThreadsAsync(
-        int prNumber, string? changesSummary, List<Core.AI.CodeFileParser.CodeFile> updatedFiles, CancellationToken ct)
+        int prNumber, string? changesSummary, List<Core.AI.CodeFileParser.CodeFile> updatedFiles,
+        int attempt, int maxAttempts, CancellationToken ct)
     {
         try
         {
@@ -1752,13 +1753,13 @@ public abstract class EngineerAgentBase : AgentBase
                 string replyBody;
                 if (fileWasChanged)
                 {
-                    replyBody = $"**[{Identity.DisplayName}]** ✅ Addressed — this file was updated in the rework commit.";
+                    replyBody = $"**[{Identity.DisplayName}]** ✅ Addressed (rework {attempt}/{maxAttempts}) — this file was updated in the rework commit.";
                     if (!string.IsNullOrWhiteSpace(changesSummary))
                         replyBody += $"\n\n{changesSummary}";
                 }
                 else
                 {
-                    replyBody = $"**[{Identity.DisplayName}]** ℹ️ This file was not modified in this rework cycle. " +
+                    replyBody = $"**[{Identity.DisplayName}]** ℹ️ Not modified in rework {attempt}/{maxAttempts}. " +
                         "The feedback may be addressed by changes in related files, or may need a follow-up.";
                 }
 
