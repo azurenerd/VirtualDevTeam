@@ -2692,6 +2692,23 @@ public abstract class EngineerAgentBase : AgentBase
             Logger.LogInformation("{Role} {Name} posted UI screenshot for PR #{PrNumber} step {Step}",
                 Identity.Role, Identity.DisplayName, pr.Number, stepNumber);
             LogActivity("screenshot", $"📸 UI screenshot posted for PR #{pr.Number} step {stepNumber}/{totalSteps}");
+
+            // AI-describe the screenshot for dashboard visibility
+            try
+            {
+                var descKernel = Models.GetKernel(Identity.ModelTier, Identity.Id);
+                var descChat = descKernel.GetRequiredService<Microsoft.SemanticKernel.ChatCompletion.IChatCompletionService>();
+                var img = new PullRequestWorkflow.ScreenshotImage(screenshotBytes, "image/png",
+                    $"Author screenshot PR #{pr.Number} step {stepNumber}", imageUrl);
+                var desc = await PullRequestWorkflow.DescribeScreenshotAsync(img, descChat, ct);
+                LogActivity("screenshot", $"🖼️ Screenshot content (PR #{pr.Number}): {desc}");
+                Logger.LogInformation("{Role} {Name} screenshot description for PR #{PrNumber}: {Description}",
+                    Identity.Role, Identity.DisplayName, pr.Number, desc);
+            }
+            catch (Exception descEx)
+            {
+                Logger.LogDebug(descEx, "Could not describe screenshot for PR #{PrNumber}", pr.Number);
+            }
         }
         catch (Exception ex)
         {

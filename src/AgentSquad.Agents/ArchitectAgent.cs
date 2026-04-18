@@ -1212,6 +1212,27 @@ public class ArchitectAgent : AgentBase
 
             var hasScreenshots = screenshotImages.Count > 0 || !string.IsNullOrEmpty(screenshotContext);
 
+            // Log AI description of each screenshot for dashboard visibility
+            if (screenshotImages.Count > 0)
+            {
+                try
+                {
+                    var descKernel = _modelRegistry.GetKernel(Identity.ModelTier, Identity.Id);
+                    var descChat = descKernel.GetRequiredService<Microsoft.SemanticKernel.ChatCompletion.IChatCompletionService>();
+                    foreach (var img in screenshotImages)
+                    {
+                        var desc = await PullRequestWorkflow.DescribeScreenshotAsync(img, descChat, ct);
+                        LogActivity("screenshot", $"🖼️ Architect reviewing screenshot (PR #{pr.Number}): {desc}");
+                        Logger.LogInformation("Architect screenshot description for PR #{PrNumber}: {Description}",
+                            pr.Number, desc);
+                    }
+                }
+                catch (Exception descEx)
+                {
+                    Logger.LogDebug(descEx, "Could not describe screenshots for architect review of PR #{Number}", pr.Number);
+                }
+            }
+
             var history = CreateChatHistory();
             var reviewSysVars = new Dictionary<string, string>
             {

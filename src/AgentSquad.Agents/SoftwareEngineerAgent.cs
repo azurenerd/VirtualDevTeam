@@ -3825,6 +3825,27 @@ public class SoftwareEngineerAgent : EngineerAgentBase
                 Logger.LogDebug(ex, "Could not fetch screenshots for PE review of PR #{Number}", pr.Number);
             }
 
+            // Log AI description of each screenshot for dashboard visibility
+            if (screenshotImages.Count > 0)
+            {
+                try
+                {
+                    var descKernel = Models.GetKernel(Identity.ModelTier, Identity.Id);
+                    var descChat = descKernel.GetRequiredService<Microsoft.SemanticKernel.ChatCompletion.IChatCompletionService>();
+                    foreach (var img in screenshotImages)
+                    {
+                        var desc = await PullRequestWorkflow.DescribeScreenshotAsync(img, descChat, ct);
+                        LogActivity("screenshot", $"🖼️ SE reviewing screenshot (PR #{pr.Number}): {desc}");
+                        Logger.LogInformation("SE peer screenshot description for PR #{PrNumber}: {Description}",
+                            pr.Number, desc);
+                    }
+                }
+                catch (Exception descEx)
+                {
+                    Logger.LogDebug(descEx, "Could not describe screenshots for SE review of PR #{Number}", pr.Number);
+                }
+            }
+
             // Update system prompt if screenshots available
             if (screenshotImages.Count > 0)
             {

@@ -1619,6 +1619,23 @@ public class TestEngineerAgent : AgentBase
                         sb.AppendLine();
                         Logger.LogInformation("Posted standalone screenshot for PR #{PrNumber}", pr.Number);
                         LogActivity("screenshot", $"✅ Screenshot captured and uploaded for PR #{pr.Number} ({screenshotBytes.Length} bytes)");
+
+                        // AI-describe the screenshot for dashboard visibility
+                        try
+                        {
+                            var descKernel = _modelRegistry.GetKernel(Identity.ModelTier, Identity.Id);
+                            var descChat = descKernel.GetRequiredService<Microsoft.SemanticKernel.ChatCompletion.IChatCompletionService>();
+                            var img = new PullRequestWorkflow.ScreenshotImage(screenshotBytes, "image/png",
+                                $"TE screenshot PR #{pr.Number}", imageUrl);
+                            var desc = await PullRequestWorkflow.DescribeScreenshotAsync(img, descChat, ct);
+                            LogActivity("screenshot", $"🖼️ TE screenshot content (PR #{pr.Number}): {desc}");
+                            Logger.LogInformation("TE screenshot description for PR #{PrNumber}: {Description}",
+                                pr.Number, desc);
+                        }
+                        catch (Exception descEx)
+                        {
+                            Logger.LogDebug(descEx, "Could not describe screenshot for PR #{PrNumber}", pr.Number);
+                        }
                     }
                 }
                 else

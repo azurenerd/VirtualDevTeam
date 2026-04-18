@@ -2,6 +2,8 @@ using System.Text.RegularExpressions;
 using AgentSquad.Core.AI;
 using AgentSquad.Core.GitHub.Models;
 using Microsoft.Extensions.Logging;
+using Microsoft.SemanticKernel;
+using Microsoft.SemanticKernel.ChatCompletion;
 
 namespace AgentSquad.Core.GitHub;
 
@@ -1271,6 +1273,40 @@ public partial class PullRequestWorkflow
 
     /// <summary>Screenshot image data for vision-based AI review.</summary>
     public record ScreenshotImage(byte[] ImageBytes, string MimeType, string Description, string SourceUrl);
+
+    /// <summary>
+    /// Uses AI vision to generate a concise summary of what a screenshot shows.
+    /// Returns a short description suitable for dashboard activity cards.
+    /// </summary>
+    public static async Task<string> DescribeScreenshotAsync(
+        ScreenshotImage screenshot,
+        IChatCompletionService chat,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            var history = new ChatHistory();
+            history.AddSystemMessage(
+                "You are a UI screenshot analyst. Describe what you see in 1-2 sentences. " +
+                "Focus on: what the page shows (title, content, layout), whether it looks like a working app " +
+                "or an error page. If you see error messages, quote them. Be concise.");
+
+            var items = new ChatMessageContentItemCollection
+            {
+                new TextContent("Describe this screenshot:"),
+                new ImageContent(screenshot.ImageBytes, screenshot.MimeType)
+            };
+            history.AddUserMessage(items);
+
+            var response = await chat.GetChatMessageContentsAsync(history, cancellationToken: ct);
+            var desc = response.FirstOrDefault()?.Content?.Trim();
+            return string.IsNullOrWhiteSpace(desc) ? "(no description)" : desc;
+        }
+        catch
+        {
+            return $"(screenshot: {screenshot.ImageBytes.Length} bytes, could not describe)";
+        }
+    }
     public async Task<string> GetPRCodeContextAsync(
         int prNumber, string headBranch, int maxFileSizeChars = 15000, CancellationToken ct = default)
     {

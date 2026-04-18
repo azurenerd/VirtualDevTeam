@@ -2512,6 +2512,27 @@ public class ProgramManagerAgent : AgentBase
 
             var hasScreenshots = screenshotImages.Count > 0 || !string.IsNullOrEmpty(screenshotContext);
 
+            // Log AI description of each screenshot for dashboard visibility
+            if (screenshotImages.Count > 0)
+            {
+                try
+                {
+                    var descKernel = _modelRegistry.GetKernel(Identity.ModelTier, Identity.Id);
+                    var descChat = descKernel.GetRequiredService<Microsoft.SemanticKernel.ChatCompletion.IChatCompletionService>();
+                    foreach (var img in screenshotImages)
+                    {
+                        var desc = await PullRequestWorkflow.DescribeScreenshotAsync(img, descChat, ct);
+                        LogActivity("screenshot", $"🖼️ PM reviewing screenshot (PR #{pr.Number}): {desc}");
+                        Logger.LogInformation("PM screenshot description for PR #{PrNumber}: {Description}",
+                            pr.Number, desc);
+                    }
+                }
+                catch (Exception descEx)
+                {
+                    Logger.LogDebug(descEx, "Could not describe screenshots for PM review of PR #{Number}", pr.Number);
+                }
+            }
+
             var history = CreateChatHistory();
 
             // Build screenshot section for system prompt
