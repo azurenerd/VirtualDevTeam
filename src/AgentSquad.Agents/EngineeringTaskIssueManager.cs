@@ -276,7 +276,15 @@ internal sealed partial class EngineeringTaskIssueManager
         if (idx < 0) return;
 
         var task = _cache[idx];
-        await _github.CloseIssueAsync(issueNumber, ct);
+        try
+        {
+            await _github.CloseIssueAsync(issueNumber, ct);
+        }
+        catch (Exception ex)
+        {
+            // Issue may already be closed (e.g., via "Closes #N" in PR merge) — that's fine
+            _logger.LogWarning(ex, "CloseIssueAsync failed for #{Number} (may already be closed), marking done in cache anyway", issueNumber);
+        }
 
         _cache[idx] = task with
         {
