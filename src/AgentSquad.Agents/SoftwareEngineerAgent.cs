@@ -3140,8 +3140,12 @@ public class SoftwareEngineerAgent : EngineerAgentBase
             if (pr is null || !string.Equals(pr.State, "open", StringComparison.OrdinalIgnoreCase))
                 return;
 
-            // Only recover in-progress PRs (not already ready-for-review)
-            if (pr.Labels.Contains("ready-for-review", StringComparer.OrdinalIgnoreCase))
+            // Only recover in-progress PRs (not already ready-for-review or further along)
+            if (pr.Labels.Contains("ready-for-review", StringComparer.OrdinalIgnoreCase) ||
+                pr.Labels.Contains("architect-approved", StringComparer.OrdinalIgnoreCase) ||
+                pr.Labels.Contains("pm-approved", StringComparer.OrdinalIgnoreCase) ||
+                pr.Labels.Contains("approved", StringComparer.OrdinalIgnoreCase) ||
+                pr.Labels.Contains("tests-added", StringComparer.OrdinalIgnoreCase))
                 return;
 
             // Must have at least some code committed (updated after creation)

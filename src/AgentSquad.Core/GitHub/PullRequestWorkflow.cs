@@ -323,16 +323,29 @@ public partial class PullRequestWorkflow
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(agentName);
 
-        // Check if already marked ready-for-review OR already approved to avoid duplicate comments.
-        // The Architect swaps ready-for-review → architect-approved on approval, so we must check both.
+        // Check if PR has already progressed past "ready for review" — any downstream label means
+        // an agent already reviewed/approved/tested it. Re-posting "ready for review" at this point
+        // is always a duplicate caused by polling loops re-visiting a PR they already completed.
+        // Labels checked: architect-approved, pm-approved, approved, tests-added
         var pr = await _github.GetPullRequestAsync(prNumber, ct);
-        var alreadyApproved = pr is not null && (
-            pr.Labels.Contains(Labels.ArchitectApproved, StringComparer.OrdinalIgnoreCase) ||
-            pr.Labels.Contains(Labels.Approved, StringComparer.OrdinalIgnoreCase));
-        if (alreadyApproved)
+        if (pr is not null)
         {
-            _logger.LogInformation("PR #{Number} already has approval label, skipping ready-for-review", prNumber);
-            return;
+            var progressLabels = new[]
+            {
+                Labels.ArchitectApproved,
+                Labels.PmApproved,
+                Labels.Approved,
+                Labels.TestsAdded
+            };
+            var matchedLabel = progressLabels.FirstOrDefault(l =>
+                pr.Labels.Contains(l, StringComparer.OrdinalIgnoreCase));
+            if (matchedLabel is not null)
+            {
+                _logger.LogInformation(
+                    "PR #{Number} already has downstream label '{Label}', skipping ready-for-review",
+                    prNumber, matchedLabel);
+                return;
+            }
         }
 
         if (pr is not null && pr.Labels.Contains(Labels.ReadyForReview, StringComparer.OrdinalIgnoreCase))
