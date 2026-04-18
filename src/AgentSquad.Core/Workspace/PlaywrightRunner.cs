@@ -41,6 +41,12 @@ public class PlaywrightRunner
     /// <summary>Last time a successful validation occurred.</summary>
     public DateTime? LastValidatedUtc { get; private set; }
 
+    /// <summary>Number of ports in the 5100-5899 range currently in use (occupied).</summary>
+    public int OccupiedPortCount { get; private set; }
+
+    /// <summary>Last time port health was checked.</summary>
+    public DateTime? LastPortCheckUtc { get; private set; }
+
     /// <summary>Event raised when IsReady changes. Dashboard subscribes for live updates.</summary>
     public event Action<bool>? ReadyStateChanged;
 
@@ -125,6 +131,97 @@ public class PlaywrightRunner
 
         if (wasReady)
             ReadyStateChanged?.Invoke(false);
+    }
+
+    /// <summary>
+    /// Check port health across the agent port range (5100-5899).
+    /// Scans a sample of ports and reports how many are occupied.
+    /// Also validates that the configured base port is accessible.
+    /// Logs warnings for any issues that would prevent agents from starting apps.
+    /// </summary>
+    public void ValidatePortHealth(WorkspaceConfig config)
+    {
+        try
+        {
+            var occupiedCount = 0;
+            var samplePorts = new List<int>();
+
+            // Check the configured base port
+            var basePort = 5100;
+            try { basePort = new Uri(config.AppBaseUrl ?? "http://localhost:5100").Port; } catch { }
+            samplePorts.Add(basePort);
+
+            // Sample 20 ports spread across the range to get a health picture
+            for (var i = 0; i < 20; i++)
+                samplePorts.Add(5100 + i * 40); // 5100, 5140, 5180, ... 5860
+
+            foreach (var port in samplePorts.Distinct())
+            {
+                if (!IsPortAvailable(port))
+                {
+                    occupiedCount++;
+                    if (port == basePort)
+                        _logger.LogWarning("PORT HEALTH: Configured base port {Port} is OCCUPIED — agents will use derived ports", port);
+                }
+            }
+
+            OccupiedPortCount = occupiedCount;
+            LastPortCheckUtc = DateTime.UtcNow;
+
+            if (occupiedCount > 10)
+                _logger.LogWarning("PORT HEALTH: {Count}/20 sampled ports occupied — port exhaustion risk. Consider stopping stale app processes.", occupiedCount);
+            else if (occupiedCount > 0)
+                _logger.LogInformation("PORT HEALTH: {Count}/20 sampled ports occupied — normal", occupiedCount);
+            else
+                _logger.LogDebug("PORT HEALTH: All sampled ports available ✓");
+
+            // Clean up stale .playwright-bak files from crashed sessions
+            CleanupStaleBackups(config.RootPath ?? @"C:\Agents");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "PORT HEALTH: check failed");
+        }
+    }
+
+    /// <summary>
+    /// Clean up stale .playwright-bak files left behind by crashed sessions.
+    /// These indicate a previous test run didn't restore files properly.
+    /// </summary>
+    private void CleanupStaleBackups(string rootPath)
+    {
+        try
+        {
+            if (!Directory.Exists(rootPath)) return;
+
+            var staleBackups = Directory.EnumerateFiles(rootPath, "*.playwright-bak", SearchOption.AllDirectories)
+                .Where(f => File.GetLastWriteTimeUtc(f) < DateTime.UtcNow.AddHours(-1))
+                .ToList();
+
+            foreach (var backup in staleBackups)
+            {
+                try
+                {
+                    var original = backup[..^".playwright-bak".Length];
+                    if (File.Exists(original))
+                    {
+                        // Original was already restored or recreated — just delete the stale backup
+                        File.Delete(backup);
+                    }
+                    else
+                    {
+                        // Original is missing — restore from backup
+                        File.Move(backup, original);
+                        _logger.LogInformation("PORT HEALTH: Restored stale backup {File}", Path.GetFileName(original));
+                    }
+                }
+                catch { /* best effort */ }
+            }
+
+            if (staleBackups.Count > 0)
+                _logger.LogInformation("PORT HEALTH: Cleaned up {Count} stale .playwright-bak files", staleBackups.Count);
+        }
+        catch { /* best effort */ }
     }
 
     /// <summary>

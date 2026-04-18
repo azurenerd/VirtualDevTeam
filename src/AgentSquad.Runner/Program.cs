@@ -204,7 +204,8 @@ api.MapGet("/health/diagnostics", (string? agentId, bool? compliant, int? limit,
     Results.Ok(svc.GetDiagnosticHistory(agentId, compliant, limit ?? 200)));
 
 api.MapGet("/health/playwright", (PlaywrightRunner pw) =>
-    Results.Ok(new { pw.IsReady, pw.NotReadyReason, pw.LastValidatedUtc }));
+    Results.Ok(new { pw.IsReady, pw.NotReadyReason, pw.LastValidatedUtc,
+        pw.OccupiedPortCount, pw.LastPortCheckUtc }));
 
 api.MapGet("/models", (DashboardDataService svc) =>
     Results.Ok(svc.GetAvailableModels()));
