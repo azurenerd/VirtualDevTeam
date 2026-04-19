@@ -1048,3 +1048,93 @@ if (_gateCheck.RequiresHuman("pm_spec_review"))
 - Final implementation was ~40% smaller and more reliable than the original plan.
 
 **Rule:** Insert a critique gate between planning and implementation for any non-trivial change. The critique prompt should explicitly ask "is there a simpler invariant we could verify instead of enumerating all failure modes?" Post-implementation critique still has value for correctness, but architectural simplification has to happen before the code is written.
+
+---
+
+# April 2026 Session — Strategy Framework val-e2e
+
+## 46. `Configure<T>.Bind` Appends to Collection Defaults — It Does Not Replace
+
+**Lesson:** `IConfiguration.Bind` / `services.Configure<T>` calls the GETTER of a `List<T>` property and `.Add`s bound items. If the C# default initializer already populates the list (`public List<string> EnabledStrategies { get; set; } = new() { "baseline", "mcp-enhanced" };`), binding `["baseline","mcp-enhanced"]` from `appsettings.json` produces a 4-item list, not a 2-item list.
+
+**What happened:**
+- `StrategyFrameworkConfig.EnabledStrategies` defaulted to `["baseline","mcp-enhanced"]`.
+- `appsettings.Development.json` specified `["baseline","mcp-enhanced"]` (matching the intent).
+- At runtime the orchestrator saw 4 enabled strategies and logged `Orchestrating 4 strategies` — each strategy ran twice.
+- Val-e2e surfaced it immediately because the dashboard showed duplicate candidate rows per run.
+
+**Fix:** Defensive `.Distinct(StringComparer.OrdinalIgnoreCase)` in `StrategyOrchestrator.RunCandidatesAsync` on the enabled list. Kept the default initializer (a dependent unit test relies on it).
+
+**Rule:** For any `List<T>` / `IList<T>` / `IEnumerable<T>` options property, **either** (a) initialize the list empty and require config to populate it, **or** (b) apply a dedup (`.Distinct()` or `.Where(...).ToList()`) at the consumer. Never assume the configured list "replaces" the default — it doesn't.
+
+---
+
+## 47. `.git/config.lock` Races Invisibly Under Parallel `git worktree add`
+
+**Lesson:** Parallel `git worktree add` calls against the same source repo race on `.git/config.lock` during the pre-add phase (when git writes `extensions.worktreeConfig` and reads repo-level config). The failure mode is a cryptic `warning: unable to access '.git/config': Permission denied; fatal: unknown error occurred while reading the configuration files` — with zero mention of "lock" in the message.
+
+**What happened:**
+- Two candidate strategies launched in parallel from `StrategyOrchestrator.RunCandidatesAsync`.
+- Both called `GitWorktreeManager.CreateAsync` on the same `agentRepoPath`.
+- Race condition: one process holds `.git/config.lock`, the other fails with permission-denied cascading errors.
+- One candidate silently lost its worktree; the other succeeded. Orchestration proceeded with only one survivor.
+
+**Fix:** Static `ConcurrentDictionary<string, SemaphoreSlim>` keyed by repo path in `GitWorktreeManager`. Wrap the **pre-add phase only** (prune + `git config extensions.worktreeConfig` + `git worktree add`) in `await repoLock.WaitAsync(ct)`. Post-add, each candidate writes to its own per-worktree `config.worktree` file, so parallel `ExecuteAsync` runs stay fully concurrent.
+
+**Rule:** Git's "worktree is fully parallel" promise has fine print: **the add itself is serialized per repo**. Execution in the worktree is parallel. Any code that calls `git worktree add` from multiple threads/tasks must synchronize at repo granularity.
+
+---
+
+## 48. Emit `Completed(false)` Synchronously on `Started` Path Failures — Never Let Exceptions Propagate to `Task.WhenAll`
+
+**Lesson:** When an orchestrator fans out N tasks via `Task.WhenAll` and each task emits `Started`/`Completed` events, **every `Started` MUST have a matching `Completed` — even on the exception path**. Letting an exception propagate out of one task aborts the whole `WhenAll`, leaves state-store records stuck at `Running`, and corrupts dashboards that filter by state.
+
+**What happened:**
+- `StrategyOrchestrator.RunOneAsync` emitted `CandidateStarted` before calling `_worktree.CreateAsync`.
+- If `CreateAsync` threw, the exception bubbled up to `Task.WhenAll`, which aborted sibling candidates.
+- `CandidateStateStore` never saw a `Completed` event, so the orphaned candidate sat at `state=Running` forever.
+- Dashboard's "active runs" query kept showing the orphan. Restart didn't clear it (checkpoint recovery preserved the stuck state).
+
+**Fix:** Inner `try`/`catch` around `CreateAsync`. Synthesize a failed `StrategyExecutionResult`, emit `CandidateCompleted(succeeded=false, reason="worktree-create: {ex.Message}")`, and return a non-faulted tuple. `WhenAll` sees all N tasks as completed; sibling candidates run to completion; state store sees matching Started/Completed pairs.
+
+**Rule:** Any `Started → Completed` event pair in fan-out code must be paired via `try/finally` or an explicit `try/catch` that synthesizes a failure result. Never rely on the exception path to reach the Completed emitter. Regression test: concurrent + one forced failure + assert sibling tasks completed successfully + assert zero orphans in state store.
+
+---
+
+## 49. val-e2e: Close Open PRs Before Live Runs — Checkpoint Recovery Bypasses New Features
+
+**Lesson:** `SoftwareEngineerAgent` has two independent code paths: (1) resume-existing-PR via `StateStore.LoadAgentTaskCheckpointAsync`, which goes to `single-pass for continued implementation` and **bypasses any new feature added behind a flag**, and (2) fresh-task-assignment, which goes through the new feature. A stale open PR from a prior partial run will route to path 1 and silently defeat the new feature under test.
+
+**What happened:**
+- Twice in a row, val-e2e runs appeared to "ignore" `StrategyFramework.Enabled=true`.
+- Root cause: both runs had a lingering open PR (from the previous partial run that was stopped mid-orchestration). Checkpoint recovery found it and took the resume path.
+- No log line said "bypassing Strategy Framework" — the symptom was just that `/api/strategies/recent` was empty and no ndjson was written.
+
+**Rule:** Before any live validation run of a feature-flagged path, enumerate open PRs and close them (script it — `scripts/close-pr-<n>.ps1`). Assume checkpoint-recovery paths will bypass your feature flag unless you've explicitly audited them. Better fix long-term: route both SE code paths through the same feature-flag gate.
+
+---
+
+## 50. Copilot CLI Doesn't Report Tokens — Cost Attribution Is `$0` Until API-Key Fallback
+
+**Lesson:** The `copilot` CLI binary does not emit usage/token counts in its output. Any cost-tracking infrastructure built on top of it (per-agent budgets, per-strategy cost attribution, cost-based routing) resolves to `$0` and does not fire its enforcement paths. This is a **correctness-adjacent** limitation: the code looks right, the numbers are just always zero.
+
+**What happened:**
+- `StrategyOrchestrator` calls `_budget.Charge` and `_usage.RecordStrategyTokens` after each candidate run.
+- With the default Copilot CLI provider, `exec.TokensUsed=0`, so both calls are no-ops.
+- `/api/strategies/cost` permanently returns `$0` totals.
+- For EMU-pool users this is fine (Microsoft pays the pool), but it means the "cost premium justified" success criterion in the original Interactive CLI Plan can't be measured without switching tiers to an API-key provider (Anthropic/OpenAI/Azure OpenAI direct).
+
+**Rule:** When a provider doesn't report cost data, **document it at the config/README/requirements layer**, don't silently report zeros as if the budget worked. Dashboards should show "N/A — provider does not report" when usage=0 and provider=CopilotCli, to avoid false confidence.
+
+---
+
+## 51. Experiment Data Paths: Relative Paths Resolve Against Runner Cwd (Bin Dir), Not Repo Root
+
+**Lesson:** In `dotnet run --no-build` scenarios, `Environment.CurrentDirectory` is the runner's `bin/Debug/net8.0/` directory, not the repo root. Any relative config path (e.g., `ExperimentDataDirectory = "experiment-data"`) resolves there. Users looking in the repo root see "missing" artifacts that are actually one directory level down in `bin/`.
+
+**What happened:**
+- Val-e2e validated the framework end-to-end, but my first `ls` on `experiment-data/` at repo root was empty.
+- Panic moment — "did ndjson not write?"
+- Actually written fine, just to `src/AgentSquad.Runner/bin/Debug/net8.0/experiment-data/20260419T231321Z.ndjson`.
+
+**Rule:** Either resolve relative paths against `IHostEnvironment.ContentRootPath` in service constructors, or set absolute paths in `appsettings.json`. Document the behavior loudly for anyone debugging "missing" artifacts.

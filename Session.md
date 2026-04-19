@@ -287,7 +287,10 @@ Key settings:
 12. **Standalone dashboard stale agents**: The DB accumulates agent records across restarts. `RecordBoot()` writes `last_boot_utc` to filter to current-run agents only. If dashboard shows old agents, restart the Runner to update the boot timestamp.
 13. **TE data.json**: Blazor apps that depend on `wwwroot/data.json` may fail on fresh clones. `EnsureSampleDataExists()` auto-creates a sample data file if missing.
 
+13. **Strategy Framework worktree leaks**: When enabled (`AgentSquad.StrategyFramework.Enabled=true`), per-candidate git worktrees live under `<agent-repo>/.candidates/<runId>-<strategy>/`. The orchestrator cleans up on exit, but if the runner is killed mid-orchestration they persist. Run `git worktree prune` in the agent repo + delete `.candidates/` if disk fills up. ndjson artifacts go to `experiment-data/` — by default resolved against the runner's cwd (bin dir), not the repo root.
+14. **Copilot CLI reports 0 tokens**: The `copilot` binary doesn't emit usage counts, so per-strategy cost attribution is always `$0` with the default provider. Cost budget enforcement only kicks in when using an API-key fallback (Anthropic/OpenAI/Azure OpenAI direct). Not a bug — documented limitation.
+
 Note: Don't do any long pauses that are more than 1 minute long in the Copilot chat, as that makes it so you ignore me for X minutes--always keep checking back no more than a minute so the chat
 thread isn't blocked to get instructions from me. 
 
-*Last updated: 2026-04-17*
+*Last updated: 2026-04-19 (Strategy Framework Phases 0–6 shipped + val-e2e validated; test suite 723 pass / 0 fail)*

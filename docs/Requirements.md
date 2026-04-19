@@ -50,6 +50,7 @@
 38. [Per-Reviewer Rework Cycle Limits](#37-per-reviewer-rework-cycle-limits)
 39. [Visual Scaffold Placeholder Requirements](#38-visual-scaffold-placeholder-requirements)
 40. [Planned Future Work](#39-planned-future-work)
+41. [Strategy Framework (Phases 0–6)](#40-strategy-framework-phases-06)
 
 ---
 
@@ -2370,5 +2371,108 @@ These bugs were discovered during scenario analysis and fixed. Listed here as re
 
 ### REQ-FUTURE-001: Interactive CLI A/B/C Testing Framework
 
-- **REQ-FUTURE-001a**: `docs/InteractiveCLIPlan.md` captures the design for an A/B/C multi-option parallel-agent testing framework (three agent configurations running side-by-side against the same task so their outputs can be compared). This is planned future work — the plan document is the source of truth for that effort and this Requirements.md only references it.
-- **REQ-FUTURE-001b**: Any new requirement IDs produced while implementing the Interactive CLI framework MUST be added to this section (or a dedicated numbered section) rather than silently muting existing requirements.
+- **REQ-FUTURE-001a**: `docs/InteractiveCLIPlan.md` captures the design for an A/B/C multi-option parallel-agent testing framework (three agent configurations running side-by-side against the same task so their outputs can be compared). ✅ **Implemented** as the Strategy Framework — see §40 for shipped requirements. The plan document remains the design-intent source of truth; implementation details and current status live in `docs/StrategyFramework.md`.
+- **REQ-FUTURE-001b**: Any new requirement IDs produced while implementing the Interactive CLI framework MUST be added to this section (or a dedicated numbered section) rather than silently muting existing requirements. ✅ Satisfied by §40 below.
+
+---
+
+## 40. Strategy Framework (Phases 0–6)
+
+> **Status (2026-04-19):** Phases 0–6 shipped, feature-flagged via `AgentSquad:StrategyFramework:Enabled` (default **OFF**). `val-e2e` live-pipeline validation complete (run `20260419T231321Z`, task T-1926: baseline + mcp-enhanced both ran cleanly, winner=baseline via llm-rank, winner patch applied to PR). See `docs/StrategyFramework.md` for the authoritative status table.
+
+### REQ-STRAT-001: Master Feature Flag
+
+**REQ-STRAT-001a**: The Strategy Framework MUST default to OFF (`AgentSquad:StrategyFramework:Enabled=false`) so existing single-pass SE behaviour is preserved.
+
+**REQ-STRAT-001b**: When the flag is ON, `SoftwareEngineerAgent.WorkOnOwnTasksAsync` MUST call `StrategyOrchestrator.RunCandidatesAsync` after PR creation, replacing the legacy single-pass code-gen step.
+
+**REQ-STRAT-001c**: `StrategyFrameworkConfig.EnabledStrategies` list MUST be deduplicated (case-insensitive) at orchestration time to guard against config-binding duplication (bug found in val-e2e: `Configure<T>.Bind` APPENDS to default list rather than replacing it).
+
+### REQ-STRAT-002: Candidate Isolation via Git Worktrees
+
+**REQ-STRAT-002a**: Each candidate MUST run in its own git worktree under `<agent-repo>/.candidates/<runId>-<strategy>/`. Outputs that resolve outside the worktree MUST be rejected (path containment).
+
+**REQ-STRAT-002b**: Worktree creation across parallel candidates in the same agent repo MUST serialize through a per-repo `SemaphoreSlim` during the pre-add phase (`git config extensions.worktreeConfig` + `git worktree add`) to avoid `.git/config.lock` races (bug #2 from val-e2e).
+
+**REQ-STRAT-002c**: Post-add writes use per-worktree `config.worktree` files, so candidate `ExecuteAsync` calls run fully in parallel after setup.
+
+**REQ-STRAT-002d**: `CreateAsync` failures MUST NOT propagate to `Task.WhenAll`. The orchestrator MUST catch worktree-creation exceptions, emit `CandidateCompleted(succeeded=false, reason="worktree-create: …")`, and return a non-faulted task so sibling candidates keep running (bug #3 from val-e2e).
+
+### REQ-STRAT-003: Strategies Shipped
+
+**REQ-STRAT-003a**: **baseline** — mirrors SE single-pass via shared `SinglePassPromptBuilder`, same prompts, same model tier, same FILE: marker parser.
+
+**REQ-STRAT-003b**: **mcp-enhanced** — same prompts as baseline plus a scoped `WorkspaceReaderMcpServer` MCP server that exposes read-only workspace inspection tools.
+
+**REQ-STRAT-003c**: **agentic-delegation** — feature-flagged OFF by default (not in `EnabledStrategies` default). Uses process-level containment via `Win32JobObject`, `AgenticOutputMonitor`, and `SandboxPostRunValidator`. Opt-in only on trusted dev machines.
+
+### REQ-STRAT-004: Evaluation & Winner Selection
+
+**REQ-STRAT-004a**: Hierarchical gating — build success and test passing are HARD requirements. A candidate that fails to build is eliminated before quality scoring.
+
+**REQ-STRAT-004b**: `LlmJudge` scores surviving candidates on three dimensions: Acceptance Criteria (AC), Design, Readability. Scores are integers 1–10.
+
+**REQ-STRAT-004c**: Tie-breaking order: (1) highest total score, (2) `llm-rank` pairwise comparison, (3) earliest completion time.
+
+**REQ-STRAT-004d**: The evaluator MUST own the frozen test suite — candidate-generated tests are supplementary, not authoritative, so agentic candidates can't inflate pass rates by editing/deleting tests.
+
+### REQ-STRAT-005: Winner Application
+
+**REQ-STRAT-005a**: The winner's patch MUST be applied to the SE's PR branch via `WinnerApplyService` and verified with `dotnet build`.
+
+**REQ-STRAT-005b**: If the post-apply build fails, the orchestrator MUST revert uncommitted changes and the SE MUST fall back to its legacy single-pass flow — no partial-winner state left on the branch.
+
+### REQ-STRAT-006: Sampling, Cost Budget, Adaptive Selector
+
+**REQ-STRAT-006a**: `SamplingPolicy` MUST support at least `always` and percentage-based sampling (0–100%) to reduce the multi-candidate cost impact.
+
+**REQ-STRAT-006b**: `CostBudget` MUST enforce a per-run cap and a per-strategy cap. `AgentUsageTracker.RecordStrategyTokens` rolls up per-strategy token spend for the `/api/strategies/cost` endpoint.
+
+**REQ-STRAT-006c**: `AdaptiveStrategySelector` MUST be registered in DI but feature-flagged off (`StrategyFramework.Adaptive.Enabled`) until `val-e2e` data is available. When on, it picks which strategies to run based on historical experiment-data ndjson.
+
+**REQ-STRAT-006d**: Copilot CLI provider limitation: the `copilot` binary does not report token counts, so `exec.TokensUsed` is always `0` and cost attribution resolves to `$0` when the CLI provider is used. Cost enforcement only binds against API-key providers (Anthropic/OpenAI/Azure OpenAI direct).
+
+### REQ-STRAT-007: Observability
+
+**REQ-STRAT-007a**: Each candidate run MUST be recorded to `experiment-data/<runId>.ndjson` (one JSON record per line) including strategy id, task id, outcome, scores, patch size, elapsed time, tokens, and tie-break reason.
+
+**REQ-STRAT-007b**: The dashboard MUST expose `/api/strategies/active`, `/api/strategies/recent`, and `/api/strategies/cost` REST endpoints, plus a Blazor `/strategies` page that renders both live (SignalR-pushed) and historical data.
+
+**REQ-STRAT-007c**: `/strategies` MUST be visible in both the Runner-embedded dashboard (port 5050) and the standalone dashboard (port 5051). The standalone path uses `HttpStrategiesDataService` polling the Runner API.
+
+### REQ-STRAT-008: Success Criteria (from `docs/InteractiveCLIPlan.md` §Success Criteria)
+
+1. **Strategy outperformance** — At least one strategy consistently beats baseline on AC scores. *Status: requires N≥10 runs; 1 run collected so far (baseline won).*
+2. **Fewer agentic rework cycles** — Agentic candidate produces fewer downstream rework rounds. *Status: agentic is opt-in; untested.*
+3. **Cost premium justified** — Cost premium of pricier strategies justified by quality gains. *Status: can't measure under Copilot CLI (tokens=0); requires API-key fallback.*
+4. **Framework stability** — No crashes, leaked processes, or corrupted PR branches across 10+ pipeline runs. *Status: ✅ 1 clean live run after 3 bug fixes + 178 framework unit tests passing.*
+5. **Dashboard clarity** — Clear visibility into strategy comparisons. *Status: ✅ `/strategies` page + REST endpoints + SignalR push working.*
+
+**Scenario: End-to-end Strategy Framework run (val-e2e)**
+```
+1. Set AgentSquad:StrategyFramework:Enabled=true in appsettings.Development.json
+2. Start Runner; PM assigns a fresh SE task (no open PR with matching title prefix)
+3. SE creates PR on its own branch, then invokes StrategyOrchestrator.RunCandidatesAsync
+4. Orchestrator creates worktrees for each enabled strategy in parallel
+   - Pre-add phase serialized through per-repo SemaphoreSlim
+   - Post-add phase runs fully in parallel
+5. Each strategy generates a patch via its own code-gen path
+6. Evaluator builds each candidate; failures eliminated
+7. LlmJudge scores survivors on AC/Design/Readability
+8. Winner selected via tie-break order (total → llm-rank → earliest)
+9. WinnerApplyService applies winning patch to SE's PR branch + dotnet build
+10. On build success: PR stays open for normal review pipeline
+    On build failure: revert + SE falls back to legacy single-pass
+11. experiment-data/<runId>.ndjson written with full record per candidate
+12. /api/strategies/recent and /strategies dashboard show the run
+```
+
+### REQ-STRAT-009: val-e2e Operator Rules
+
+**REQ-STRAT-009a**: Before a val-e2e run, close all open PRs with titles matching the SE's task prefix — otherwise checkpoint recovery takes the "resume existing PR" path and bypasses the Strategy Framework.
+
+**REQ-STRAT-009b**: Never silently retry a failed val-e2e run — surface the failure mode + ndjson + logs to the operator (live runs spend real pool tokens against the Copilot CLI).
+
+**REQ-STRAT-009c**: `ExperimentDataDirectory` config default is relative (`"experiment-data"`) and resolves against the runner's cwd (bin directory under `dotnet run --no-build`). Set an absolute path in `appsettings.json` if ndjson artifacts need to land at the repo root.
+
+---
