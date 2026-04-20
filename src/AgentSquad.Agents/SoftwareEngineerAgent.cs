@@ -63,6 +63,14 @@ public class SoftwareEngineerAgent : EngineerAgentBase
     private readonly HashSet<int> _reviewedPrNumbers = new();
     private readonly HashSet<int> _forceApprovalPrs = new();
     private readonly HashSet<int> _mergedTestedPrNumbers = new();
+    /// <summary>
+    /// PRs the SE has shipped past implementation (ready-for-review or downstream review labels).
+    /// CurrentPrNumber is cleared once a PR reaches this state so the SE can start the next task
+    /// while the PR continues through review/merge. This set is consulted by
+    /// HandleChangesRequestedAsync and CheckOwnPrStatusAsync to retain ownership semantics for
+    /// review correlation and merge tracking.
+    /// </summary>
+    private readonly HashSet<int> _pastImplementationPrs = new();
     private readonly ConcurrentQueue<int> _reviewQueue = new();
 
     /// <summary>
@@ -322,11 +330,26 @@ public class SoftwareEngineerAgent : EngineerAgentBase
                     if (isLeader && !_allTasksComplete)
                         await EvaluateResourceNeedsAsync(ct);
 
-                    // Priority 0: Continue work on our own in-progress PR before anything else
-                    if (CurrentPrNumber is not null && !await IsOwnPrPastImplementationAsync(ct))
+                    // Priority 0: Continue work on our own in-progress PR before anything else.
+                    // Once the PR reaches "past implementation" (reviewer labels present), hand
+                    // off to review/merge flows so the SE can start the next task in parallel.
+                    if (CurrentPrNumber is not null)
                     {
-                        await ContinueOwnPrImplementationAsync(ct);
-                        continue; // Skip reviews until our own PR is done
+                        if (await IsOwnPrPastImplementationAsync(ct))
+                        {
+                            _pastImplementationPrs.Add(CurrentPrNumber.Value);
+                            Logger.LogInformation(
+                                "SE PR #{PrNumber} past implementation — releasing CurrentPrNumber to pick up next task",
+                                CurrentPrNumber.Value);
+                            CurrentPrNumber = null;
+                            _currentTaskName = null;
+                            Identity.AssignedPullRequest = null;
+                        }
+                        else
+                        {
+                            await ContinueOwnPrImplementationAsync(ct);
+                            continue; // Skip reviews until our own PR is done
+                        }
                     }
                     // Priority 1: Process rework feedback on our own PRs
                     await ProcessOwnReworkAsync(ct);
@@ -3464,59 +3487,80 @@ public class SoftwareEngineerAgent : EngineerAgentBase
 
     /// <summary>
     /// Check if our currently tracked PR has been merged or closed, and clear state so
-    /// the PE can move on to the next task.
+    /// the PE can move on to the next task. Also monitors PRs we've shipped past
+    /// implementation so their merge/close transitions still mark tasks Done.
     /// </summary>
     private async Task CheckOwnPrStatusAsync(CancellationToken ct)
     {
-        if (CurrentPrNumber is null)
-            return;
+        if (CurrentPrNumber is not null)
+        {
+            await CheckSinglePrStatusAsync(CurrentPrNumber.Value, isPast: false, ct);
+        }
 
+        // Snapshot to allow removal during iteration.
+        var pastSnapshot = _pastImplementationPrs.ToArray();
+        foreach (var prNumber in pastSnapshot)
+        {
+            await CheckSinglePrStatusAsync(prNumber, isPast: true, ct);
+        }
+    }
+
+    private async Task CheckSinglePrStatusAsync(int prNumber, bool isPast, CancellationToken ct)
+    {
         try
         {
-            var pr = await GitHub.GetPullRequestAsync(CurrentPrNumber.Value, ct);
-            if (pr is null || !string.Equals(pr.State, "open", StringComparison.OrdinalIgnoreCase))
+            var pr = await GitHub.GetPullRequestAsync(prNumber, ct);
+            if (pr is not null && string.Equals(pr.State, "open", StringComparison.OrdinalIgnoreCase))
+                return;
+
+            var wasMerged = pr?.IsMerged == true;
+            Logger.LogInformation("SE own PR #{PrNumber} is no longer open ({State}, merged={Merged}), clearing tracking",
+                prNumber, pr?.State ?? "unknown", wasMerged);
+
+            // Find the task by matching the PR title or the task manager cache
+            var taskTitle = PullRequestWorkflow.ParseTaskTitleFromTitle(pr?.Title ?? "");
+            var task = taskTitle is not null ? _taskManager.FindByName(taskTitle) : null;
+
+            if (task?.IssueNumber.HasValue == true)
             {
-                var wasMerged = pr?.IsMerged == true;
-                Logger.LogInformation("SE own PR #{PrNumber} is no longer open ({State}, merged={Merged}), clearing tracking",
-                    CurrentPrNumber.Value, pr?.State ?? "unknown", wasMerged);
-
-                // Find the task by matching the PR title or the task manager cache
-                var taskTitle = PullRequestWorkflow.ParseTaskTitleFromTitle(pr?.Title ?? "");
-                var task = taskTitle is not null ? _taskManager.FindByName(taskTitle) : null;
-
-                if (task?.IssueNumber.HasValue == true)
+                if (wasMerged)
                 {
-                    if (wasMerged)
-                    {
-                        await _taskManager.MarkDoneAsync(task.IssueNumber.Value, CurrentPrNumber.Value, ct);
-                        Logger.LogInformation("SE task {TaskId} marked Done (PR #{PrNumber} merged)",
-                            task.Id, CurrentPrNumber.Value);
-                        LogActivity("task", $"✅ Task {task.Id}: {task.Name} completed (PR #{CurrentPrNumber.Value} merged)");
-                    }
-                    else
-                    {
-                        await _taskManager.ResetToPendingAsync(task.IssueNumber.Value, ct);
-                        Logger.LogInformation("SE task {TaskId} reset to Pending (PR #{PrNumber} closed without merge)",
-                            task.Id, CurrentPrNumber.Value);
-                    }
-                }
-
-                CurrentPrNumber = null;
-                Identity.AssignedPullRequest = null;
-
-                if (wasMerged && _allTasksComplete && _integrationPrCreated)
-                {
-                    await SignalEngineeringCompleteAsync(ct);
+                    await _taskManager.MarkDoneAsync(task.IssueNumber.Value, prNumber, ct);
+                    Logger.LogInformation("SE task {TaskId} marked Done (PR #{PrNumber} merged)",
+                        task.Id, prNumber);
+                    LogActivity("task", $"✅ Task {task.Id}: {task.Name} completed (PR #{prNumber} merged)");
                 }
                 else
                 {
-                    UpdateStatus(AgentStatus.Idle, "Ready for next task");
+                    await _taskManager.ResetToPendingAsync(task.IssueNumber.Value, ct);
+                    Logger.LogInformation("SE task {TaskId} reset to Pending (PR #{PrNumber} closed without merge)",
+                        task.Id, prNumber);
                 }
+            }
+
+            if (isPast)
+            {
+                _pastImplementationPrs.Remove(prNumber);
+            }
+            else
+            {
+                CurrentPrNumber = null;
+                _currentTaskName = null;
+                Identity.AssignedPullRequest = null;
+            }
+
+            if (wasMerged && _allTasksComplete && _integrationPrCreated)
+            {
+                await SignalEngineeringCompleteAsync(ct);
+            }
+            else if (!isPast)
+            {
+                UpdateStatus(AgentStatus.Idle, "Ready for next task");
             }
         }
         catch (Exception ex)
         {
-            Logger.LogWarning(ex, "Failed to check own PR #{PrNumber} status", CurrentPrNumber);
+            Logger.LogWarning(ex, "Failed to check own PR #{PrNumber} status", prNumber);
         }
     }
 
@@ -4135,8 +4179,10 @@ public class SoftwareEngineerAgent : EngineerAgentBase
 
     protected override Task HandleChangesRequestedAsync(ChangesRequestedMessage message, CancellationToken ct)
     {
-        // Check if this is our own PR (PE is working on it)
-        var isOurPr = CurrentPrNumber == message.PrNumber;
+        // This is our own PR if we're currently implementing it, or if we shipped it past
+        // implementation and it's still being tracked for review/merge.
+        var isOurPr = CurrentPrNumber == message.PrNumber
+            || _pastImplementationPrs.Contains(message.PrNumber);
 
         if (!isOurPr)
             return Task.CompletedTask;
