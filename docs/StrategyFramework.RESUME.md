@@ -10,6 +10,46 @@ plus the dependency edges. Re-import into a new session's SQL db on resume.
 - Pending: 24
 - Solution build: ✅ clean
 - Tests: ✅ 728 / 728 (was 606/616 — 10 Dashboard E2E env failures are now passing in current runs)
+- **End-to-end pipeline: ✅ VALIDATED (2026-04-20 02:51)** — PM review → SE merge → T4 spawned 3 strategies → **agentic-delegation selected as winner** (79 tool-calls, 287s wall) → shipped to PR #2071.
+
+## Live end-to-end evidence (2026-04-20 run `ts=20260420-024248`)
+
+**T1 (PR #2070)**: PM approved after restart ("No new commits since last PM review — approving to unblock") → SE merged → task T-2059 marked Done.
+
+**T4 (PR #2071)** — full Strategy Framework cycle:
+
+```
+Orchestrating 3 strategies for task T4: baseline, mcp-enhanced, agentic-delegation
+Created worktree .../T4/baseline-4d6109e1
+Created worktree .../T4/mcp-enhanced-29118183
+Created worktree .../T4/agentic-delegation-554379e6
+BaselineCodeGenerator wrote 3/3 file(s) for task T4
+BaselineCodeGenerator wrote 2/2 file(s) for task T4
+AgenticDelegationStrategy succeeded for task T4 (tool-calls: 79, wall: 287.4571532s)
+Persisted agentic session log: experiment-data/20260420T075125Z-T4-agentic.log
+Wrote experiment record: run=20260420T074258Z task=T4 winner=agentic-delegation
+Strategy framework shipped winner agentic-delegation for task T4 on PR #2071
+```
+
+Answer to the long-standing question "has the agentic third option ever finished with correct output yet?" — **YES, as of this run.**
+
+## Session commits (2026-04-20 evening)
+
+Applied in order on top of `fde623f`:
+
+- `54ecc47` — fix(agentic): diff against base SHA so committed changes show up (the original empty-patch bug)
+- `3f31c6d` — fix(se): don't re-review PRs the strategy already shipped
+- `fde623f` — fix(se): parallel-progression HashSet (`_pastImplementationPrs`)
+- `1f27af3` — fix(pm): HEAD-SHA-keyed review blacklist (re-review when SE pushes fixes)
+- `063f3cf` — fix(pm): bypass comment-marker gate when HEAD SHA is known-new
+- `771f4a9` — fix(pm): drop comment-marker gate; rely on HEAD SHA + pm-approved label
+- `c9a5f7d` — diag: PM main-loop step logging (made the stale-DLL bug findable)
+- `3b75647` — fix(se): restore PR ownership from GitHub on restart so late CHANGES REQUESTED is handled
+
+## Gotchas uncovered this session
+
+- **Stale DLL copies**: `dotnet build src/AgentSquad.Agents/...` does **not** refresh `src/AgentSquad.Runner/bin/Debug/net8.0/AgentSquad.Agents.dll`. Always build the Runner project (or the whole solution) so referenced DLLs are copied into the host's bin. Symptom: code changes appear to do nothing at runtime.
+- **Worktree cleanup flakiness on Windows**: `git worktree remove` can fail with "locked" even after the process exits; fallback directory delete sometimes also fails. Non-fatal — next task uses a fresh hash-suffixed dir.
 
 ## Resolved follow-ups
 
