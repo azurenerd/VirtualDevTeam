@@ -102,13 +102,28 @@ public class GitWorktreeManager
 
         _logger.LogInformation("Created worktree {Path} @ {Sha} for strategy {Strategy}",
             worktreePath, baseSha, strategyId);
-        return new WorktreeHandle(this, agentRepoPath, worktreePath);
+        return new WorktreeHandle(this, agentRepoPath, worktreePath, baseSha);
     }
 
     /// <summary>
-    /// Extracts a patch (binary-safe) for all changes in the worktree relative to its
-    /// base commit. Returns empty string when no changes.
+    /// Extracts a patch (binary-safe) for all changes in the worktree relative to
+    /// the <paramref name="baseSha"/> the worktree was created at. Returns empty
+    /// string when no changes.
     ///
+    /// <para>
+    /// Why <c>baseSha</c> and not <c>HEAD</c>: some strategies — notably the
+    /// agentic <c>copilot --allow-all</c> session — run <c>git add -A</c> +
+    /// <c>git commit</c> themselves as part of their normal tool use. After
+    /// such a run <c>git diff HEAD</c> is empty (all changes are already
+    /// committed), but the candidate has produced real work. Diffing against
+    /// the base SHA captures both cases uniformly:
+    ///  - Strategy never commits → <c>git add -A</c> stages the working tree,
+    ///    and <c>git diff base</c> sees the staged-but-uncommitted changes.
+    ///  - Strategy committed during its run → <c>git diff base</c> walks from
+    ///    the pre-run SHA to HEAD+index, covering everything in between.
+    /// </para>
+    ///
+    /// <para>
     /// CRITICAL SECURITY NOTE: the worktree may have been mutated by a sandboxed
     /// agentic session — including its <c>.git/config</c>, <c>.gitattributes</c>,
     /// hooks, and filter configuration. We therefore run git with a full set of
@@ -116,15 +131,107 @@ public class GitWorktreeManager
     /// vector (external diff, textconv, LFS filters, custom hooks, attributes-
     /// file, mergetool drivers). Without these, a hostile worktree could run
     /// arbitrary host-side code during <c>git add</c>/<c>git diff</c>.
+    /// </para>
     /// </summary>
-    public async Task<string> ExtractPatchAsync(string worktreePath, CancellationToken ct)
+    public async Task<string> ExtractPatchAsync(string worktreePath, string baseSha, CancellationToken ct)
     {
-        await RunGitHardenedAsync(worktreePath, new[] { "add", "-A" }, ct);
+        ArgumentException.ThrowIfNullOrWhiteSpace(baseSha);
+        // The agentic strategy materializes its per-session HOME / APPDATA /
+        // LOCALAPPDATA sandbox under <worktree>/.sandbox/. Those trees can contain
+        // deeply-nested copilot-CLI package files whose paths exceed Windows
+        // MAX_PATH and would cause `git add -A` to fail with "Filename too long".
+        // Telling git to ignore the sandbox via the worktree-local info/exclude
+        // is the cleanest fix: it avoids (a) the "Filename too long" walk, and
+        // (b) pathspec-exclude tricks — which themselves blow up with "paths are
+        // ignored by one of your .gitignore files" when the user's global
+        // core.excludesfile already lists .sandbox. The sandbox is scaffolding;
+        // it is never part of the candidate's output.
+        await EnsureSandboxExcludedAsync(worktreePath, ct);
+
+        // Best-effort: stage any uncommitted/untracked work so `git diff base`
+        // sees it. If the strategy already committed everything (agentic case),
+        // `git add -A` is a cheap no-op.
+        try
+        {
+            await RunGitHardenedAsync(worktreePath, new[] { "add", "-A" }, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "ExtractPatch: git add -A failed in worktree {Path} — diff will only reflect already-committed changes",
+                worktreePath);
+        }
+
         var diff = await RunGitHardenedCaptureAsync(
             worktreePath,
-            new[] { "diff", "HEAD", "--binary", "--full-index", "--no-ext-diff", "--no-textconv" },
+            new[] { "diff", baseSha, "--binary", "--full-index", "--no-ext-diff", "--no-textconv" },
             ct);
+
+        if (diff.Length == 0)
+        {
+            // Keep a compact diagnostic trail for empty-patch investigations. Not
+            // all empty diffs are bugs (e.g. a strategy that legitimately produced
+            // no changes), but when they ARE unexpected we want enough context to
+            // distinguish the reasons: did git see the files? Did HEAD advance?
+            try
+            {
+                var porcelain = await RunGitHardenedCaptureAsync(
+                    worktreePath, new[] { "status", "--porcelain=v1", "--untracked-files=all" }, ct);
+                var head = (await RunGitHardenedCaptureAsync(
+                    worktreePath, new[] { "rev-parse", "--short", "HEAD" }, ct)).Trim();
+                var shortBase = baseSha.Length >= 7 ? baseSha[..7] : baseSha;
+                _logger.LogWarning(
+                    "ExtractPatch produced EMPTY diff in {Path} (base={Base} HEAD={Head}) — porcelain-lines={PLen}, porcelain-head:\n{Porcelain}",
+                    worktreePath, shortBase, head,
+                    porcelain.Split('\n').Length,
+                    porcelain.Length > 1024 ? porcelain[..1024] : porcelain);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "ExtractPatch: empty-diff diagnostic failed");
+            }
+        }
         return diff;
+    }
+
+    /// <summary>
+    /// Writes <c>.sandbox/</c> to the worktree-local <c>info/exclude</c> file
+    /// so that subsequent <c>git add -A</c> invocations skip the agentic sandbox
+    /// scaffolding without requiring pathspec-exclude tokens. Idempotent.
+    /// Uses <c>git rev-parse --git-path info/exclude</c> so the correct path
+    /// resolves for both normal repos and linked worktrees (where the per-
+    /// worktree excludes live under <c>.git/worktrees/&lt;name&gt;/info/exclude</c>).
+    /// </summary>
+    private async Task EnsureSandboxExcludedAsync(string worktreePath, CancellationToken ct)
+    {
+        try
+        {
+            var excludeRel = (await RunGitHardenedCaptureAsync(
+                worktreePath, new[] { "rev-parse", "--git-path", "info/exclude" }, ct)).Trim();
+            if (string.IsNullOrWhiteSpace(excludeRel)) return;
+            var excludeFull = Path.IsPathRooted(excludeRel)
+                ? excludeRel
+                : Path.Combine(worktreePath, excludeRel);
+            var dir = Path.GetDirectoryName(excludeFull);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            var existing = File.Exists(excludeFull)
+                ? await File.ReadAllTextAsync(excludeFull, ct)
+                : string.Empty;
+            var already = existing
+                .Split('\n')
+                .Select(l => l.Trim().TrimEnd('\r'))
+                .Any(l => l == ".sandbox/" || l == ".sandbox" || l == "/.sandbox" || l == "/.sandbox/");
+            if (!already)
+            {
+                var prefix = (existing.Length == 0 || existing.EndsWith('\n')) ? string.Empty : "\n";
+                await File.AppendAllTextAsync(excludeFull, prefix + ".sandbox/\n", ct);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Failed to add .sandbox/ to worktree info/exclude; patch extraction may fail on deep agentic sandbox trees");
+        }
     }
 
     /// <summary>
@@ -424,13 +531,21 @@ public sealed class WorktreeHandle : IAsyncDisposable
     private readonly GitWorktreeManager _mgr;
     public string AgentRepoPath { get; }
     public string Path { get; }
+    /// <summary>
+    /// The commit SHA the worktree was created at. Used by <see cref="GitWorktreeManager.ExtractPatchAsync"/>
+    /// to compute the full change set even when the strategy commits mid-run
+    /// (notably the agentic CLI, which invokes `git add -A && git commit`
+    /// during its own tool use — making `git diff HEAD` return nothing).
+    /// </summary>
+    public string BaseSha { get; }
     private int _disposed;
 
-    internal WorktreeHandle(GitWorktreeManager mgr, string agentRepoPath, string path)
+    internal WorktreeHandle(GitWorktreeManager mgr, string agentRepoPath, string path, string baseSha)
     {
         _mgr = mgr;
         AgentRepoPath = agentRepoPath;
         Path = path;
+        BaseSha = baseSha;
     }
 
     public async ValueTask DisposeAsync()

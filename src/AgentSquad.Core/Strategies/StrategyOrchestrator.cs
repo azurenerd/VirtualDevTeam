@@ -236,7 +236,7 @@ public class StrategyOrchestrator
                 exec = await strategy.ExecuteAsync(invocation, timeoutCts.Token);
                 if (exec.Succeeded)
                 {
-                    patch = await _worktree.ExtractPatchAsync(handle.Path, ct);
+                    patch = await _worktree.ExtractPatchAsync(handle.Path, handle.BaseSha, ct);
                 }
             }
             catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !ct.IsCancellationRequested)
