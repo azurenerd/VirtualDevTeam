@@ -144,13 +144,21 @@ public class ProgramManagerAgent : AgentBase
         {
             try
             {
+                Logger.LogInformation("PM loop: CheckExecutiveResponses");
                 await CheckExecutiveResponsesAsync(ct);
+                Logger.LogInformation("PM loop: MonitorTeamStatus");
                 await MonitorTeamStatusAsync(ct);
+                Logger.LogInformation("PM loop: HandleResourceRequests");
                 await HandleResourceRequestsAsync(ct);
+                Logger.LogInformation("PM loop: HandleBlockers");
                 await HandleBlockersAsync(ct);
+                Logger.LogInformation("PM loop: ProcessClarificationRequests");
                 await ProcessClarificationRequestsAsync(ct);
+                Logger.LogInformation("PM loop: ReviewPullRequests (entering)");
                 await ReviewPullRequestsAsync(ct);
+                Logger.LogInformation("PM loop: ReviewEnhancementIssueCompletion");
                 await ReviewEnhancementIssueCompletionAsync(ct);
+                Logger.LogInformation("PM loop: UpdateProjectTracking");
                 await UpdateProjectTrackingAsync(ct);
 
                 await RefreshDiagnosticWithMemoryAsync(ct);
@@ -904,7 +912,13 @@ public class ProgramManagerAgent : AgentBase
             }
 
             if (prNumbersToReview.Count == 0)
+            {
+                Logger.LogDebug("PM review poll: 0 PRs eligible");
                 return;
+            }
+
+            Logger.LogInformation("PM review poll: {Count} PR(s) eligible for review: {Numbers}",
+                prNumbersToReview.Count, string.Join(",", prNumbersToReview));
 
             foreach (var prNumber in prNumbersToReview)
             {
