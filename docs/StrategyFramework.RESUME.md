@@ -11,6 +11,11 @@ plus the dependency edges. Re-import into a new session's SQL db on resume.
 - Solution build: ✅ clean
 - Tests: ✅ 728 / 728 (was 606/616 — 10 Dashboard E2E env failures are now passing in current runs)
 - **End-to-end pipeline: ✅ VALIDATED (2026-04-20 02:51)** — PM review → SE merge → T4 spawned 3 strategies → **agentic-delegation selected as winner** (79 tool-calls, 287s wall) → shipped to PR #2071.
+- **Full-run completion: ✅ VALIDATED (2026-04-20, runner started 09:22:59)** — All 10 engineering tasks merged (PRs #2070-#2079). T-FINAL integration concluded `No integration fixes needed — all tasks cleanly integrated`. Agentic-delegation won 6/10 (T3, T4, T7, T8, T9, T10); baseline won 4/10 (T2, T5, T6, and one tie); mcp-enhanced never won.
+- **Transient GitHub API retry fix shipped** (commit `2fcb0fe`, 2026-04-20): `WithTransientRetryAsync<T>` + `IsTransient` classifier in `GitHubService.cs` wraps `AddPullRequestCommentAsync`, `AddPullRequestReviewAsync`, `UpdatePullRequestAsync` (PR update + label replace). Triggered by the PR #2075 stall when architect's approval POST hit `HttpIOException: response ended prematurely`. Retry helper did not need to fire in the subsequent full run (no transient flakes observed), but wraps the previously-identified failure path.
+- **Outstanding follow-up todos** (post-run):
+  - `harden-github-api-retries`: extend retry coverage to ~20 remaining write methods (CreatePR, MergePR, CreateIssue, UpdateIssue, AddLabels, UpdateBranch, …). Consider a retry `DelegatingHandler` at the Octokit HttpClient layer, + a `github.api.transient_retries` dashboard metric, + integration test simulating `HttpIOException`.
+  - `throughput-optimize-pr-cycle`: PR cycle averaged ~45 min/PR overnight (only ~8 merged in 6-8 hr). Profile per-phase timings (SE gen → 3-strategy race → Architect → TE → PM), run the 3 strategies in parallel threadpool instead of serial (potential 3× speedup), drop `mcp-enhanced` (never wins), reconsider `MaxReworkCycles=1` auto-regen burn, fix Windows worktree `Directory.Delete` flake, and surface per-phase histograms in the dashboard.
 
 ## Live end-to-end evidence (2026-04-20 run `ts=20260420-024248`)
 
