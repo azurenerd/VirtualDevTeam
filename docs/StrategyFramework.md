@@ -15,8 +15,9 @@
 | 4 | Dashboard `/strategies` page | ✅ Done |
 | 5 | Adaptive selector + sampling + budget | ✅ Done (adaptive selector feature-flagged off until `val-e2e` data exists) |
 | 6 | Per-strategy cost attribution in `AgentUsageTracker` | ✅ Done |
-| val-e2e | End-to-end live-pipeline run against real `copilot` binary | ✅ Done (run `20260419T231321Z`: both candidates succeeded, baseline won by llm-rank, ndjson written, winner patch applied to PR #1931) |
-| val-success-criteria | Validate success criteria from the original design doc | ⚠️ Partial — framework stability (#4) and dashboard visibility (#5) demonstrated; strategy-outperformance (#1) needs N≥10 runs; agentic (#2) still opt-in; CLI provider reports 0 tokens so cost premium (#3) can't be measured until API-key fallback path is exercised |
+| val-e2e | End-to-end live-pipeline run against real `copilot` binary | ✅ Done. Run `20260419T231321Z` (2 strategies): baseline won by llm-rank, winner applied to PR #1931. Run `20260420T021841Z` (3 strategies, all parallel): baseline timeout@180s, mcp-enhanced gate2-build env fail, agentic-delegation gate1 empty-patch but **CLI ran 137 tool calls in 445s — first successful agentic session, bug #3 VALIDATED.** Commit `7bf9f72` ships all 3 val-e2e bug fixes. |
+| val-success-criteria | Validate success criteria from the original design doc | ⚠️ Partial — framework stability (#4) and dashboard visibility (#5) demonstrated; parallel 3-strategy execution confirmed via `StrategyOrchestrator.Task.WhenAll`; strategy-outperformance (#1) needs N≥10 runs with winners applied; agentic (#2) NOW RUNS but empties patch (separate follow-up: `agentic-empty-patch`); CLI provider reports 0 tokens so cost premium (#3) can't be measured until API-key fallback path is exercised |
+| agentic-empty-patch | Follow-up: agentic CLI runs 137 tool calls over 445s but writes 0 files to worktree. Either CLI is operating read-only, writing outside worktree, or the prompt convinces it there's nothing to do. Needs investigation of `ExecuteAgenticSessionAsync` sandbox + prompt shape. | 🔬 Follow-up |
 
 The live SE pipeline now calls `StrategyOrchestrator.RunCandidatesAsync` from
 `SoftwareEngineerAgent.WorkOnOwnTasksAsync` after PR creation, but **only when
