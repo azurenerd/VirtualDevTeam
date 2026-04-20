@@ -339,6 +339,23 @@ public class LocalWorkspace
             {
                 await RunGitAsync("push", "origin", branchName, "--force-with-lease", ct: ct);
             }
+            catch (InvalidOperationException ex) when (IsWorkflowScopeRejection(ex.Message))
+            {
+                // GitHub rejected the push because the PAT lacks `workflow` scope but the
+                // commit touches .github/workflows/**. Recover by stripping those files
+                // from the unpushed commits and retrying once. Preserves all non-workflow
+                // code so baseline/strategy output isn't thrown away over a CI-file policy.
+                _logger.LogWarning("[{Agent}] Push rejected by workflow-scope policy for {Branch}; stripping .github/workflows files and retrying",
+                    _agentId, branchName);
+                var stripped = await StripWorkflowFilesFromUnpushedCommitsAsync(branchName, ct);
+                if (!stripped)
+                {
+                    throw; // couldn't recover — surface original error
+                }
+                await RunGitAsync("push", "origin", branchName, "--force-with-lease", ct: ct);
+                _logger.LogWarning("[{Agent}] Pushed {Branch} after stripping .github/workflows/** — PAT missing `workflow` scope",
+                    _agentId, branchName);
+            }
             catch
             {
                 // If --force-with-lease still fails after fetch (e.g., API commit race),
@@ -353,6 +370,79 @@ public class LocalWorkspace
         finally
         {
             _gitLock.Release();
+        }
+    }
+
+    private static bool IsWorkflowScopeRejection(string? stderr)
+    {
+        if (string.IsNullOrEmpty(stderr)) return false;
+        return stderr.Contains("workflow` scope", StringComparison.Ordinal)
+            || stderr.Contains("workflow scope", StringComparison.Ordinal)
+            || (stderr.Contains(".github/workflows/", StringComparison.Ordinal)
+                && stderr.Contains("refusing", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// Remove any .github/workflows/** files from unpushed commits on the current branch.
+    /// For files Added in the unpushed range → git rm them. For files Modified → restore
+    /// from origin/&lt;branch&gt;. Then amends the last commit with the cleanup. Returns true
+    /// if at least one workflow file was stripped and a push retry is appropriate.
+    /// </summary>
+    private async Task<bool> StripWorkflowFilesFromUnpushedCommitsAsync(string branchName, CancellationToken ct)
+    {
+        try
+        {
+            // Find the range of unpushed commits: origin/<branch>..HEAD
+            var remoteRef = $"origin/{branchName}";
+            var hasRemote = (await RunGitAsync("rev-parse", "--verify", remoteRef, null!, ct: ct, throwOnError: false)).Success;
+            var range = hasRemote ? $"{remoteRef}..HEAD" : "HEAD";
+
+            // List workflow files that are Added or Modified in the unpushed range.
+            var diffArgs = hasRemote
+                ? new[] { "diff", "--name-status", range, "--", ".github/workflows/" }
+                : new[] { "log", "--name-status", "--pretty=format:", "HEAD", "--", ".github/workflows/" };
+            var diff = await RunGitCoreAsync(diffArgs, RepoPath, throwOnError: false, ct);
+            if (!diff.Success || string.IsNullOrWhiteSpace(diff.StandardOutput))
+                return false;
+
+            var stripped = 0;
+            foreach (var raw in diff.StandardOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var line = raw.Trim();
+                if (line.Length == 0) continue;
+                // Format: "A\tpath" or "M\tpath" or "D\tpath" (ignore Delete — already gone)
+                var tab = line.IndexOf('\t');
+                if (tab < 1) continue;
+                var status = line[..tab].Trim();
+                var path = line[(tab + 1)..].Trim();
+                if (!path.StartsWith(".github/workflows/", StringComparison.Ordinal)) continue;
+
+                if (status.StartsWith("A", StringComparison.Ordinal))
+                {
+                    await RunGitAsync("rm", "-f", "--cached", path, ct: ct, throwOnError: false);
+                    var full = Path.Combine(RepoPath, path);
+                    try { if (File.Exists(full)) File.Delete(full); } catch { }
+                    stripped++;
+                }
+                else if (status.StartsWith("M", StringComparison.Ordinal) && hasRemote)
+                {
+                    await RunGitAsync("checkout", remoteRef, "--", path, ct: ct, throwOnError: false);
+                    stripped++;
+                }
+            }
+
+            if (stripped == 0)
+                return false;
+
+            // Stage + amend so the push carries the cleaned tree.
+            await RunGitAsync("add", "-A", null!, null!, ct: ct, throwOnError: false);
+            await RunGitAsync("commit", "--amend", "--no-edit", null!, ct: ct, throwOnError: false);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[{Agent}] Failed to strip workflow files from unpushed commits on {Branch}", _agentId, branchName);
+            return false;
         }
     }
 

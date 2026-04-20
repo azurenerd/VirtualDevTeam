@@ -2570,7 +2570,25 @@ public class SoftwareEngineerAgent : EngineerAgentBase
             var fullMessage = StrategyTrailers.Append($"{subject}\n\n{commitBody}\n", trailers);
 
             await Workspace.CommitAsync(fullMessage, ct);
-            await Workspace.PushAsync(branchName, ct);
+
+            // Publish: treat push failures as PUBLISH errors (NOT generation errors).
+            // After a successful commit we must NEVER revert or fall back to legacy —
+            // doing so throws away perfectly-good generated code. On push failure, log
+            // the error, leave the commit in place (next SE loop will push again), and
+            // return true so caller doesn't run legacy code-gen on top of our committed work.
+            try
+            {
+                await Workspace.PushAsync(branchName, ct);
+            }
+            catch (Exception pushEx)
+            {
+                Logger.LogError(pushEx,
+                    "Strategy framework: committed winner {Strategy} for task {TaskId} but push to {Branch} failed — " +
+                    "commit preserved locally; SE outer loop will retry push. Will NOT revert or fall back to legacy.",
+                    winner.StrategyId, task.Id, branchName);
+                // Return true: generation succeeded and is committed. Do NOT retry generation.
+                return true;
+            }
 
             Logger.LogInformation(
                 "Strategy framework shipped winner {Strategy} for task {TaskId} on PR #{PrNumber}",
@@ -2585,6 +2603,8 @@ public class SoftwareEngineerAgent : EngineerAgentBase
         {
             Logger.LogWarning(ex,
                 "Strategy framework path threw for task {TaskId}; falling back to legacy code-gen", task.Id);
+            // Only revert UNCOMMITTED changes — never destroy a committed winner.
+            // The revert only runs here (pre-commit failure path).
             try { await Workspace.RevertUncommittedChangesAsync(ct); } catch { }
             return false;
         }

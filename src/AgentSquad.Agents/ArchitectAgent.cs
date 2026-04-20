@@ -909,6 +909,30 @@ public class ArchitectAgent : AgentBase
                         _reviewedPrNumbers.Add(prNumber);
                         continue;
                     }
+
+                    // SAFETY GATE: refuse to force-approve a PR that has no substantive
+                    // production code changes. This catches the pathological case where
+                    // SE's strategy push failed, the winner was reverted, and the branch
+                    // holds only a task marker + test stubs (no .sln, .csproj, source code).
+                    // Force-approving such a PR ships a broken scaffold and triggers a TE loop.
+                    if (await HasNoSubstantiveProductionCodeAsync(prNumber, ct))
+                    {
+                        Logger.LogWarning(
+                            "PR #{Number} has no substantive production code — refusing force-approval. " +
+                            "Requesting SE resubmit with real scaffolding content.",
+                            prNumber);
+                        await _prWorkflow.RequestChangesAsync(prNumber, "Architect",
+                            "🛑 **Force-approval refused — PR has no production code.**\n\n" +
+                            "The branch contains only task markers / test stubs / workflow files — no `.sln`, `.csproj`, " +
+                            "source files, or components. This usually indicates a failed code-generation or push. " +
+                            "The SoftwareEngineer must push actual scaffolding (solution, project files, program entry, " +
+                            "models/services/components) before this PR can be reviewed.\n\n" +
+                            "Resetting rework counter — no force-approval will be granted until substantive code lands.",
+                            ct);
+                        _reviewedPrNumbers.Add(prNumber);
+                        continue;
+                    }
+
                     reviewResult = new StructuredReviewResult
                     {
                         Verdict = "APPROVED",
@@ -923,16 +947,13 @@ public class ArchitectAgent : AgentBase
                     var hasNewCommits = await _prWorkflow.HasNewCommitsSinceReviewAsync(prNumber, "Architect", ct);
                     if (!hasNewCommits)
                     {
-                        Logger.LogWarning("No new commits on PR #{Number} since last Architect review — approving to unblock", prNumber);
-                        reviewResult = new StructuredReviewResult
-                        {
-                            Verdict = "APPROVED",
-                            Summary = "No new code commits detected since last review. " +
-                                "The author marked the PR as ready but did not push file changes. " +
-                                "Approving to avoid blocking progress — previous feedback still applies.",
-                            RiskLevel = ReviewRiskLevel.Low,
-                            Comments = []
-                        };
+                        // NO-NEW-COMMITS REFUSAL: do not auto-approve when HEAD hasn't advanced.
+                        // Previously this path approved "to unblock" which enabled broken PRs
+                        // (like the 0-production-file scaffolding failure) to sail through.
+                        Logger.LogWarning("No new commits on PR #{Number} since last Architect review — refusing re-review",
+                            prNumber);
+                        _reviewedPrNumbers.Add(prNumber);
+                        continue;
                     }
                     else
                     {
@@ -1161,6 +1182,67 @@ public class ArchitectAgent : AgentBase
         {
             Logger.LogWarning(ex, "Failed to resolve review threads on PR #{Number} — approval still proceeds", prNumber);
         }
+    }
+
+    /// <summary>
+    /// Returns true when a PR has NO substantive production code changes — i.e., every
+    /// changed file falls into an excluded category (task markers, tests, docs/markdown,
+    /// .github workflows, snapshots). Used to refuse force-approval on empty/broken
+    /// scaffolding PRs where the strategy push failed and nothing real was shipped.
+    /// </summary>
+    private async Task<bool> HasNoSubstantiveProductionCodeAsync(int prNumber, CancellationToken ct)
+    {
+        try
+        {
+            var files = await _github.GetPullRequestFilesWithPatchAsync(prNumber, ct);
+            if (files is null || files.Count == 0) return true;
+
+            foreach (var f in files)
+            {
+                var path = (f.FileName ?? "").Replace('\\', '/');
+                if (string.IsNullOrEmpty(path)) continue;
+                if (IsExcludedFromSubstantiveCheck(path)) continue;
+                // Found at least one non-excluded file → treat as substantive.
+                return false;
+            }
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Could not inspect PR #{Number} files for substantive-code check — treating as substantive", prNumber);
+            return false; // fail-open: don't block approval when GitHub API is flaky
+        }
+    }
+
+    private static bool IsExcludedFromSubstantiveCheck(string path)
+    {
+        // Task/agent metadata
+        if (path.StartsWith(".agentsquad/", StringComparison.OrdinalIgnoreCase)) return true;
+        // CI / workflow files (separate concern)
+        if (path.StartsWith(".github/", StringComparison.OrdinalIgnoreCase)) return true;
+        // Tests folders
+        if (path.StartsWith("tests/", StringComparison.OrdinalIgnoreCase)
+            || path.StartsWith("test/", StringComparison.OrdinalIgnoreCase)
+            || path.Contains("/tests/", StringComparison.OrdinalIgnoreCase)
+            || path.Contains("/test/", StringComparison.OrdinalIgnoreCase)
+            || path.Contains("__tests__", StringComparison.OrdinalIgnoreCase))
+            return true;
+        // Test file naming conventions
+        var name = Path.GetFileName(path);
+        if (name.Contains("Tests.", StringComparison.OrdinalIgnoreCase)
+            || name.EndsWith(".test.ts", StringComparison.OrdinalIgnoreCase)
+            || name.EndsWith(".test.js", StringComparison.OrdinalIgnoreCase)
+            || name.EndsWith(".test.tsx", StringComparison.OrdinalIgnoreCase)
+            || name.EndsWith(".spec.ts", StringComparison.OrdinalIgnoreCase)
+            || name.EndsWith(".spec.js", StringComparison.OrdinalIgnoreCase)
+            || name.EndsWith(".Tests.cs", StringComparison.OrdinalIgnoreCase))
+            return true;
+        // Docs / markdown / assets
+        var ext = Path.GetExtension(path).ToLowerInvariant();
+        if (ext is ".md" or ".txt" or ".png" or ".jpg" or ".jpeg" or ".gif" or ".svg" or ".ico") return true;
+        // Snapshot / baseline artifacts
+        if (path.Contains("__snapshots__", StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
     }
 
     private async Task<StructuredReviewResult> EvaluateArchitecturalAlignmentAsync(

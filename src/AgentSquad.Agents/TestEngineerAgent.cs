@@ -72,6 +72,11 @@ public class TestEngineerAgent : AgentBase
     private readonly HashSet<int> _sessionTestedPRs = new(); // Only PRs actually tested this session (not skipped old ones)
     private readonly Dictionary<int, int> _testFailureAttempts = new(); // Track transient failure retries per PR
     private const int MaxTestFailureRetries = 2;
+    // Per-PR tracking of how many times we've posted "base code doesn't build" against
+    // the same HEAD SHA. Prevents the TE-Architect deadlock where SE cannot push code,
+    // PM/Architect can't approve, and TE loops posting identical comments every poll.
+    private readonly Dictionary<int, (string Sha, int Count)> _baseBuildFailureAttempts = new();
+    private const int MaxBaseBuildFailurePostsPerSha = 2;
     private readonly List<IDisposable> _subscriptions = new();
     private readonly ConcurrentQueue<(int PrNumber, string PrTitle, string Feedback, string Reviewer)> _reworkQueue = new();
     private readonly Dictionary<int, int> _reworkAttempts = new();
@@ -809,11 +814,55 @@ public class TestEngineerAgent : AgentBase
                 ? string.Join("\n", baseBuild.ParsedErrors.Take(10))
                 : truncatedErrors;
 
+            // Deduplicate "base code doesn't build" posts by PR HEAD SHA. After
+            // MaxBaseBuildFailurePostsPerSha posts on the same SHA, stop repeating
+            // the comment — SE has clearly not pushed new code, and continued
+            // posting creates a comment storm + API spend with no progress.
+            var currentSha = pr.HeadSha ?? "";
+            bool shouldPost;
+            lock (_baseBuildFailureAttempts)
+            {
+                if (_baseBuildFailureAttempts.TryGetValue(pr.Number, out var prev)
+                    && string.Equals(prev.Sha, currentSha, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (prev.Count >= MaxBaseBuildFailurePostsPerSha)
+                    {
+                        shouldPost = false;
+                    }
+                    else
+                    {
+                        _baseBuildFailureAttempts[pr.Number] = (currentSha, prev.Count + 1);
+                        shouldPost = true;
+                    }
+                }
+                else
+                {
+                    _baseBuildFailureAttempts[pr.Number] = (currentSha, 1);
+                    shouldPost = true;
+                }
+            }
+
+            if (!shouldPost)
+            {
+                Logger.LogWarning(
+                    "PR #{Number} base still failing on SHA {Sha} — TE suppressing repeat comments until new code lands",
+                    pr.Number, currentSha);
+                return false;
+            }
+
+            // On the last permitted post, escalate with a clearer blocked message + label.
+            var isFinalPost = _baseBuildFailureAttempts[pr.Number].Count >= MaxBaseBuildFailurePostsPerSha;
+            var body = isFinalPost
+                ? "🚫 **TestEngineer escalation: PR is blocked on base build.**\n\n" +
+                  "The SoftwareEngineer has not pushed fixing code for the build failure below. " +
+                  "TE will stop retrying on this SHA; please push new code or close this PR.\n\n" +
+                  $"**Build errors:**\n```\n{buildErrorSummary}\n```"
+                : "⚠️ Cannot add tests — the PR's code doesn't build.\n\n" +
+                  $"**Build errors:**\n```\n{buildErrorSummary}\n```\n\n" +
+                  "Please fix build errors first. The Test Engineer will retry when the PR is updated.";
+
             // Use the standard CHANGES REQUESTED pattern so GetPendingChangesRequestedAsync detects this on restart
-            await _prWorkflow.RequestChangesAsync(pr.Number, "TestEngineer",
-                "⚠️ Cannot add tests — the PR's code doesn't build.\n\n" +
-                $"**Build errors:**\n```\n{buildErrorSummary}\n```\n\n" +
-                "Please fix build errors first. The Test Engineer will retry when the PR is updated.", ct);
+            await _prWorkflow.RequestChangesAsync(pr.Number, "TestEngineer", body, ct);
 
             // Notify the author engineer via bus so they wake up and fix the build
             await _messageBus.PublishAsync(new ChangesRequestedMessage
