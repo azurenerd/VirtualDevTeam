@@ -2301,6 +2301,13 @@ public abstract class EngineerAgentBase : AgentBase
     /// </summary>
     private string? _cachedDesignContext;
     private bool _designContextLoaded;
+    private IReadOnlyList<DesignImage>? _cachedDesignImages;
+
+    /// <summary>
+    /// A binary design reference (PNG/JPG) ready to be attached to a chat message
+    /// as <see cref="Microsoft.SemanticKernel.ImageContent"/>.
+    /// </summary>
+    protected sealed record DesignImage(byte[] Data, string MimeType, string Path);
 
     protected async Task<string?> GetDesignContextAsync(CancellationToken ct)
     {
@@ -2310,24 +2317,38 @@ public abstract class EngineerAgentBase : AgentBase
         try
         {
             var tree = await GitHub.GetRepositoryTreeAsync("main", ct);
-            var designFiles = tree
-                .Where(f =>
-                {
-                    var ext = Path.GetExtension(f).ToLowerInvariant();
-                    if (ext != ".html" && ext != ".htm") return false;
-                    var name = Path.GetFileName(f).ToLowerInvariant();
-                    return name.Contains("design") || name.Contains("concept") ||
-                           name.Contains("mockup") || name.Contains("wireframe");
-                })
-                .ToList();
+            bool IsDesignHtml(string f)
+            {
+                var ext = Path.GetExtension(f).ToLowerInvariant();
+                if (ext != ".html" && ext != ".htm") return false;
+                var name = Path.GetFileName(f).ToLowerInvariant();
+                return name.Contains("design") || name.Contains("concept") ||
+                       name.Contains("mockup") || name.Contains("wireframe") ||
+                       name.Contains("prototype") || name.Contains("reference");
+            }
 
-            // Also find design screenshots committed by the Researcher
-            var designScreenshots = tree
-                .Where(f => f.StartsWith("docs/design-screenshots/", StringComparison.OrdinalIgnoreCase) &&
-                            Path.GetExtension(f).Equals(".png", StringComparison.OrdinalIgnoreCase))
-                .ToList();
+            bool IsDesignImage(string f)
+            {
+                var ext = Path.GetExtension(f).ToLowerInvariant();
+                if (ext != ".png" && ext != ".jpg" && ext != ".jpeg" && ext != ".webp") return false;
+                // Anything under docs/design-screenshots/ is always considered a design ref
+                if (f.StartsWith("docs/design-screenshots/", StringComparison.OrdinalIgnoreCase)) return true;
+                // Otherwise, keyword-filter by file name or parent folder
+                var lower = f.ToLowerInvariant();
+                return lower.Contains("design") || lower.Contains("concept") ||
+                       lower.Contains("mockup") || lower.Contains("wireframe") ||
+                       lower.Contains("prototype") || lower.Contains("reference") ||
+                       lower.Contains("screenshot");
+            }
 
-            if (designFiles.Count == 0 && designScreenshots.Count == 0) return null;
+            var designFiles = tree.Where(IsDesignHtml).ToList();
+            var designImages = tree.Where(IsDesignImage).ToList();
+
+            if (designFiles.Count == 0 && designImages.Count == 0)
+            {
+                _cachedDesignImages = Array.Empty<DesignImage>();
+                return null;
+            }
 
             var sb = new System.Text.StringBuilder();
             sb.AppendLine("## Visual Design Reference");
@@ -2337,15 +2358,34 @@ public abstract class EngineerAgentBase : AgentBase
                 "Do NOT simplify, generalize, or 'improve' the design — reproduce it pixel-for-pixel. " +
                 "The final rendered page must look identical to the design reference at 1920×1080.\n");
 
-            // Include screenshot image references for visual context
-            if (designScreenshots.Count > 0)
+            // Load image bytes so callers can attach them as ImageContent to the chat history.
+            var loadedImages = new List<DesignImage>();
+            if (designImages.Count > 0)
             {
-                sb.AppendLine("### Design Screenshots (rendered from HTML design files)");
-                sb.AppendLine("These screenshots show the EXACT expected visual output:\n");
-                foreach (var screenshot in designScreenshots)
+                sb.AppendLine("### Design Images (attached as vision content)");
+                sb.AppendLine("These images are the AUTHORITATIVE visual spec. When they disagree with the HTML concept, the IMAGE wins:\n");
+                foreach (var imgPath in designImages)
                 {
-                    var fileName = Path.GetFileNameWithoutExtension(screenshot);
-                    sb.AppendLine($"- **{fileName}**: See `{screenshot}` in the repository");
+                    try
+                    {
+                        var bytes = await GitHub.GetFileBytesAsync(imgPath, ct: ct);
+                        if (bytes is null || bytes.Length == 0) continue;
+                        var ext = Path.GetExtension(imgPath).ToLowerInvariant();
+                        var mime = ext switch
+                        {
+                            ".png"  => "image/png",
+                            ".jpg"  => "image/jpeg",
+                            ".jpeg" => "image/jpeg",
+                            ".webp" => "image/webp",
+                            _       => "application/octet-stream"
+                        };
+                        loadedImages.Add(new DesignImage(bytes, mime, imgPath));
+                        sb.AppendLine($"- `{imgPath}` ({bytes.Length / 1024} KB, {mime})");
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.LogDebug(ex, "Failed to load design image: {Path}", imgPath);
+                    }
                 }
                 sb.AppendLine();
             }
@@ -2363,15 +2403,48 @@ public abstract class EngineerAgentBase : AgentBase
             }
 
             _cachedDesignContext = sb.ToString().TrimEnd();
-            Logger.LogInformation("{Role} {Name} loaded {Count} design reference files + {Screenshots} screenshots",
-                Identity.Role, Identity.DisplayName, designFiles.Count, designScreenshots.Count);
+            _cachedDesignImages = loadedImages;
+            Logger.LogInformation("{Role} {Name} loaded {Count} design HTML files + {Images} design images ({ImgBytes} bytes total)",
+                Identity.Role, Identity.DisplayName, designFiles.Count, loadedImages.Count,
+                loadedImages.Sum(i => i.Data.Length));
             return _cachedDesignContext;
         }
         catch (Exception ex)
         {
             Logger.LogDebug(ex, "Failed to read design reference files");
+            _cachedDesignImages = Array.Empty<DesignImage>();
             return null;
         }
+    }
+
+    /// <summary>
+    /// Returns the binary design images discovered by the last call to
+    /// <see cref="GetDesignContextAsync"/>. Call <see cref="GetDesignContextAsync"/>
+    /// first; this method never fetches on its own.
+    /// </summary>
+    protected IReadOnlyList<DesignImage> GetCachedDesignImages()
+        => _cachedDesignImages ?? Array.Empty<DesignImage>();
+
+    /// <summary>
+    /// Appends a user message to the chat history, attaching any cached design images
+    /// (PNG/JPG) as <see cref="ImageContent"/> alongside the text. Call
+    /// <see cref="GetDesignContextAsync"/> first to populate the cache.
+    /// </summary>
+    protected void AddUserMessageWithDesignImages(ChatHistory history, string text)
+    {
+        var images = GetCachedDesignImages();
+        if (images.Count == 0)
+        {
+            history.AddUserMessage(text);
+            return;
+        }
+
+        var items = new ChatMessageContentItemCollection { new TextContent(text) };
+        foreach (var img in images)
+        {
+            items.Add(new ImageContent(img.Data, img.MimeType) { ModelId = $"design: {img.Path}" });
+        }
+        history.AddUserMessage(items);
     }
 
     /// <summary>

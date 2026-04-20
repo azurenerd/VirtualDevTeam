@@ -1327,6 +1327,42 @@ public class GitHubService : IGitHubService
 
     // File Management
 
+    public async Task<byte[]?> GetFileBytesAsync(string path, string? branch = null, CancellationToken ct = default)
+    {
+        return await _rl.ExecuteAsync(async _ =>
+        {
+            try
+            {
+                var contents = branch is not null
+                    ? await _client.Repository.Content.GetAllContentsByRef(_owner, _repo, path, branch)
+                    : await _client.Repository.Content.GetAllContents(_owner, _repo, path);
+                TrackRateLimit();
+
+                var file = contents.FirstOrDefault();
+                if (file?.EncodedContent is not null)
+                    return Convert.FromBase64String(file.EncodedContent);
+
+                // Fallback: some Octokit paths populate Content (base64) instead of EncodedContent
+                if (!string.IsNullOrEmpty(file?.Content))
+                {
+                    try { return Convert.FromBase64String(file.Content); }
+                    catch (FormatException) { return Encoding.UTF8.GetBytes(file.Content); }
+                }
+
+                return null;
+            }
+            catch (NotFoundException)
+            {
+                return null;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to get file bytes: {Path}", path);
+                throw;
+            }
+        }, ct);
+    }
+
     public async Task<string?> GetFileContentAsync(string path, string? branch = null, CancellationToken ct = default)
     {
         var cacheKey = $"{path}|{branch ?? "default"}";

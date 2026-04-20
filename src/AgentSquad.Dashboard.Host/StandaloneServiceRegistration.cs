@@ -153,6 +153,8 @@ file sealed class NullGitHubService : IGitHubService
         }
         catch { return null; }
     }
+    public Task<byte[]?> GetFileBytesAsync(string path, string? branch = null, CancellationToken ct = default)
+        => Task.FromResult<byte[]?>(null);
     public Task CreateOrUpdateFileAsync(string path, string content, string commitMessage, string? branch = null, CancellationToken ct = default)
         => Task.CompletedTask;
     public Task DeleteFileAsync(string path, string commitMessage, string? branch = null, CancellationToken ct = default)

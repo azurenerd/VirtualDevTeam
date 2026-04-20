@@ -267,6 +267,92 @@ else if (_config is not null)
             }
         </div>
 
+        @* ── Code Generation Strategies ── *@
+        <div class="config-card">
+            <div class="config-card-header" @onclick="() => _strategiesExpanded = !_strategiesExpanded" data-testid="config-card-strategies">
+                <span class="config-card-icon">🧠</span>
+                <span class="config-card-title">Code Generation Strategies</span>
+                <span class="config-card-chevron @(_strategiesExpanded ? "expanded" : "")">▶</span>
+            </div>
+            @if (_strategiesExpanded)
+            {
+                <div class="config-card-body">
+                    <p class="config-hint" style="margin-bottom: 12px;">
+                        Controls which AI code-generation scenarios run when Software Engineers implement a task. When the Strategy Framework is <strong>disabled</strong>, engineers use the legacy single-shot generator (fastest, least autonomous). When <strong>enabled</strong>, every listed strategy runs in parallel for each task and the winning patch is applied. Turn off the first two and leave only <em>Agentic Delegation</em> to route all code-gen through the interactive <code>copilot --allow-all</code> CLI session.
+                    </p>
+
+                    <div class="config-field-row">
+                        <div class="config-field" title="Master switch for the multi-strategy framework. When OFF, all Software Engineer tasks use the legacy single-pass code generator regardless of the per-strategy toggles below. Turn this ON to route code generation through the selected strategies.">
+                            <label>Strategy Framework Enabled</label>
+                            <label class="config-toggle">
+                                <input type="checkbox" @bind="_config.StrategyFramework.Enabled" />
+                                <span class="config-toggle-slider"></span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="config-subsection-header" style="margin-top: 12px; font-weight: 600; font-size: 0.9rem;">Active Strategies</div>
+                    <p class="config-hint" style="font-size: 0.8rem; margin-bottom: 8px;">
+                        Check the strategies you want to run. Unchecked strategies are skipped. At least one must be enabled when the framework is on, otherwise all tasks will fall back to the legacy generator.
+                    </p>
+
+                    <div class="config-field-row">
+                        <div class="config-field" title="LEGACY single-pass generator (first of three options). Builds a prompt from PM spec + architecture + design context, calls the premium model once, parses FILE: markers, and commits the output. No tool use, no autonomy. Fastest and cheapest but weakest at integration.">
+                            <label>Baseline (single-pass LLM)</label>
+                            <label class="config-toggle">
+                                <input type="checkbox" checked="@IsStrategyEnabled(StrategyBaseline)"
+                                    @onchange="e => SetStrategyEnabled(StrategyBaseline, (bool)(e.Value ?? false))" />
+                                <span class="config-toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="config-field" title="Single-pass generator PLUS an MCP (Model Context Protocol) server that exposes repo-aware tools to the model. Second of three options. Better than baseline because the model can read files before writing, but still one-shot — cannot iterate on build failures.">
+                            <label>MCP-Enhanced</label>
+                            <label class="config-toggle">
+                                <input type="checkbox" checked="@IsStrategyEnabled(StrategyMcp)"
+                                    @onchange="e => SetStrategyEnabled(StrategyMcp, (bool)(e.Value ?? false))" />
+                                <span class="config-toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="config-field" title="Interactive CLI session (third option) — the engineer delegates the entire task to 'copilot --allow-all' running autonomously in the worktree. The CLI can read/write files, run builds, and iterate until the task works. Most robust but slowest and most expensive. This is the Method-3 path the user wants to keep.">
+                            <label>Agentic Delegation (interactive CLI)</label>
+                            <label class="config-toggle">
+                                <input type="checkbox" checked="@IsStrategyEnabled(StrategyAgentic)"
+                                    @onchange="e => SetStrategyEnabled(StrategyAgentic, (bool)(e.Value ?? false))" />
+                                <span class="config-toggle-slider"></span>
+                            </label>
+                        </div>
+                    </div>
+
+                    @if (_config.StrategyFramework.Enabled && GetEnabledStrategyCount() == 0)
+                    {
+                        <div class="config-warning" style="margin-top: 10px; padding: 8px 12px; background: #fef3cd; border: 1px solid #fbbf24; border-radius: 4px; color: #92400e;">
+                            ⚠️ Framework is enabled but no strategies are checked. With nothing to run, every task will silently fall back to the legacy generator.
+                        </div>
+                    }
+
+                    <div class="config-field-row" style="margin-top: 12px;">
+                        <div class="config-field" title="How often the enabled strategies run. 'always' = every task (highest cost). 'high-complexity-only' = only when the task complexity is High (score ≥ 3). 'sampled-20' = ~20% of tasks, deterministic by task ID hash. 'first-wave-only' = only the first ParallelDevelopment wave.">
+                            <label>Sampling Policy</label>
+                            <select @bind="_config.StrategyFramework.SamplingPolicy" class="config-select">
+                                <option value="always">always</option>
+                                <option value="high-complexity-only">high-complexity-only</option>
+                                <option value="sampled-20">sampled-20</option>
+                                <option value="first-wave-only">first-wave-only</option>
+                            </select>
+                        </div>
+                        <div class="config-field" title="What happens after the orchestrator picks a winning patch. 'full-review' = Architect → PM → Test Engineer pipeline (recommended). 'fast-track' = PR opens ready-for-review, skip the extra Architect pass. 'auto-merge' = fast-forward merge if all gates pass (risky, not recommended).">
+                            <label>Post-Winner Flow</label>
+                            <select @bind="_config.StrategyFramework.PostWinnerFlow" class="config-select">
+                                <option value="full-review">full-review</option>
+                                <option value="fast-track">fast-track</option>
+                                <option value="auto-merge">auto-merge</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+
         @* ── Agent Settings ── *@
         <div class="config-card">
             <div class="config-card-header" @onclick="() => _agentsExpanded = !_agentsExpanded" data-testid="config-card-agents">
@@ -1556,6 +1642,31 @@ else if (_config is not null)
     private bool _reviewExpanded;
     private bool _decisionGatingExpanded;
     private bool _agenticLoopExpanded;
+    private bool _strategiesExpanded = true;
+
+    // Strategy IDs — keep in sync with ICodeGenerationStrategy.Id values
+    // (BaselineStrategy, McpEnhancedStrategy, AgenticDelegationStrategy).
+    private const string StrategyBaseline = "baseline";
+    private const string StrategyMcp = "mcp-enhanced";
+    private const string StrategyAgentic = "agentic-delegation";
+
+    private bool IsStrategyEnabled(string id)
+        => _config?.StrategyFramework.EnabledStrategies
+            .Any(s => string.Equals(s, id, StringComparison.OrdinalIgnoreCase)) ?? false;
+
+    private void SetStrategyEnabled(string id, bool enabled)
+    {
+        if (_config is null) return;
+        var list = _config.StrategyFramework.EnabledStrategies;
+        var existing = list.FirstOrDefault(s => string.Equals(s, id, StringComparison.OrdinalIgnoreCase));
+        if (enabled && existing is null)
+            list.Add(id);
+        else if (!enabled && existing is not null)
+            list.RemoveAll(s => string.Equals(s, id, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private int GetEnabledStrategyCount()
+        => _config?.StrategyFramework.EnabledStrategies.Count ?? 0;
 
     // Per-agent accordion expansion tracking
     private readonly HashSet<string> _expandedAgentPanels = new();

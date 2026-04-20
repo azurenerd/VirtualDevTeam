@@ -594,6 +594,46 @@ public class SoftwareEngineerAgent : EngineerAgentBase
         var kernel = Models.GetKernel(Identity.ModelTier, Identity.Id);
         var chat = kernel.GetRequiredService<IChatCompletionService>();
 
+        var parsedTasks = new List<EngineeringTask>();
+        var singlePrMode = Config.Limits.SinglePRMode;
+        AgentSquad.Core.Agents.Reasoning.AssessmentResult? peAssessmentResult = null;
+
+        if (singlePrMode)
+        {
+            Logger.LogInformation("SinglePRMode=true — bypassing fragmented planning. Producing one monolithic engineering task.");
+            LogActivity("planning", "🧩 SinglePRMode enabled — producing ONE engineering task for the whole project");
+
+            var monolithicDesc = new StringBuilder();
+            monolithicDesc.AppendLine("**Deliver the ENTIRE project as a single cohesive implementation.**");
+            monolithicDesc.AppendLine();
+            monolithicDesc.AppendLine("This task runs in SinglePRMode. Do NOT split the work into multiple PRs and do NOT emit partial scaffolding. Produce every file the project needs in ONE implementation pass: project manifests, entry point, DI registration, all data models, all services, all components/pages, CSS, sample data, and any required config.");
+            monolithicDesc.AppendLine();
+            monolithicDesc.AppendLine("After this task merges, the product must BUILD and RUN end-to-end with no follow-up wiring PRs required. The T-FINAL integration task exists only as a safety net — aim to have no integration fixes needed.");
+            monolithicDesc.AppendLine();
+            monolithicDesc.AppendLine("## Scope (all user stories in the plan)");
+            foreach (var issue in enhancementIssues)
+                monolithicDesc.AppendLine($"- Issue #{issue.Number}: {issue.Title}");
+            monolithicDesc.AppendLine();
+            monolithicDesc.AppendLine("Reference the PM Spec, Architecture document, and any design images supplied. Where design images are provided, match them pixel-for-pixel — do not simplify, rename sections, or rearrange the layout.");
+
+            parsedTasks.Add(new EngineeringTask
+            {
+                Id = "T1",
+                Name = "Implement entire project (SinglePRMode)",
+                Description = monolithicDesc.ToString(),
+                Complexity = "High",
+                Dependencies = new List<string>(),
+                ParentIssueNumber = enhancementIssues.FirstOrDefault()?.Number,
+                Wave = "W0",
+                OwnedFiles = new List<string>(),
+                SkillTags = new List<string> { "fullstack", "foundation" }
+            });
+
+            _taskTracker.CompleteStep(decompStepId);
+        }
+        else
+        {
+
         var history = CreateChatHistory();
         var planSys = PromptService is not null
             ? await PromptService.RenderAsync("software-engineer/plan-generation-system",
@@ -830,7 +870,8 @@ public class SoftwareEngineerAgent : EngineerAgentBase
             "Program.cs is declared SHARED in T1, so T2 can MODIFY it.\n\n" +
             "Only output TASK lines, nothing else.");
 
-        history.AddUserMessage(userPromptBuilder.ToString());
+        // Attach design images (PNG/JPG) as ImageContent if available, else plain text.
+        AddUserMessageWithDesignImages(history, userPromptBuilder.ToString());
 
         LogActivity("planning", "🤖 Calling AI to generate engineering plan from user stories");
         var response = await chat.GetChatMessageContentAsync(
@@ -856,7 +897,6 @@ public class SoftwareEngineerAgent : EngineerAgentBase
 
         LogActivity("planning", "🔍 Self-assessing engineering plan quality");
         var criteria = AssessmentCriteria.GetForRole(Identity.Role);
-        AgentSquad.Core.Agents.Reasoning.AssessmentResult? peAssessmentResult = null;
         if (criteria is not null)
         {
             var (refinedOutput, assessment) = await _selfAssessment.AssessAndRefineWithResultAsync(
@@ -876,7 +916,6 @@ public class SoftwareEngineerAgent : EngineerAgentBase
         }
         _taskTracker.CompleteStep(assessStepId);
 
-        var parsedTasks = new List<EngineeringTask>();
         var issueMap = enhancementIssues.ToDictionary(i => i.Number);
 
         foreach (var line in structuredText.Split('\n', StringSplitOptions.RemoveEmptyEntries))
@@ -995,6 +1034,7 @@ public class SoftwareEngineerAgent : EngineerAgentBase
             ExtractRawFilePlanFromDescription(parsedTasks.FirstOrDefault()?.Description ?? ""));
         var finalOverlaps = DetectFileOverlaps(parsedTasks, finalSharedFiles);
         LogParallelismMetrics(parsedTasks, finalOverlaps);
+        } // end else (non-SinglePRMode AI decomposition block)
 
         // Add a final integration & validation task that depends on ALL other tasks.
         // The PE leader will self-assign this after all other tasks are done.
@@ -2148,7 +2188,11 @@ public class SoftwareEngineerAgent : EngineerAgentBase
                         if (completedSteps.Count > 0)
                             ctx.AppendLine("If updating a file from a previous step, include the COMPLETE updated file content.");
 
-                        stepHistory.AddUserMessage(ctx.ToString());
+                        // Attach design images as ImageContent when available (UI tasks).
+                        if (GetCachedDesignImages().Count > 0)
+                            AddUserMessageWithDesignImages(stepHistory, ctx.ToString());
+                        else
+                            stepHistory.AddUserMessage(ctx.ToString());
 
                         var stepResponse = await chat.GetChatMessageContentAsync(stepHistory, cancellationToken: ct);
                         var stepImpl = stepResponse.Content?.Trim() ?? "";
@@ -2206,7 +2250,8 @@ public class SoftwareEngineerAgent : EngineerAgentBase
                     ? $"\n\n## GitHub Issue #{sourceIssue.Number}: {sourceIssue.Title}\n{sourceIssue.Body}"
                     : "";
 
-                // Build design context for UI-related tasks
+                // Build design context for UI-related tasks. AppendDesignContextIfRelevantAsync
+                // primes GetCachedDesignImages() so we can attach PNG/JPG as ImageContent below.
                 var designCtxBuilder = new StringBuilder();
                 await AppendDesignContextIfRelevantAsync(designCtxBuilder, task.Name, task.Description, sourceIssue?.Body, ct);
                 var designContext = designCtxBuilder.ToString();
@@ -2222,7 +2267,7 @@ public class SoftwareEngineerAgent : EngineerAgentBase
                         IssueContext = issueContext,
                         DesignContext = designContext,
                     }, PromptService, ct);
-                history.AddUserMessage(singlePassUser);
+                AddUserMessageWithDesignImages(history, singlePassUser);
 
                 var response = await chat.GetChatMessageContentAsync(history, cancellationToken: ct);
                 var implementation = response.Content?.Trim() ?? "";
@@ -5779,48 +5824,10 @@ public class SoftwareEngineerAgent : EngineerAgentBase
     }
     private async Task<string?> ReadDesignReferencesAsync(CancellationToken ct)
     {
-        try
-        {
-            var tree = await GitHub.GetRepositoryTreeAsync("main", ct);
-            var designFiles = tree
-                .Where(f =>
-                {
-                    var ext = Path.GetExtension(f).ToLowerInvariant();
-                    if (ext != ".html" && ext != ".htm") return false;
-                    var name = Path.GetFileName(f).ToLowerInvariant();
-                    return name.Contains("design") || name.Contains("concept") ||
-                           name.Contains("mockup") || name.Contains("wireframe") ||
-                           name.Contains("prototype") || name.Contains("reference");
-                })
-                .ToList();
-
-            if (designFiles.Count == 0) return null;
-
-            var sb = new System.Text.StringBuilder();
-            foreach (var file in designFiles)
-            {
-                var content = await GitHub.GetFileContentAsync(file, ct: ct);
-                if (string.IsNullOrWhiteSpace(content)) continue;
-
-                sb.AppendLine($"### Design File: `{file}`");
-                sb.AppendLine("```html");
-                sb.AppendLine(content.Length > 8000 ? content[..8000] + "\n<!-- truncated -->" : content);
-                sb.AppendLine("```");
-                sb.AppendLine();
-            }
-
-            if (sb.Length > 0)
-            {
-                Logger.LogInformation("Read {Count} visual design reference files for engineering plan", designFiles.Count);
-                return sb.ToString().TrimEnd();
-            }
-            return null;
-        }
-        catch (Exception ex)
-        {
-            Logger.LogWarning(ex, "Failed to read design reference files for engineering plan");
-            return null;
-        }
+        // Delegates to the base implementation so HTML + PNG/JPG discovery stays in one place.
+        // GetDesignContextAsync caches both the rendered markdown AND the binary image bytes so
+        // the plan-generation call site can attach images via AddUserMessageWithDesignImages.
+        return await GetDesignContextAsync(ct);
     }
 
     #endregion

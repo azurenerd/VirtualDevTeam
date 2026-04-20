@@ -43,6 +43,13 @@ public interface IGitHubService
 
     // File Management
     Task<string?> GetFileContentAsync(string path, string? branch = null, CancellationToken ct = default);
+
+    /// <summary>
+    /// Fetches the raw bytes of a file from the repository. Use this for binary assets
+    /// such as design reference images (PNG/JPG) that need to be passed to vision-capable
+    /// models as <c>ImageContent</c>.
+    /// </summary>
+    Task<byte[]?> GetFileBytesAsync(string path, string? branch = null, CancellationToken ct = default);
     Task CreateOrUpdateFileAsync(string path, string content, string commitMessage, string? branch = null, CancellationToken ct = default);
     Task DeleteFileAsync(string path, string commitMessage, string? branch = null, CancellationToken ct = default);
 

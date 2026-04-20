@@ -247,6 +247,17 @@ public class LimitsConfig
     /// requests a new engineer from the PM.
     /// </summary>
     public int MinParallelizableTasksForNewEngineer { get; set; } = 3;
+
+    /// <summary>
+    /// When true, the Software Engineer skips fragmented multi-PR planning and produces
+    /// the entire project as a SINGLE engineering task (plus the T-FINAL integration task).
+    /// This preserves a single conversational context for the whole project and mirrors
+    /// the way a single-CLI-session build works. Recommended for small / medium projects
+    /// (single page app, dashboard, prototype) where fragmentation loses more context than
+    /// the parallelism saves.
+    /// When false (default), the existing fragment-and-parallelize planning is used.
+    /// </summary>
+    public bool SinglePRMode { get; set; } = false;
 }
 
 /// <summary>
