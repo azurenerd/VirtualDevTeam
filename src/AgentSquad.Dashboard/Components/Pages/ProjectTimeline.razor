@@ -96,11 +96,12 @@ else
                 @{ int nodeIdx = 0; }
                 @foreach (var phase in GetFilteredPhases())
                 {
+                    var phaseKey = phase.Name;
                     var phaseClass = GetPhaseClass(phase.Name);
                     var phaseItems = phase.Items;
                     var phaseDone = phaseItems.Count(g => g.Issue.State == "closed");
 
-                    <div class="ntl-phase-column @phaseClass @(phase.IsWavePhase ? "wave-column" : "")">
+                    <div @key="phaseKey" class="ntl-phase-column @phaseClass @(phase.IsWavePhase ? "wave-column" : "")">
                         <!-- Phase label — top-left -->
                         <div class="ntl-phase-label">
                             @if (phase.IsWavePhase)
@@ -128,7 +129,7 @@ else
                                 var isAwaitingReview = issue.Labels.Any(l => l.Equals("awaiting-human-review", StringComparison.OrdinalIgnoreCase));
                                 nodeIdx++;
 
-                                <div class="ntl-node-cluster" style="--node-delay: @(nodeIdx * 0.06)s">
+                                <div @key="@($"issue-{issue.Number}")" class="ntl-node-cluster" style="--node-delay: @(nodeIdx * 0.06)s">
                                     <div class="ntl-spine-dot @(isClosed ? "done" : "active")"></div>
                                     <div class="ntl-connector"></div>
                                     <div class="ntl-node @(isClosed ? "ntl-node-closed" : "ntl-node-open") @(isSelected ? "ntl-node-selected" : "") @(isAwaitingReview ? "ntl-node-awaiting" : "")"
@@ -174,14 +175,16 @@ else
                                             {
                                                 var prMerged = pr.IsMerged;
                                                 var prClosed = pr.State == "closed";
+                                                var prSelected = _selectedPr == pr.Number;
                                                 var prClass = prMerged ? "ntl-child-merged" : prClosed ? "ntl-child-closed" : "ntl-child-open";
                                                 var indClass = prMerged ? "ind-merged" : prClosed ? "ind-closed" : "ind-open";
                                                 <div class="ntl-child-connector"></div>
-                                                <a class="ntl-child-node @prClass" href="@pr.Url" target="_blank"
-                                                   title="@pr.Title" @onclick:stopPropagation="true">
+                                                <div @key="@($"pr-{pr.Number}")" class="ntl-child-node ntl-child-pr @prClass @(prSelected ? "ntl-child-selected" : "")"
+                                                     @onclick="() => SelectPr(pr.Number)" @onclick:stopPropagation="true"
+                                                     title="@pr.Title" role="button">
                                                     <div class="ntl-child-indicator @indClass"></div>
                                                     <span class="ntl-child-label">PR #@pr.Number @TruncateTitle(pr.Title, 24)</span>
-                                                </a>
+                                                </div>
                                             }
                                         </div>
                                     }
@@ -202,7 +205,7 @@ else
                 @* Upcoming phase placeholders — show what's coming next *@
                 @foreach (var upcoming in GetUpcomingPhases())
                 {
-                    <div class="ntl-phase-column ntl-phase-upcoming @GetPhaseClass(upcoming.Name)">
+                    <div @key="@($"upcoming-{upcoming.Name}")" class="ntl-phase-column ntl-phase-upcoming @GetPhaseClass(upcoming.Name)">
                         <div class="ntl-phase-label">
                             <span class="ntl-phase-name">@upcoming.Name</span>
                             <span class="ntl-phase-counter ntl-upcoming-badge">Upcoming</span>
@@ -292,12 +295,84 @@ else
                     <span class="ntl-detail-section-title">Linked Pull Requests</span>
                     @foreach (var pr in sg.LinkedPRs)
                     {
-                        <div class="ntl-detail-pr @(pr.IsMerged ? "merged" : pr.State == "closed" ? "closed" : "open")">
+                        <div class="ntl-detail-pr @(pr.IsMerged ? "merged" : pr.State == "closed" ? "closed" : "open")"
+                             @onclick="() => SelectPr(pr.Number)" role="button" title="Open PR details">
                             <span class="ntl-detail-pr-indicator @(pr.IsMerged ? "ind-merged" : pr.State == "closed" ? "ind-closed-pr" : "ind-open-pr")"></span>
-                            <a class="ntl-detail-pr-num" href="@pr.Url" target="_blank">PR #@pr.Number</a>
+                            <a class="ntl-detail-pr-num" href="@pr.Url" target="_blank" @onclick:stopPropagation="true">PR #@pr.Number</a>
                             <span class="ntl-detail-pr-title">@TruncateTitle(pr.Title, 60)</span>
                         </div>
                     }
+                </div>
+            }
+        </div>
+    }
+
+    @* Detail panel for selected PR (click a PR child node to open) *@
+    @if (_selectedPr.HasValue && _selectedPrObj is { } spr)
+    {
+        var screenshotUrl = BuildReadyForReviewScreenshotUrl(spr);
+        <div class="ntl-detail-panel ntl-detail-pr-panel">
+            <div class="ntl-detail-header">
+                <a class="ntl-detail-num ntl-type-pr" href="@spr.Url" target="_blank" title="Open on GitHub">
+                    PR #@spr.Number ↗
+                </a>
+                <span class="ntl-detail-state @(spr.IsMerged ? "state-merged" : spr.State == "closed" ? "state-closed" : "state-open")">
+                    @(spr.IsMerged ? "✓ Merged" : spr.State == "closed" ? "✕ Closed" : "● Open")
+                </span>
+                <button class="ntl-detail-close" @onclick="() => SelectPr(null)">✕</button>
+            </div>
+            <h3 class="ntl-detail-title">@spr.Title</h3>
+            <div class="ntl-detail-meta">
+                <span class="ntl-detail-agent">🌿 @spr.HeadBranch → @spr.BaseBranch</span>
+                <span class="ntl-detail-date">📅 @FormatTime(spr.CreatedAt)</span>
+                @if (spr.MergedAt.HasValue)
+                {
+                    <span class="ntl-detail-date">✓ merged @FormatTime(spr.MergedAt.Value)</span>
+                }
+            </div>
+            @if (spr.Labels.Count > 0)
+            {
+                <div class="ntl-detail-labels">
+                    @foreach (var label in spr.Labels)
+                    {
+                        <span class="ntl-label">@label</span>
+                    }
+                </div>
+            }
+            <div class="ntl-detail-prs" style="margin-top: 8px;">
+                <span class="ntl-detail-section-title">Ready-for-Review Preview</span>
+                @if (!string.IsNullOrEmpty(screenshotUrl))
+                {
+                    @* Winning candidate — green border. Click opens full-size on GitHub.
+                       TODO (ws3-follow-up): when StrategyOrchestrator persists per-candidate
+                       screenshots to .candidates/{strategy}/screenshot.png, loop them here and
+                       keep the green border on the accepted one. *@
+                    <div class="ntl-detail-screenshots">
+                        <a class="ntl-screenshot-thumb ntl-screenshot-winner"
+                           href="@screenshotUrl" target="_blank" rel="noopener"
+                           title="Click to open full size on GitHub">
+                            <img src="@screenshotUrl" alt="PR #@spr.Number ready-for-review preview" loading="lazy"
+                                 onerror="this.parentElement.classList.add('ntl-screenshot-missing'); this.parentElement.querySelector('.ntl-screenshot-fallback')?.removeAttribute('hidden');" />
+                            <span class="ntl-screenshot-label">🏆 Winning candidate</span>
+                            <span class="ntl-screenshot-fallback" hidden>No preview captured for this PR</span>
+                        </a>
+                    </div>
+                }
+                else
+                {
+                    <div class="ntl-detail-empty">No preview available (PR has no head SHA yet)</div>
+                }
+            </div>
+            @{ var parentIssueNumber = PullRequestWorkflow.ParseLinkedIssueNumber(spr.Body); }
+            @if (parentIssueNumber.HasValue && _groupLookup.ContainsKey(parentIssueNumber.Value))
+            {
+                <div class="ntl-detail-prs" style="margin-top: 8px;">
+                    <span class="ntl-detail-section-title">Linked Issue</span>
+                    <div class="ntl-detail-pr open" @onclick="() => SelectNode(parentIssueNumber.Value)" role="button">
+                        <span class="ntl-detail-pr-indicator ind-open"></span>
+                        <span class="ntl-detail-pr-num">Issue #@parentIssueNumber.Value</span>
+                        <span class="ntl-detail-pr-title">View parent issue details</span>
+                    </div>
                 </div>
             }
         </div>
@@ -325,6 +400,8 @@ else
     private int _zoomPercent = 100;
     private int? _selectedIssue;
     private IssueGroup? _selectedGroup;
+    private int? _selectedPr;
+    private AgentPullRequest? _selectedPrObj;
 
     private Dictionary<int, IssueGroup> _groupLookup = new();
 
@@ -680,7 +757,7 @@ else
             // Engineering view: split Development into wave sub-phases
             var devItems = groups.Where(g => ClassifyPhase(g).StartsWith("Development")).ToList();
             var waveGroups = devItems
-                .GroupBy(g => g.Wave is { Length: > 0 } ? g.Wave : "W1")
+                .GroupBy(g => (g.Wave is { Length: > 0 } ? g.Wave : "W1").ToUpperInvariant(), StringComparer.OrdinalIgnoreCase)
                 .OrderBy(wg => wg.Key, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
@@ -722,6 +799,17 @@ else
                 _phases.Add(new NeonPhase { Name = name, Icon = icon, CssClass = css, Items = items });
         }
 
+        // Safety net: guarantee no duplicate phase columns by name (defensive against
+        // concurrent rebuild races or classification bugs that could emit the same
+        // phase twice). Keep first-wins ordering so static/wave/tail sequence is preserved.
+        if (_phases.Count > 1)
+        {
+            _phases = _phases
+                .GroupBy(p => p.Name, StringComparer.OrdinalIgnoreCase)
+                .Select(g => g.First())
+                .ToList();
+        }
+
         _closedCount = _issues.Count(i => i.State == "closed");
         _openCount = _issues.Count(i => i.State != "closed");
 
@@ -734,6 +822,13 @@ else
                 _selectedIssue = null;
                 _selectedGroup = null;
             }
+        }
+
+        if (_selectedPr.HasValue)
+        {
+            var refreshedPr = _rawPullRequests.FirstOrDefault(p => p.Number == _selectedPr.Value);
+            if (refreshedPr is not null) _selectedPrObj = refreshedPr;
+            else { _selectedPr = null; _selectedPrObj = null; }
         }
     }
 
@@ -885,17 +980,64 @@ else
         _devViewMode = mode;
         _selectedIssue = null;
         _selectedGroup = null;
+        _selectedPr = null;
+        _selectedPrObj = null;
         BuildTimeline();
         StateHasChanged();
     }
 
     private void SelectNode(int? issueNumber)
     {
+        _selectedPr = null;
+        _selectedPrObj = null;
         if (_selectedIssue == issueNumber) { _selectedIssue = null; _selectedGroup = null; }
         else if (issueNumber.HasValue && _groupLookup.TryGetValue(issueNumber.Value, out var g))
         { _selectedIssue = issueNumber; _selectedGroup = g; }
         else { _selectedIssue = null; _selectedGroup = null; }
         StateHasChanged();
+    }
+
+    private void SelectPr(int? prNumber)
+    {
+        if (!prNumber.HasValue || _selectedPr == prNumber)
+        {
+            _selectedPr = null;
+            _selectedPrObj = null;
+            StateHasChanged();
+            return;
+        }
+        var pr = _rawPullRequests.FirstOrDefault(p => p.Number == prNumber.Value)
+                 ?? _pullRequests.FirstOrDefault(p => p.Number == prNumber.Value);
+        if (pr is null)
+        {
+            _selectedPr = null;
+            _selectedPrObj = null;
+        }
+        else
+        {
+            _selectedIssue = null;
+            _selectedGroup = null;
+            _selectedPr = prNumber;
+            _selectedPrObj = pr;
+        }
+        StateHasChanged();
+    }
+
+    // Builds a stable raw.githubusercontent.com URL for the canonical ready-for-review
+    // screenshot captured at the PR's head SHA. Using HeadSha (not branch name) guards
+    // against branch mutation or deletion after merge.
+    private static string? BuildReadyForReviewScreenshotUrl(AgentPullRequest pr)
+    {
+        if (string.IsNullOrEmpty(pr.Url) || string.IsNullOrEmpty(pr.HeadSha)) return null;
+        // pr.Url: https://github.com/{owner}/{repo}/pull/{N}
+        var match = System.Text.RegularExpressions.Regex.Match(
+            pr.Url,
+            @"github\.com/([^/]+)/([^/]+)/pull/\d+",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (!match.Success) return null;
+        var owner = match.Groups[1].Value;
+        var repo = match.Groups[2].Value;
+        return $"https://raw.githubusercontent.com/{owner}/{repo}/{pr.HeadSha}/.screenshots/pr-{pr.Number}-ready-for-review.png";
     }
 
     private string GetPhaseClass(string name) => name switch

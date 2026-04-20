@@ -5342,6 +5342,90 @@ div[title] .config-agent-name {
 .ntl-child-merged .ntl-child-label { color: #a371f7; }
 a.ntl-child-node { text-decoration: none; color: inherit; }
 
+/* PR child nodes — visually distinct from issue children and selectable */
+.ntl-child-node.ntl-child-pr {
+    border-color: rgba(163,113,247,0.35);
+    background: rgba(42,30,66,0.75);
+}
+.ntl-child-node.ntl-child-pr:hover {
+    border-color: #a371f7;
+    box-shadow: 0 0 10px rgba(163,113,247,0.4);
+}
+.ntl-child-node.ntl-child-selected {
+    border-color: #58a6ff;
+    box-shadow: 0 0 0 2px rgba(88,166,255,0.45), 0 0 12px rgba(88,166,255,0.5);
+}
+
+/* Ready-for-review screenshot gallery in PR detail panel */
+.ntl-detail-pr-panel .ntl-detail-empty {
+    font-size: 0.72rem;
+    color: #7d8590;
+    padding: 8px 12px;
+    font-style: italic;
+}
+.ntl-detail-screenshots {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 6px 0;
+}
+.ntl-screenshot-thumb {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 4px;
+    width: 260px;
+    padding: 4px;
+    border-radius: 6px;
+    border: 2px solid rgba(255,255,255,0.08);
+    background: rgba(10,15,22,0.6);
+    text-decoration: none;
+    color: inherit;
+    transition: transform 0.15s, box-shadow 0.2s;
+}
+.ntl-screenshot-thumb:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+}
+.ntl-screenshot-thumb img {
+    width: 100%;
+    height: auto;
+    max-height: 180px;
+    object-fit: cover;
+    object-position: top;
+    border-radius: 3px;
+    background: #0d1117;
+    display: block;
+}
+.ntl-screenshot-label {
+    font-size: 0.68rem;
+    color: #c9d1d9;
+    text-align: center;
+    padding: 2px 0;
+}
+/* Winner — green border + subtle glow */
+.ntl-screenshot-thumb.ntl-screenshot-winner {
+    border-color: #22c55e;
+    box-shadow: 0 0 0 1px rgba(34,197,94,0.3), 0 0 12px rgba(34,197,94,0.35);
+}
+.ntl-screenshot-thumb.ntl-screenshot-winner .ntl-screenshot-label {
+    color: #22c55e;
+    font-weight: 600;
+}
+.ntl-screenshot-missing img { display: none; }
+.ntl-screenshot-missing {
+    border-color: rgba(255,100,100,0.3) !important;
+    box-shadow: none !important;
+}
+.ntl-screenshot-missing .ntl-screenshot-fallback {
+    font-size: 0.72rem;
+    color: #7d8590;
+    padding: 24px 8px;
+    text-align: center;
+    font-style: italic;
+}
+.ntl-detail-state.state-merged { color: #a371f7; }
+
 /* ── Theme toggle buttons ── */
 .ntl-theme-toggle { display: flex; gap: 3px; }
 .ntl-theme-btn {
