@@ -2291,7 +2291,7 @@ public class SoftwareEngineerAgent : EngineerAgentBase
             return;
         }
 
-        await PrWorkflow.MarkReadyForReviewAsync(pr.Number, Identity.DisplayName, ct);
+        await MarkReadyForReviewWithScreenshotAsync(pr, ct);
         _taskTracker.CompleteStep(readyStepId);
 
         await MessageBus.PublishAsync(new ReviewRequestMessage
@@ -2589,6 +2589,11 @@ public class SoftwareEngineerAgent : EngineerAgentBase
                 // Return true: generation succeeded and is committed. Do NOT retry generation.
                 return true;
             }
+
+            // Capture UI screenshot for visual progress tracking — strategy framework ships in one step.
+            // Best-effort; never blocks the pipeline. The screenshot is embedded in the
+            // subsequent ready-for-review comment (via MarkReadyForReviewWithScreenshotAsync)
+            // rather than posted here, so there's nothing else to do at this point.
 
             Logger.LogInformation(
                 "Strategy framework shipped winner {Strategy} for task {TaskId} on PR #{PrNumber}",
@@ -3465,7 +3470,7 @@ public class SoftwareEngineerAgent : EngineerAgentBase
                 }
 
                 await SyncBranchWithMainAsync(pr.Number, ct);
-                await PrWorkflow.MarkReadyForReviewAsync(pr.Number, Identity.DisplayName, ct);
+                await MarkReadyForReviewWithScreenshotAsync(pr, ct);
                 await MessageBus.PublishAsync(new ReviewRequestMessage
                 {
                     FromAgentId = Identity.Id,
@@ -3485,7 +3490,7 @@ public class SoftwareEngineerAgent : EngineerAgentBase
             {
                 Logger.LogWarning("SE could not generate remaining steps for PR #{PrNumber}, marking ready", pr.Number);
                 await SyncBranchWithMainAsync(pr.Number, ct);
-                await PrWorkflow.MarkReadyForReviewAsync(pr.Number, Identity.DisplayName, ct);
+                await MarkReadyForReviewWithScreenshotAsync(pr, ct);
                 await MessageBus.PublishAsync(new ReviewRequestMessage
                 {
                     FromAgentId = Identity.Id,
@@ -3584,7 +3589,7 @@ public class SoftwareEngineerAgent : EngineerAgentBase
 
             // All steps done — mark ready for review
             await SyncBranchWithMainAsync(pr.Number, ct);
-            await PrWorkflow.MarkReadyForReviewAsync(pr.Number, Identity.DisplayName, ct);
+            await MarkReadyForReviewWithScreenshotAsync(pr, ct);
 
             await MessageBus.PublishAsync(new ReviewRequestMessage
             {
@@ -3656,7 +3661,7 @@ public class SoftwareEngineerAgent : EngineerAgentBase
 
             // Sync branch with main before marking ready — ensures PR is merge-clean
             await SyncBranchWithMainAsync(pr.Number, ct);
-            await PrWorkflow.MarkReadyForReviewAsync(pr.Number, Identity.DisplayName, ct);
+            await MarkReadyForReviewWithScreenshotAsync(pr, ct);
 
             await MessageBus.PublishAsync(new ReviewRequestMessage
             {
@@ -4175,7 +4180,7 @@ public class SoftwareEngineerAgent : EngineerAgentBase
 
             // Sync and mark ready for review
             await SyncBranchWithMainAsync(pr.Number, ct);
-            await PrWorkflow.MarkReadyForReviewAsync(pr.Number, Identity.DisplayName, ct);
+            await MarkReadyForReviewWithScreenshotAsync(pr, ct);
 
             await MessageBus.PublishAsync(new ReviewRequestMessage
             {

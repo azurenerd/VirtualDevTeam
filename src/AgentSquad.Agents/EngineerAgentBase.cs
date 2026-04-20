@@ -1171,7 +1171,7 @@ public abstract class EngineerAgentBase : AgentBase
             $"Engineer code complete on PR #{pr.Number}, ready for human review before marking ready-for-review",
             pr.Number, ct: ct);
 
-        await PrWorkflow.MarkReadyForReviewAsync(pr.Number, Identity.DisplayName, ct);
+        await MarkReadyForReviewWithScreenshotAsync(pr, ct);
 
         await MessageBus.PublishAsync(new ReviewRequestMessage
         {
@@ -1388,7 +1388,7 @@ public abstract class EngineerAgentBase : AgentBase
             $"Engineer code complete on PR #{pr.Number}, ready for human review before marking ready-for-review",
             pr.Number, ct: ct);
 
-        await PrWorkflow.MarkReadyForReviewAsync(pr.Number, Identity.DisplayName, ct);
+        await MarkReadyForReviewWithScreenshotAsync(pr, ct);
 
         await MessageBus.PublishAsync(new ReviewRequestMessage
         {
@@ -1664,7 +1664,7 @@ public abstract class EngineerAgentBase : AgentBase
                         await ReplyToInlineReviewThreadsAsync(pr.Number, changesSummary, codeFiles, attempts, maxCycles, ct);
 
                         await SyncBranchWithMainAsync(pr.Number, ct);
-                        await PrWorkflow.MarkReadyForReviewAsync(pr.Number, Identity.DisplayName, ct);
+                        await MarkReadyForReviewWithScreenshotAsync(pr, ct);
 
                         await MessageBus.PublishAsync(new ReviewRequestMessage
                         {
@@ -2193,7 +2193,7 @@ public abstract class EngineerAgentBase : AgentBase
                 $"Engineer code complete on PR #{pr.Number}, ready for human review before marking ready-for-review",
                 pr.Number, ct: ct);
 
-            await PrWorkflow.MarkReadyForReviewAsync(pr.Number, Identity.DisplayName, ct);
+            await MarkReadyForReviewWithScreenshotAsync(pr, ct);
 
             await MessageBus.PublishAsync(new ReviewRequestMessage
             {
@@ -2635,86 +2635,146 @@ public abstract class EngineerAgentBase : AgentBase
         await Workspace.PushAsync(branchName, ct);
         _ = Metrics?.RecordSuccessfulCommitAsync(Identity.Id, ct);
 
-        // Capture UI screenshot and post to PR for visual progress tracking
-        await TryCaptureAndPostScreenshotAsync(pr, branchName, stepNumber, totalSteps, ct);
-
+        // Screenshot is captured at ready-for-review time (once, with the ready-for-review
+        // comment) rather than per-step to avoid cluttering PR timelines with duplicate comments.
         return true;
     }
 
     /// <summary>
-    /// Attempt to capture a UI screenshot of the built app and post it as a PR comment.
-    /// Fails silently — screenshot capture is best-effort and never blocks the pipeline.
+    /// Capture a UI screenshot (web app, console app, etc.), commit it to the PR branch,
+    /// and return a Markdown snippet suitable for embedding in the ready-for-review comment.
+    /// Returns null (and logs) when no screenshot can be produced — callers should fall back
+    /// to posting the ready-for-review comment without any image.
     /// </summary>
-    private async Task TryCaptureAndPostScreenshotAsync(
-        AgentPullRequest pr, string branchName, int stepNumber, int totalSteps,
-        CancellationToken ct)
+    /// <remarks>
+    /// This method is project-agnostic: <see cref="PlaywrightRunner.CaptureAppScreenshotAsync"/>
+    /// is expected to return a web screenshot when the repo is a web project, or a console-output
+    /// image / null when it isn't. Any capture failure is swallowed so the pipeline is never blocked.
+    /// </remarks>
+    protected async Task<string?> TryCaptureReadyReviewScreenshotMarkdownAsync(
+        AgentPullRequest pr, string branchName, CancellationToken ct)
     {
         if (ScreenshotRunner is null || Workspace is null || !Config.Workspace.CaptureScreenshots)
-            return;
+            return null;
 
         if (!ScreenshotRunner.IsReady)
         {
-            Logger.LogDebug("Playwright not ready, skipping screenshot for PR #{PrNumber}: {Reason}",
+            Logger.LogDebug("Playwright not ready, skipping ready-for-review screenshot for PR #{PrNumber}: {Reason}",
                 pr.Number, ScreenshotRunner.NotReadyReason);
-            return;
+            return null;
         }
 
         try
         {
-            Logger.LogDebug("{Role} {Name} capturing UI screenshot for PR #{PrNumber} step {Step}/{Total}",
-                Identity.Role, Identity.DisplayName, pr.Number, stepNumber, totalSteps);
+            Logger.LogDebug("{Role} {Name} capturing ready-for-review screenshot for PR #{PrNumber}",
+                Identity.Role, Identity.DisplayName, pr.Number);
 
             var screenshotBytes = await ScreenshotRunner.CaptureAppScreenshotAsync(
                 Workspace.RepoPath, Config.Workspace, ct);
 
             if (screenshotBytes is null || screenshotBytes.Length == 0)
             {
-                Logger.LogWarning("No screenshot captured for PR #{PrNumber} (app may not be a web project)", pr.Number);
-                return;
+                Logger.LogInformation(
+                    "No screenshot captured for PR #{PrNumber} (not a runnable web/console app or capture returned empty) — " +
+                    "proceeding with ready-for-review without image.", pr.Number);
+                return null;
             }
 
-            // Commit the screenshot to the PR branch via GitHub API
-            var screenshotPath = $".screenshots/pr-{pr.Number}-step-{stepNumber}.png";
+            // Commit the screenshot to the PR branch (non-overlapping filename keeps older captures intact).
+            var screenshotPath = $".screenshots/pr-{pr.Number}-ready-for-review.png";
             var imageUrl = await GitHub.CommitBinaryFileAsync(
                 screenshotPath, screenshotBytes,
-                $"📸 UI screenshot: step {stepNumber}/{totalSteps}",
+                $"📸 UI screenshot for ready-for-review on PR #{pr.Number}",
                 branchName, ct);
 
-            if (imageUrl is null) return;
+            if (imageUrl is null)
+            {
+                Logger.LogWarning("Committed screenshot but got no URL back for PR #{PrNumber}", pr.Number);
+                return null;
+            }
 
-            // Post a PR comment with the embedded screenshot
-            var comment = $"### 📸 UI Preview — Step {stepNumber}/{totalSteps}\n\n" +
-                $"![UI Screenshot after step {stepNumber}]({imageUrl})\n\n" +
-                $"_Captured after successful build and commit by {Identity.DisplayName}_";
+            Logger.LogInformation("{Role} {Name} attached ready-for-review screenshot for PR #{PrNumber}",
+                Identity.Role, Identity.DisplayName, pr.Number);
+            LogActivity("screenshot", $"📸 Ready-for-review screenshot attached to PR #{pr.Number}");
 
-            await GitHub.AddPullRequestCommentAsync(pr.Number, comment, ct);
-
-            Logger.LogInformation("{Role} {Name} posted UI screenshot for PR #{PrNumber} step {Step}",
-                Identity.Role, Identity.DisplayName, pr.Number, stepNumber);
-            LogActivity("screenshot", $"📸 UI screenshot posted for PR #{pr.Number} step {stepNumber}/{totalSteps}");
-
-            // AI-describe the screenshot for dashboard visibility
+            // AI-describe the screenshot for dashboard visibility (best-effort).
+            var description = string.Empty;
             try
             {
                 var descKernel = Models.GetKernel(Identity.ModelTier, Identity.Id);
                 var descChat = descKernel.GetRequiredService<Microsoft.SemanticKernel.ChatCompletion.IChatCompletionService>();
                 var img = new PullRequestWorkflow.ScreenshotImage(screenshotBytes, "image/png",
-                    $"Author screenshot PR #{pr.Number} step {stepNumber}", imageUrl);
-                var desc = await PullRequestWorkflow.DescribeScreenshotAsync(img, descChat, ct);
-                LogActivity("screenshot", $"🖼️ Screenshot content (PR #{pr.Number}): {desc}");
-                Logger.LogInformation("{Role} {Name} screenshot description for PR #{PrNumber}: {Description}",
-                    Identity.Role, Identity.DisplayName, pr.Number, desc);
+                    $"Author ready-for-review screenshot PR #{pr.Number}", imageUrl);
+                description = await PullRequestWorkflow.DescribeScreenshotAsync(img, descChat, ct) ?? string.Empty;
+                if (!string.IsNullOrWhiteSpace(description))
+                {
+                    LogActivity("screenshot", $"🖼️ Screenshot content (PR #{pr.Number}): {description}");
+                    Logger.LogInformation("{Role} {Name} screenshot description for PR #{PrNumber}: {Description}",
+                        Identity.Role, Identity.DisplayName, pr.Number, description);
+                }
             }
             catch (Exception descEx)
             {
                 Logger.LogDebug(descEx, "Could not describe screenshot for PR #{PrNumber}", pr.Number);
             }
+
+            // Build the markdown snippet to embed in the ready-for-review comment.
+            var md = $"### 📸 End-Result Preview\n\n![Ready-for-review screenshot of PR #{pr.Number}]({imageUrl})";
+            if (!string.IsNullOrWhiteSpace(description))
+                md += $"\n\n_{description.Trim()}_";
+            return md;
         }
         catch (Exception ex)
         {
-            // Never let screenshot failures block the pipeline
-            Logger.LogWarning(ex, "Screenshot capture failed for PR #{PrNumber} — continuing", pr.Number);
+            // Never let screenshot failures block the pipeline.
+            Logger.LogWarning(ex, "Screenshot capture failed for PR #{PrNumber} — continuing without image", pr.Number);
+            return null;
         }
+    }
+
+    /// <summary>
+    /// Universal "mark ready for review" helper that always attempts to capture a screenshot
+    /// and embed it in the ready-for-review comment (no separate comment). Falls back to a
+    /// text-only ready-for-review comment when capture isn't possible (non-web/console, Playwright
+    /// not ready, capture returns empty, etc.) — the pipeline is never blocked by imaging.
+    /// </summary>
+    protected async Task MarkReadyForReviewWithScreenshotAsync(
+        AgentPullRequest pr, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(pr);
+        string? md = null;
+        try
+        {
+            md = await TryCaptureReadyReviewScreenshotMarkdownAsync(pr, pr.HeadBranch, ct);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex, "Screenshot helper threw for PR #{PrNumber} — proceeding without image", pr.Number);
+        }
+        await PrWorkflow.MarkReadyForReviewAsync(pr.Number, Identity.DisplayName, ct, md);
+    }
+
+    /// <summary>
+    /// Overload accepting only a PR number — fetches the full PR to obtain HeadBranch.
+    /// Falls back to plain text ready-for-review if the fetch fails.
+    /// </summary>
+    protected async Task MarkReadyForReviewWithScreenshotAsync(int prNumber, CancellationToken ct)
+    {
+        try
+        {
+            var pr = await GitHub.GetPullRequestAsync(prNumber, ct);
+            if (pr is not null)
+            {
+                await MarkReadyForReviewWithScreenshotAsync(pr, ct);
+                return;
+            }
+            Logger.LogDebug("Could not fetch PR #{PrNumber} to capture screenshot — posting text-only ready-for-review", prNumber);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex, "Fetch for PR #{PrNumber} threw — posting text-only ready-for-review", prNumber);
+        }
+        await PrWorkflow.MarkReadyForReviewAsync(prNumber, Identity.DisplayName, ct);
     }
 
     /// <summary>

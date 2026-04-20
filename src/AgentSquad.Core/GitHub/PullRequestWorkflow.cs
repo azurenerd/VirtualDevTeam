@@ -344,7 +344,8 @@ public partial class PullRequestWorkflow
     public async Task MarkReadyForReviewAsync(
         int prNumber,
         string agentName,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        string? extraMarkdown = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(agentName);
 
@@ -393,10 +394,10 @@ public partial class PullRequestWorkflow
                 (lastReadyComment is null || lastChangesRequested.CreatedAt > lastReadyComment.CreatedAt))
             {
                 _logger.LogInformation("PR #{Number} has rework after changes-requested, posting rework-ready comment", prNumber);
-                await _github.AddPullRequestCommentAsync(
-                    prNumber,
-                    $"✅ **{agentName}** has marked this PR as ready for review.\n\nRework complete — ready for re-review.",
-                    ct);
+                var reworkBody = $"✅ **{agentName}** has marked this PR as ready for review.\n\nRework complete — ready for re-review.";
+                if (!string.IsNullOrWhiteSpace(extraMarkdown))
+                    reworkBody += "\n\n" + extraMarkdown;
+                await _github.AddPullRequestCommentAsync(prNumber, reworkBody, ct);
             }
             else
             {
@@ -407,10 +408,11 @@ public partial class PullRequestWorkflow
 
         _logger.LogInformation("Agent {Agent} marking PR #{Number} ready for review", agentName, prNumber);
 
-        await _github.AddPullRequestCommentAsync(
-            prNumber,
-            $"✅ **{agentName}** has marked this PR as ready for review.\n\nAll implementation and tests are complete.",
-            ct);
+        var readyBody = $"✅ **{agentName}** has marked this PR as ready for review.\n\nAll implementation and tests are complete.";
+        if (!string.IsNullOrWhiteSpace(extraMarkdown))
+            readyBody += "\n\n" + extraMarkdown;
+
+        await _github.AddPullRequestCommentAsync(prNumber, readyBody, ct);
 
         // Update labels: swap in-progress for ready-for-review
         // Re-fetch since we may have fetched earlier for duplicate check
