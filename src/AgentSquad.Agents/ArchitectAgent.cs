@@ -1470,12 +1470,23 @@ public class ArchitectAgent : AgentBase
 
             reasoning = PullRequestWorkflow.StripReviewPreamble(reasoning);
 
+            // WS2 parser-hardening: extract inline comments from text-format reviews.
+            // Prompt asks LLM to prefix REWORK items with "file:line:" — when present,
+            // synthesize InlineReviewComments so they post on the Files-changed tab.
+            var extractedComments = ExtractInlineCommentsFromText(reasoning);
+            if (extractedComments.Count > 0)
+            {
+                Logger.LogInformation(
+                    "Architect text-parse fallback extracted {Count} inline comments for PR #{Number}",
+                    extractedComments.Count, pr.Number);
+            }
+
             return new StructuredReviewResult
             {
                 Verdict = verdict,
                 Summary = reasoning,
                 RiskLevel = ReviewRiskLevel.Medium, // Unknown risk from text fallback
-                Comments = []
+                Comments = extractedComments
             };
         }
         catch (Exception ex)
@@ -1615,6 +1626,49 @@ public class ArchitectAgent : AgentBase
         var cut = text[..maxLength];
         var lastPeriod = cut.LastIndexOf('.');
         return lastPeriod > maxLength / 2 ? cut[..(lastPeriod + 1)] : cut + "…";
+    }
+
+    /// <summary>
+    /// WS2 parser-hardening fallback: extract inline review comments from text-format reviews.
+    /// Matches numbered-list items prefixed with "file.ext:line:" (with optional markdown
+    /// code fences around the file path). Empty list if no matches. Shared pattern:
+    /// also used by SoftwareEngineerAgent (duplicated for locality, intentionally not DRY'd).
+    /// </summary>
+    private static List<InlineReviewComment> ExtractInlineCommentsFromText(string? text)
+    {
+        var results = new List<InlineReviewComment>();
+        if (string.IsNullOrWhiteSpace(text)) return results;
+
+        // Pattern: optional leading "N." item marker, optional markdown-fence/quote around file,
+        // file has an extension, then :line:, then body running to end-of-line or next item.
+        // Example matches:
+        //   1. src/Foo.cs:42: bad thing
+        //   - `wwwroot/app.css`:1: missing rule
+        //   2. "Models\Bar.cs":10: null guard needed
+        var pattern = @"(?m)^\s*(?:[-*]|\d+\.)?\s*[`""']?([\w./\\\-]+\.[a-zA-Z]{1,8})[`""']?:(\d+):\s*(.+?)(?:\r?\n(?=\s*(?:[-*]|\d+\.))|\r?\n\r?\n|\z)";
+        var regex = new System.Text.RegularExpressions.Regex(
+            pattern,
+            System.Text.RegularExpressions.RegexOptions.Singleline);
+
+        foreach (System.Text.RegularExpressions.Match match in regex.Matches(text))
+        {
+            var file = match.Groups[1].Value.Trim();
+            if (!int.TryParse(match.Groups[2].Value, out var line) || line < 1) continue;
+            var body = match.Groups[3].Value.Trim();
+            if (string.IsNullOrWhiteSpace(body)) continue;
+
+            // Normalize path separators to forward slash for GitHub API
+            file = file.Replace('\\', '/');
+
+            results.Add(new InlineReviewComment
+            {
+                FilePath = file,
+                Line = line,
+                Body = body
+            });
+        }
+
+        return results;
     }
 
     /// <summary>

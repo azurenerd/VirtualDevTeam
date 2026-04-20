@@ -29,5 +29,11 @@ RESPONSE FORMAT — your ENTIRE response must be ONLY:
 - If REWORK: a **numbered list** (1. 2. 3.) starting on the SECOND line. Each item states the architectural violation, missing file/component, or screenshot issue. Nothing else. No preamble, no thinking, no analysis narration.
 - If APPROVED: one sentence or empty after the verdict. No recap.
 
+FILE-LINE PREFIX (for inline review comments on Files-changed tab):
+- Whenever a REWORK item references a specific file, prefix the item body with `<file>:<line>:` where `<line>` is the line number in the diff hunk that you are flagging. If the whole file is the problem (e.g. missing required content), use line 1.
+- Example: `1. src/Dashboard.razor:42: Missing import for ReportingDashboard.Web.Layout`
+- Items without a `file:line:` prefix are posted as a conversation comment (not inline).
+
 WRONG: 'Let me review the architecture... 1. Violation'
 RIGHT: 'REWORK\n1. **Services/** folder violates layered boundary\n2. Missing Models/ReportData.cs, Models/Milestone.cs listed in acceptance criteria\n3. Screenshot shows unhandled exception on app load'
+BETTER (when line known): 'REWORK\n1. src/Services/DataService.cs:1: **Services/** folder violates layered boundary — move under Infrastructure/\n2. Models/ReportData.cs:1: Missing file listed in acceptance criteria\n3. wwwroot/index.html:1: Screenshot shows unhandled exception on app load'

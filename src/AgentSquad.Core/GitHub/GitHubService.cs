@@ -475,8 +475,8 @@ public class GitHubService : IGitHubService
                 {
                     if (!diffFileNames.Contains(comment.FilePath))
                     {
-                        _logger.LogDebug("Inline comment on {File}:{Line} skipped — file not in PR diff",
-                            comment.FilePath, comment.Line);
+                        _logger.LogInformation("Inline comment on {File}:{Line} skipped for PR #{Number} — file not in PR diff",
+                            comment.FilePath, comment.Line, prNumber);
                         continue;
                     }
 

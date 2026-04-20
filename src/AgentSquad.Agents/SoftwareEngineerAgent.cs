@@ -4718,13 +4718,24 @@ public class SoftwareEngineerAgent : EngineerAgentBase
             fallbackBody = PullRequestWorkflow.StripReviewPreamble(fallbackBody);
             fallbackBody = FilterTruncationComplaints(fallbackBody);
 
+            // WS2 parser-hardening: extract inline comments from text-format reviews.
+            // When the LLM prefixes items with "file:line:", synthesize InlineReviewComments
+            // so review feedback lands on the Files-changed tab instead of conversation-only.
+            var extractedInline = ExtractInlineCommentsFromText(fallbackBody);
+            if (extractedInline.Count > 0)
+            {
+                Logger.LogInformation(
+                    "SE text-parse fallback extracted {Count} inline comments for PR #{Number}",
+                    extractedInline.Count, pr.Number);
+            }
+
             if (!textApproved && string.IsNullOrWhiteSpace(fallbackBody))
             {
                 Logger.LogInformation("SE review of PR #{Number} only had truncation complaints — auto-approving", pr.Number);
                 return (true, "Code review passed. Implementation meets requirements for the task scope.", []);
             }
 
-            return (textApproved, fallbackBody, []);
+            return (textApproved, fallbackBody, extractedInline);
         }
         catch (Exception ex)
         {
@@ -4873,6 +4884,41 @@ public class SoftwareEngineerAgent : EngineerAgentBase
             "implementation not visible", "unable to verify", "unable to see"
         ];
         return truncationKeywords.Any(kw => body.Contains(kw, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// WS2 parser-hardening fallback: extract inline review comments from text-format reviews.
+    /// Matches numbered-list items prefixed with "file.ext:line:" so review feedback lands on
+    /// the Files-changed tab even when the LLM doesn't emit structured JSON.
+    /// </summary>
+    private static List<InlineReviewComment> ExtractInlineCommentsFromText(string? text)
+    {
+        var results = new List<InlineReviewComment>();
+        if (string.IsNullOrWhiteSpace(text)) return results;
+
+        var pattern = @"(?m)^\s*(?:[-*]|\d+\.)?\s*[`""']?([\w./\\\-]+\.[a-zA-Z]{1,8})[`""']?:(\d+):\s*(.+?)(?:\r?\n(?=\s*(?:[-*]|\d+\.))|\r?\n\r?\n|\z)";
+        var regex = new System.Text.RegularExpressions.Regex(
+            pattern,
+            System.Text.RegularExpressions.RegexOptions.Singleline);
+
+        foreach (System.Text.RegularExpressions.Match match in regex.Matches(text))
+        {
+            var file = match.Groups[1].Value.Trim();
+            if (!int.TryParse(match.Groups[2].Value, out var line) || line < 1) continue;
+            var body = match.Groups[3].Value.Trim();
+            if (string.IsNullOrWhiteSpace(body) || IsTruncationComplaint(body)) continue;
+
+            file = file.Replace('\\', '/');
+
+            results.Add(new InlineReviewComment
+            {
+                FilePath = file,
+                Line = line,
+                Body = body
+            });
+        }
+
+        return results;
     }
 
     /// <summary>
