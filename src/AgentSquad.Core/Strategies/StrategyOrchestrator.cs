@@ -164,7 +164,19 @@ public class StrategyOrchestrator
             TotalTokens = evalResult.Candidates.Sum(c => c.Execution.TokensUsed),
         });
 
+        LogOrchestrationSummary(task.TaskId, runSw, evalResult);
+
         return new OrchestrationOutcome(task, evalResult);
+    }
+
+    private void LogOrchestrationSummary(string taskId, Stopwatch runSw, EvaluationResult evalResult)
+    {
+        var winnerId = evalResult.Winner?.StrategyId ?? "<none>";
+        var candidateTimes = string.Join(", ",
+            evalResult.Candidates.Select(c => $"{c.StrategyId}={c.Execution.Elapsed.TotalSeconds:F1}s"));
+        _logger.LogInformation(
+            "Strategy orchestration wall-clock for task {Task}: {Total:F1}s (winner={Winner}); candidates: {Candidates}",
+            taskId, runSw.Elapsed.TotalSeconds, winnerId, candidateTimes);
     }
 
     private async Task<(StrategyExecutionResult? exec, string patch)> RunOneAsync(

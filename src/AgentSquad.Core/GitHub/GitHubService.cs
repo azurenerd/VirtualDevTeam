@@ -126,6 +126,14 @@ public class GitHubService : IGitHubService
     }
 
     /// <summary>
+    /// Process-wide counter of transient retries actually attempted. Exposed so the dashboard /
+    /// tests can surface the number without parsing logs. Incremented every time we back off
+    /// and retry (not per successful call).
+    /// </summary>
+    public static long TransientRetryCount => Interlocked.Read(ref s_transientRetryCount);
+    private static long s_transientRetryCount;
+
+    /// <summary>
     /// Retries a GitHub API operation up to 3 times on transient network failures
     /// (HttpRequestException incl. HttpIOException "response ended prematurely",
     /// TaskCanceledException timeouts, Octokit AbuseException / SecondaryRateLimitExceeded).
@@ -144,6 +152,7 @@ public class GitHubService : IGitHubService
             }
             catch (Exception ex) when (attempt < maxAttempts && IsTransient(ex) && !ct.IsCancellationRequested)
             {
+                Interlocked.Increment(ref s_transientRetryCount);
                 _logger.LogWarning(ex,
                     "Transient GitHub API failure on {Op} #{Id} (attempt {Attempt}/{Max}); retrying in {Delay}ms",
                     opName, resourceId, attempt, maxAttempts, delays[attempt - 1]);
@@ -185,10 +194,11 @@ public class GitHubService : IGitHubService
             {
                 _logger.LogInformation("Creating PR: {Title} ({Head} -> {Base})", title, headBranch, baseBranch);
 
-                var pr = await _client.PullRequest.Create(_owner, _repo, new NewPullRequest(title, headBranch, baseBranch)
-                {
-                    Body = body
-                });
+                var pr = await WithTransientRetryAsync("CreatePR", 0,
+                    () => _client.PullRequest.Create(_owner, _repo, new NewPullRequest(title, headBranch, baseBranch)
+                    {
+                        Body = body
+                    }), ct);
                 TrackRateLimit();
 
                 // Always add labels (at minimum AI-Generated)
@@ -198,7 +208,8 @@ public class GitHubService : IGitHubService
                         : [.. labels, AiGeneratedLabel];
                     try
                     {
-                        await _client.Issue.Labels.AddToIssue(_owner, _repo, pr.Number, allLabels);
+                        await WithTransientRetryAsync("AddPRLabels", pr.Number,
+                            () => _client.Issue.Labels.AddToIssue(_owner, _repo, pr.Number, allLabels), ct);
                     }
                     catch (Exception labelEx)
                     {
@@ -875,8 +886,9 @@ public class GitHubService : IGitHubService
         {
             try
             {
-                await _client.PullRequest.Update(_owner, _repo, prNumber,
-                    new PullRequestUpdate { State = ItemState.Closed });
+                await WithTransientRetryAsync("ClosePR", prNumber,
+                    () => _client.PullRequest.Update(_owner, _repo, prNumber,
+                        new PullRequestUpdate { State = ItemState.Closed }), ct);
                 TrackRateLimit();
                 _logger.LogInformation("Closed PR #{Number}", prNumber);
                 InvalidateListCaches();
@@ -902,7 +914,8 @@ public class GitHubService : IGitHubService
                 if (commitMessage is not null)
                     merge.CommitMessage = commitMessage;
 
-                await _client.PullRequest.Merge(_owner, _repo, prNumber, merge);
+                await WithTransientRetryAsync("MergePR", prNumber,
+                    () => _client.PullRequest.Merge(_owner, _repo, prNumber, merge), ct);
                 TrackRateLimit();
                 _logger.LogInformation("Merged PR #{Number}", prNumber);
                 InvalidateListCaches();
@@ -932,7 +945,8 @@ public class GitHubService : IGitHubService
                 if (!labels.Contains(AiGeneratedLabel, StringComparer.OrdinalIgnoreCase))
                     newIssue.Labels.Add(AiGeneratedLabel);
 
-                var issue = await _client.Issue.Create(_owner, _repo, newIssue);
+                var issue = await WithTransientRetryAsync("CreateIssue", 0,
+                    () => _client.Issue.Create(_owner, _repo, newIssue), ct);
                 TrackRateLimit();
                 InvalidateListCaches();
                 return MapIssue(issue);
@@ -1055,7 +1069,8 @@ public class GitHubService : IGitHubService
         {
             try
             {
-                await _client.Issue.Comment.Create(_owner, _repo, issueNumber, comment);
+                await WithTransientRetryAsync("AddIssueComment", issueNumber,
+                    () => _client.Issue.Comment.Create(_owner, _repo, issueNumber, comment), ct);
                 TrackRateLimit();
                 _logger.LogDebug("Added comment to issue #{Number}", issueNumber);
 
@@ -1117,7 +1132,8 @@ public class GitHubService : IGitHubService
         {
             try
             {
-                await _client.Issue.Update(_owner, _repo, issueNumber, new IssueUpdate { State = ItemState.Closed });
+                await WithTransientRetryAsync("CloseIssue", issueNumber,
+                    () => _client.Issue.Update(_owner, _repo, issueNumber, new IssueUpdate { State = ItemState.Closed }), ct);
                 TrackRateLimit();
                 _logger.LogInformation("Closed issue #{Number}", issueNumber);
                 InvalidateListCaches();
@@ -1218,7 +1234,8 @@ public class GitHubService : IGitHubService
         {
             try
             {
-                await _client.Issue.Update(_owner, _repo, issueNumber, new IssueUpdate { Title = newTitle });
+                await WithTransientRetryAsync("UpdateIssueTitle", issueNumber,
+                    () => _client.Issue.Update(_owner, _repo, issueNumber, new IssueUpdate { Title = newTitle }), ct);
                 TrackRateLimit();
                 _logger.LogInformation("Updated issue #{Number} title to '{Title}'", issueNumber, newTitle);
                 InvalidateListCaches();
@@ -1251,7 +1268,8 @@ public class GitHubService : IGitHubService
                         update.AddLabel(label);
                 }
 
-                await _client.Issue.Update(_owner, _repo, issueNumber, update);
+                await WithTransientRetryAsync("UpdateIssue", issueNumber,
+                    () => _client.Issue.Update(_owner, _repo, issueNumber, update), ct);
                 TrackRateLimit();
                 _logger.LogInformation("Updated issue #{Number}", issueNumber);
                 InvalidateListCaches();
@@ -1572,7 +1590,8 @@ public class GitHubService : IGitHubService
                 var source = await _client.Git.Reference.Get(_owner, _repo, $"heads/{fromBranch}");
                 TrackRateLimit();
                 var newRef = new NewReference($"refs/heads/{branchName}", source.Object.Sha);
-                await _client.Git.Reference.Create(_owner, _repo, newRef);
+                await WithTransientRetryAsync("CreateBranch", 0,
+                    () => _client.Git.Reference.Create(_owner, _repo, newRef), ct);
                 _logger.LogInformation("Created branch {Branch} from {Source}", branchName, fromBranch);
             }
             // BUG FIX: Gracefully handle "Reference already exists" instead of throwing.
@@ -1620,7 +1639,8 @@ public class GitHubService : IGitHubService
         {
             try
             {
-                await _client.Git.Reference.Delete(_owner, _repo, $"heads/{branchName}");
+                await WithTransientRetryAsync("DeleteBranch", 0,
+                    () => _client.Git.Reference.Delete(_owner, _repo, $"heads/{branchName}"), ct);
                 TrackRateLimit();
                 _logger.LogInformation("Deleted branch {Branch}", branchName);
             }
@@ -1718,9 +1738,10 @@ public class GitHubService : IGitHubService
             {
                 // Use the REST API: PUT /repos/{owner}/{repo}/pulls/{pull_number}/update-branch
                 // Octokit doesn't have a built-in method for this, so use the Connection directly
-                var response = await _client.Connection.Put<object>(
-                    new Uri($"repos/{_owner}/{_repo}/pulls/{prNumber}/update-branch", UriKind.Relative),
-                    new { expected_head_sha = (string?)null });
+                var response = await WithTransientRetryAsync("UpdatePRBranch", prNumber,
+                    () => _client.Connection.Put<object>(
+                        new Uri($"repos/{_owner}/{_repo}/pulls/{prNumber}/update-branch", UriKind.Relative),
+                        new { expected_head_sha = (string?)null }), ct);
                 TrackRateLimit();
 
                 _logger.LogInformation("Updated PR #{PrNumber} branch with latest main", prNumber);
