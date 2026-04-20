@@ -125,6 +125,54 @@ public class GitHubService : IGitHubService
             _rl.UpdateRateLimit(rl.Remaining, rl.Reset.UtcDateTime);
     }
 
+    /// <summary>
+    /// Retries a GitHub API operation up to 3 times on transient network failures
+    /// (HttpRequestException incl. HttpIOException "response ended prematurely",
+    /// TaskCanceledException timeouts, Octokit AbuseException / SecondaryRateLimitExceeded).
+    /// Non-transient failures (404, 422, auth) throw immediately.
+    /// Backoff: 500ms, 1500ms, 3000ms.
+    /// </summary>
+    private async Task<T> WithTransientRetryAsync<T>(string opName, int resourceId, Func<Task<T>> op, CancellationToken ct)
+    {
+        const int maxAttempts = 3;
+        var delays = new[] { 500, 1500, 3000 };
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return await op();
+            }
+            catch (Exception ex) when (attempt < maxAttempts && IsTransient(ex) && !ct.IsCancellationRequested)
+            {
+                _logger.LogWarning(ex,
+                    "Transient GitHub API failure on {Op} #{Id} (attempt {Attempt}/{Max}); retrying in {Delay}ms",
+                    opName, resourceId, attempt, maxAttempts, delays[attempt - 1]);
+                try { await Task.Delay(delays[attempt - 1], ct); }
+                catch (OperationCanceledException) { throw; }
+            }
+        }
+    }
+
+    private Task WithTransientRetryAsync(string opName, int resourceId, Func<Task> op, CancellationToken ct)
+        => WithTransientRetryAsync<object?>(opName, resourceId, async () => { await op(); return null; }, ct);
+
+    private static bool IsTransient(Exception ex)
+    {
+        switch (ex)
+        {
+            case HttpRequestException: // also covers HttpIOException (subclass)
+            case TaskCanceledException:
+            case Octokit.AbuseException:
+            case Octokit.SecondaryRateLimitExceededException:
+                return true;
+            case OperationCanceledException oce when oce.CancellationToken == default:
+                return true; // timeout rather than caller cancellation
+        }
+        // ApiException with 5xx is transient
+        if (ex is Octokit.ApiException api && (int)api.StatusCode >= 500) return true;
+        return false;
+    }
+
     // Pull Requests
 
     public async Task<AgentPullRequest> CreatePullRequestAsync(
@@ -742,7 +790,8 @@ public class GitHubService : IGitHubService
         {
             try
             {
-                await _client.Issue.Comment.Create(_owner, _repo, prNumber, comment);
+                await WithTransientRetryAsync("AddComment", prNumber,
+                    () => _client.Issue.Comment.Create(_owner, _repo, prNumber, comment), ct);
                 TrackRateLimit();
                 _logger.LogDebug("Added comment to PR #{Number}", prNumber);
 
@@ -774,7 +823,8 @@ public class GitHubService : IGitHubService
                 };
 
                 var review = new PullRequestReviewCreate { Body = body, Event = reviewEvent };
-                await _client.PullRequest.Review.Create(_owner, _repo, prNumber, review);
+                await WithTransientRetryAsync("SubmitReview", prNumber,
+                    () => _client.PullRequest.Review.Create(_owner, _repo, prNumber, review), ct);
                 TrackRateLimit();
                 _logger.LogInformation("Submitted {Event} review on PR #{Number}", eventType, prNumber);
             }
@@ -798,12 +848,14 @@ public class GitHubService : IGitHubService
                 if (title is not null) update.Title = title;
                 if (body is not null) update.Body = body;
 
-                await _client.PullRequest.Update(_owner, _repo, prNumber, update);
+                await WithTransientRetryAsync("UpdatePR", prNumber,
+                    () => _client.PullRequest.Update(_owner, _repo, prNumber, update), ct);
                 TrackRateLimit();
 
                 if (labels is not null)
                 {
-                    await _client.Issue.Labels.ReplaceAllForIssue(_owner, _repo, prNumber, labels);
+                    await WithTransientRetryAsync("ReplaceLabels", prNumber,
+                        () => _client.Issue.Labels.ReplaceAllForIssue(_owner, _repo, prNumber, labels), ct);
                 }
 
                 _logger.LogInformation("Updated PR #{Number}", prNumber);
