@@ -1,6 +1,6 @@
 ---
-version: "1.0"
-description: "SE single-pass implementation user prompt"
+version: "1.1"
+description: "SE single-pass implementation user prompt (task-first scope-anchoring)"
 variables:
   - pm_spec
   - architecture
@@ -12,16 +12,26 @@ tags:
   - software-engineer
   - implementation
 ---
-## PM Specification
-{{pm_spec}}
-
-## Architecture
-{{architecture}}{{issue_context}}
-
 ## Task: {{task_name}}
 {{task_description}}
 
-Implement ONLY the files needed for this specific task. Output each file using this exact format:
+## SCOPE RULE (read this before anything else) — CRITICAL
+- Produce ONLY the files required by THIS task's acceptance criteria.
+- Do NOT implement features from other tasks even if the PM spec / architecture describe them.
+- If the task is 'scaffolding' or 'project foundation': emit project manifests, directory structure, placeholder entry-points, and .gitignore ONLY. Do NOT implement pages, components, services, or models — those belong to their own tasks.
+- If the task description has a FilePlan (CREATE:/MODIFY:/USE:), follow it strictly. Only output CREATE and MODIFY files.
+- Do NOT regenerate files that already exist on the branch (.sln, .csproj, Program.cs, existing components, CSS files, data files) unless the task EXPLICITLY requires changes to them. Regenerating existing infrastructure files causes merge conflicts with other PRs and is the #1 reason for review rejection.
+- USE: files are references — read them for context but do NOT include them in your output.
+- When in doubt, produce FEWER files rather than more. A downstream task will fill the gap.
+
+## PM Specification (context — DO NOT implement things outside this task)
+{{pm_spec}}
+
+## Architecture (context — DO NOT implement things outside this task)
+{{architecture}}{{issue_context}}
+
+## Output contract
+Implement ONLY the files needed for THIS task (see SCOPE RULE above). Output each file using this exact format:
 
 FILE: path/to/file.ext
 ```language
@@ -29,12 +39,6 @@ FILE: path/to/file.ext
 ```
 
 Use the {{tech_stack}} technology stack.
-
-SCOPE RULE — CRITICAL:
-- Only output files that are NEW (created by this task) or MINIMALLY MODIFIED to wire in the new functionality.
-- If the task description has a FilePlan (CREATE:/MODIFY:/USE:), follow it strictly. Only output CREATE and MODIFY files.
-- Do NOT regenerate files that already exist on the branch (.sln, .csproj, Program.cs, existing components, CSS files, data files) unless the task EXPLICITLY requires changes to them.
-- Regenerating existing infrastructure files causes merge conflicts with other PRs and is the #1 reason for review rejection.
-- USE: files are references — read them for context but do NOT include them in your output.
 - When modifying an existing file, include the COMPLETE content of that file with your changes applied.
 - Every file MUST use the FILE: marker format so it can be parsed and committed.
+

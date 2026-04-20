@@ -78,21 +78,33 @@ public static class SinglePassPromptBuilder
         }
 
         var sb = new StringBuilder();
-        sb.Append("## PM Specification\n").Append(inputs.PmSpec ?? "").Append("\n\n");
-        sb.Append("## Architecture\n").Append(inputs.Architecture ?? "");
+        // Put the SPECIFIC TASK first so it anchors the model's attention.
+        // Previously the PMSpec+Architecture came first and the model regularly
+        // ignored the scope rule and re-implemented the entire product when the
+        // task was something narrow (e.g. "Project Foundation and Scaffolding"
+        // producing a 40-file patch for the whole dashboard).
+        sb.Append("## Task: ").Append(inputs.TaskName).Append('\n').Append(inputs.TaskDescription ?? "").Append("\n\n");
+        sb.Append("## SCOPE RULE (read this before anything else)\n");
+        sb.Append("- Produce ONLY the files required by THIS task's acceptance criteria.\n");
+        sb.Append("- Do NOT implement features from other tasks even if the PM spec / architecture describe them.\n");
+        sb.Append("- If the task is 'scaffolding' or 'project foundation': emit project manifests, directory structure, ");
+        sb.Append("placeholder entry-points, and .gitignore ONLY. Do NOT implement pages, components, services, or models — ");
+        sb.Append("those belong to their own tasks.\n");
+        sb.Append("- If the task has a FilePlan (CREATE:/MODIFY:/USE:), follow it strictly; do NOT add files outside it.\n");
+        sb.Append("- When in doubt, produce FEWER files rather than more. A downstream task will fill the gap.\n\n");
+        sb.Append("## PM Specification (context — DO NOT implement things outside this task)\n").Append(inputs.PmSpec ?? "").Append("\n\n");
+        sb.Append("## Architecture (context — DO NOT implement things outside this task)\n").Append(inputs.Architecture ?? "");
         if (!string.IsNullOrWhiteSpace(inputs.IssueContext))
             sb.Append(inputs.IssueContext);
         if (!string.IsNullOrWhiteSpace(inputs.DesignContext))
             sb.Append("\n\n").Append(inputs.DesignContext);
-        sb.Append("\n\n## Task: ").Append(inputs.TaskName).Append('\n').Append(inputs.TaskDescription ?? "").Append("\n\n");
-        sb.Append("Implement ONLY the files needed for this specific task. ");
+        sb.Append("\n\n## Output contract\n");
+        sb.Append("Implement ONLY the files needed for THIS task (see SCOPE RULE above). ");
         sb.Append("Output each file using this exact format:\n\n");
         sb.Append("FILE: path/to/file.ext\n```language\n<file content>\n```\n\n");
         sb.Append($"Use the {inputs.TechStack ?? ""} technology stack. ");
-        sb.Append("SCOPE RULE: Only output files that are NEW or MINIMALLY MODIFIED for this task. ");
         sb.Append("Do NOT regenerate .sln, .csproj, Program.cs, or other infrastructure files unless ");
         sb.Append("this task explicitly requires changes to them. ");
-        sb.Append("If the task has a FilePlan (CREATE:/MODIFY:/USE:), follow it strictly. ");
         sb.Append("Every file MUST use the FILE: marker format so it can be parsed and committed.");
         return sb.ToString();
     }

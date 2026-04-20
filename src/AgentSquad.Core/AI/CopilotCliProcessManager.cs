@@ -512,6 +512,22 @@ public sealed class CopilotCliProcessManager : IHostedService, IDisposable
                 // session was killed BECAUSE of the violation, so exit code is noise.
                 if (monitor?.FailureReason is { } watchdogFailure)
                 {
+                    string errorMessage;
+                    if (watchdogFailure == AgenticFailureReason.StuckNoOutput)
+                    {
+                        // Surface stderr tail so operators can see real failure cause
+                        // (e.g. auth failure, MCP server startup crash) when the CLI
+                        // hangs before emitting any stdout. Without this, the experiment
+                        // record only says "stuck" with no clue what went wrong.
+                        var stderrTail = string.IsNullOrEmpty(stderr)
+                            ? "(no stderr)"
+                            : stderr.Length > 800 ? stderr[..800] : stderr;
+                        errorMessage = $"Agentic session stuck: no stdout for {_frameworkConfig.Agentic.StuckSeconds}s. stderr: {stderrTail}";
+                    }
+                    else
+                    {
+                        errorMessage = $"Agentic session exceeded tool-call cap of {_frameworkConfig.Agentic.ToolCallCap}";
+                    }
                     return new AgenticSessionResult
                     {
                         Succeeded = false,
@@ -520,9 +536,7 @@ public sealed class CopilotCliProcessManager : IHostedService, IDisposable
                         WallClock = sw.Elapsed,
                         ToolCallCount = monitor.ToolCallCount,
                         LogBuffer = logBuffer.ToString(),
-                        ErrorMessage = watchdogFailure == AgenticFailureReason.StuckNoOutput
-                            ? $"Agentic session stuck: no stdout for {_frameworkConfig.Agentic.StuckSeconds}s"
-                            : $"Agentic session exceeded tool-call cap of {_frameworkConfig.Agentic.ToolCallCap}",
+                        ErrorMessage = errorMessage,
                     };
                 }
 

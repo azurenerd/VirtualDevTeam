@@ -32,8 +32,14 @@ public class WinnerApplyService
             return new ApplyOutcome(false, "head-changed", currentHead);
         }
 
-        // 2. Checkout branch in main working tree
+        // 2. Checkout branch in main working tree, after a hard reset so that any
+        // pre-existing dirty state (stale merge markers, orphaned apply residue,
+        // prior strategy-framework failure) can't poison the 3-way apply.
+        await TryRunGitAsync(agentRepoPath, new[] { "reset", "--hard", "HEAD" }, ct);
+        await TryRunGitAsync(agentRepoPath, new[] { "clean", "-fd" }, ct);
         await RunGitCaptureAsync(agentRepoPath, new[] { "checkout", branchName }, ct);
+        await TryRunGitAsync(agentRepoPath, new[] { "reset", "--hard", branchName }, ct);
+        await TryRunGitAsync(agentRepoPath, new[] { "clean", "-fd" }, ct);
 
         // 3. Write patch to a temp file and apply --3way --check, then apply
         var tmp = Path.Combine(Path.GetTempPath(), "sf-winner-" + Guid.NewGuid().ToString("N") + ".patch");
@@ -46,7 +52,27 @@ public class WinnerApplyService
 
             var apply = await TryRunGitAsync(agentRepoPath, new[] { "apply", "--3way", tmp }, ct);
             if (!apply.ok)
+            {
+                // Roll back any partial 3-way state so the caller sees a clean tree.
+                await TryRunGitAsync(agentRepoPath, new[] { "reset", "--hard", "HEAD" }, ct);
+                await TryRunGitAsync(agentRepoPath, new[] { "clean", "-fd" }, ct);
                 return new ApplyOutcome(false, $"apply-failed: {apply.stderr}", currentHead);
+            }
+
+            // 4. Post-apply invariant check: `git apply --3way` can exit 0 while
+            // still leaving UU entries in the index when some hunks 3-way'd into
+            // conflicts. Committing from that state ships conflict markers AND
+            // wedges the next checkout. Detect it and abort cleanly.
+            var unmerged = await RunGitCaptureAsync(agentRepoPath, new[] { "ls-files", "-u" }, ct);
+            if (!string.IsNullOrWhiteSpace(unmerged))
+            {
+                _logger.LogWarning(
+                    "Winner apply left unmerged entries on {Branch}; aborting and rolling back. Entries:\n{Entries}",
+                    branchName, unmerged);
+                await TryRunGitAsync(agentRepoPath, new[] { "reset", "--hard", "HEAD" }, ct);
+                await TryRunGitAsync(agentRepoPath, new[] { "clean", "-fd" }, ct);
+                return new ApplyOutcome(false, "unmerged-after-apply", currentHead);
+            }
 
             return new ApplyOutcome(true, null, currentHead);
         }

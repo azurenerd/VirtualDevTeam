@@ -517,7 +517,10 @@ public class LocalWorkspace
         await _gitLock.WaitAsync(ct);
         try
         {
-            await RunGitAsync("checkout", "--", ".", ct: ct);
+            // reset --hard HEAD (not `checkout -- .`) so we also clear unmerged (UU)
+            // entries left behind by `git apply --3way`. The prior form left a poisoned
+            // index that wedged the next checkout with "resolve your current index first".
+            await RunGitAsync("reset", "--hard", "HEAD", ct: ct);
             await RunGitAsync("clean", "-fd", ct: ct);
             _logger.LogInformation("[{Agent}] Reverted all uncommitted changes", _agentId);
         }

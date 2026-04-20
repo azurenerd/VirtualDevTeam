@@ -66,7 +66,13 @@ public class AgenticDelegationStrategy : ICodeGenerationStrategy
         {
             Pool = CopilotCliPool.Agentic,
             AllowAll = true,
-            CloseStdinAfterPrompt = false,
+            // Close stdin after piping the prompt. Leaving stdin open historically
+            // caused the agentic session to hang before emitting any output (the
+            // CLI waits on EOF on the initial prompt before it starts processing).
+            // Symptom: stuck-no-output at exactly StuckSeconds, 0 tool calls, empty
+            // log buffer. Multi-turn stdin is not used today; flip back to false
+            // only when we add a real interactive protocol.
+            CloseStdinAfterPrompt = true,
             WatchdogMode = CopilotCliWatchdogMode.Agentic,
             WorkingDirectory = invocation.WorktreePath,
             EnvironmentOverrides = scope.EnvironmentOverrides,
