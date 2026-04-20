@@ -208,27 +208,27 @@ public class LimitsConfig
     /// the reviewer force-approves to prevent infinite loops.
     /// This is the default fallback; prefer the phase-specific limits below.
     /// </summary>
-    public int MaxReworkCycles { get; set; } = 1;
+    public int MaxReworkCycles { get; set; } = 3;
 
     /// <summary>
     /// Maximum Architect ↔ Engineer rework cycles per PR.
     /// Architect reviews first (Phase 1); after this limit, force-approve and proceed to TE testing.
     /// Falls back to MaxReworkCycles if not explicitly set.
     /// </summary>
-    public int MaxArchitectReworkCycles { get; set; } = 1;
+    public int MaxArchitectReworkCycles { get; set; } = 2;
 
     /// <summary>
     /// Maximum PM ↔ Engineer rework cycles per PR.
     /// PM reviews last (Phase 3, after TE adds tests); after this limit, force-approve and merge.
     /// Falls back to MaxReworkCycles if not explicitly set.
     /// </summary>
-    public int MaxPmReworkCycles { get; set; } = 1;
+    public int MaxPmReworkCycles { get; set; } = 3;
 
     /// <summary>
     /// Maximum rework cycles for Test Engineer source-bug feedback, tracked independently
     /// from peer review rework so TE feedback isn't blocked by exhausted peer review cycles.
     /// </summary>
-    public int MaxTestReworkCycles { get; set; } = 1;
+    public int MaxTestReworkCycles { get; set; } = 2;
 
     /// <summary>
     /// Maximum times the Test Engineer will request source bug fixes from an engineer

@@ -2247,6 +2247,24 @@ public class SoftwareEngineerAgent : EngineerAgentBase
 
         // Sync branch with main before marking ready — ensures PR is merge-clean
         await SyncBranchWithMainAsync(pr.Number, ct);
+
+        // D1: placeholder-string guard. For tasks that claim to wire/compose/integrate/finalize
+        // a UI, refuse to mark ready if the PR ships literal placeholder strings in UI files.
+        // Post a self-review comment + request rework from ourselves instead of silently shipping.
+        var placeholderWarning = await CheckPrForPlaceholderStringsAsync(pr, task, ct);
+        if (!string.IsNullOrEmpty(placeholderWarning))
+        {
+            Logger.LogWarning("D1 guard: PR #{Pr} contains forbidden placeholder strings for an integration task; not marking ready.", pr.Number);
+            await GitHub.AddPullRequestCommentAsync(pr.Number,
+                $"[SoftwareEngineer] ⚠️ Self-check blocked ready-for-review:\n\n{placeholderWarning}\n\n" +
+                "This task claims to wire/compose/integrate/finalize a UI component, but the PR still contains " +
+                "literal placeholder strings. Replace the placeholder strings with the real component invocation " +
+                "(or a concrete empty state), then re-run the ready-for-review flow.",
+                ct);
+            _taskTracker.CompleteStep(readyStepId);
+            return;
+        }
+
         await PrWorkflow.MarkReadyForReviewAsync(pr.Number, Identity.DisplayName, ct);
         _taskTracker.CompleteStep(readyStepId);
 
@@ -2264,6 +2282,71 @@ public class SoftwareEngineerAgent : EngineerAgentBase
         Logger.LogInformation(
             "Software Engineer completed implementation for PR #{PrNumber} (task {TaskId})",
             pr.Number, task.Id);
+    }
+
+    /// <summary>
+    /// D1: Check whether the PR's touched UI files contain forbidden literal placeholder
+    /// strings when the task claims to wire/compose/integrate/finalize a UI component.
+    /// Returns a human-readable warning message if violations found, otherwise empty.
+    /// </summary>
+    private async Task<string> CheckPrForPlaceholderStringsAsync(
+        AgentPullRequest pr, EngineeringTask task, CancellationToken ct)
+    {
+        var taskText = ($"{task.Name} {task.Description}").ToLowerInvariant();
+        string[] integrationVerbs = { "wire", "compose", "integrate", "finalize", "final ", "hook up", "connect", "render" };
+        if (!integrationVerbs.Any(v => taskText.Contains(v))) return string.Empty;
+
+        string[] forbidden = {
+            "(placeholder)", "timeline placeholder", "heatmap placeholder",
+            "header placeholder", "component placeholder", "lorem ipsum",
+            "\"placeholder\"", "'placeholder'", "coming soon"
+        };
+
+        try
+        {
+            var files = await GitHub.GetPullRequestChangedFilesAsync(pr.Number, ct);
+            var uiFiles = files.Where(f =>
+            {
+                // D1: exclude test files to avoid false blocks on guard/meta tests that
+                // themselves reference the word "placeholder" (e.g., test asserting it's absent).
+                var normalized = f.Replace('\\', '/');
+                if (normalized.StartsWith("tests/", StringComparison.OrdinalIgnoreCase)) return false;
+                if (normalized.Contains("/tests/", StringComparison.OrdinalIgnoreCase)) return false;
+                var name = System.IO.Path.GetFileNameWithoutExtension(normalized);
+                if (name.EndsWith("Tests", StringComparison.OrdinalIgnoreCase)) return false;
+                if (name.EndsWith(".Tests", StringComparison.OrdinalIgnoreCase)) return false;
+
+                var ext = System.IO.Path.GetExtension(f).ToLowerInvariant();
+                return ext == ".razor" || ext == ".html" || ext == ".cshtml" ||
+                       ext == ".tsx" || ext == ".jsx" || ext == ".vue";
+            }).ToList();
+
+            if (uiFiles.Count == 0) return string.Empty;
+
+            var violations = new List<string>();
+            foreach (var file in uiFiles)
+            {
+                var content = await GitHub.GetFileContentAsync(file, pr.HeadBranch, ct);
+                if (string.IsNullOrEmpty(content)) continue;
+                var lower = content.ToLowerInvariant();
+                foreach (var f in forbidden)
+                {
+                    if (lower.Contains(f))
+                    {
+                        violations.Add($"- `{file}` contains literal `{f}`");
+                        break; // one violation per file is enough
+                    }
+                }
+            }
+
+            if (violations.Count == 0) return string.Empty;
+            return "Forbidden placeholder strings detected:\n" + string.Join("\n", violations);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex, "D1: placeholder check failed for PR #{Pr} (skipping)", pr.Number);
+            return string.Empty;
+        }
     }
 
     /// <summary>

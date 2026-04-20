@@ -99,6 +99,11 @@ public class ResearcherAgent : AgentBase
                             directive.Topic);
                         currentDirective = null; // Don't re-enqueue on success
 
+                        // B1: even when Research.md already exists (e.g., preserved across mini-resets),
+                        // ensure design screenshots are present in the repo — downstream PM review depends on them.
+                        try { await EnsureDesignScreenshotsPresentAsync(ct); }
+                        catch (Exception ex) { Logger.LogDebug(ex, "EnsureDesignScreenshotsPresentAsync failed (non-fatal)"); }
+
                         // Still signal completion so downstream agents aren't stuck
                         await _messageBus.PublishAsync(new StatusUpdateMessage
                         {
@@ -996,6 +1001,78 @@ public class ResearcherAgent : AgentBase
         {
             Logger.LogWarning(ex, "Failed to scan for design reference files");
             return null;
+        }
+    }
+
+    /// <summary>
+    /// B1: Ensure design screenshots exist in repo under docs/design-screenshots/.
+    /// Called even when Research.md is already present (preserved across mini-resets),
+    /// because without the rendered screenshots PM review cannot compare actual vs. target.
+    /// Safe to call repeatedly; only renders/commits when missing.
+    /// </summary>
+    private async Task EnsureDesignScreenshotsPresentAsync(CancellationToken ct)
+    {
+        if (_playwrightRunner is null) return;
+
+        IReadOnlyList<string> tree;
+        try { tree = await _github.GetRepositoryTreeAsync("main", ct); }
+        catch (Exception ex) { Logger.LogDebug(ex, "Could not read repo tree for design screenshot check"); return; }
+
+        var htmlDesignFiles = tree
+            .Where(f =>
+            {
+                var ext = Path.GetExtension(f).ToLowerInvariant();
+                if (ext != ".html" && ext != ".htm") return false;
+                var lower = f.ToLowerInvariant();
+                if (lower.StartsWith("src/")) return false;
+                var name = Path.GetFileName(lower);
+                return name.Contains("design") || name.Contains("mock") ||
+                       name.Contains("wireframe") || name.Contains("concept") ||
+                       name.Contains("prototype") || name.Contains("reference");
+            })
+            .ToList();
+
+        if (htmlDesignFiles.Count == 0) return;
+
+        var existingScreenshots = new HashSet<string>(
+            tree.Where(f => f.StartsWith("docs/design-screenshots/", StringComparison.OrdinalIgnoreCase) &&
+                            f.EndsWith(".png", StringComparison.OrdinalIgnoreCase))
+                .Select(f => Path.GetFileNameWithoutExtension(f)),
+            StringComparer.OrdinalIgnoreCase);
+
+        foreach (var htmlPath in htmlDesignFiles)
+        {
+            var stem = Path.GetFileNameWithoutExtension(htmlPath);
+            if (existingScreenshots.Contains(stem)) continue;
+
+            try
+            {
+                var htmlContent = await _github.GetFileContentAsync(htmlPath, ct: ct);
+                if (string.IsNullOrWhiteSpace(htmlContent)) continue;
+
+                var screenshotBytes = await _playwrightRunner.CaptureHtmlScreenshotAsync(
+                    htmlContent, _config.Workspace, ct: ct);
+                if (screenshotBytes is null || screenshotBytes.Length == 0)
+                {
+                    Logger.LogWarning("B1: design screenshot capture returned empty for {Path}", htmlPath);
+                    continue;
+                }
+
+                var screenshotPath = $"docs/design-screenshots/{stem}.png";
+                var imageUrl = await _github.CommitBinaryFileAsync(
+                    screenshotPath, screenshotBytes,
+                    $"Add design screenshot: {stem}.png (rendered from {htmlPath})",
+                    "main", ct);
+
+                if (!string.IsNullOrWhiteSpace(imageUrl))
+                {
+                    Logger.LogInformation("B1: committed design screenshot {Path} from {Source}", screenshotPath, htmlPath);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex, "B1: failed to ensure design screenshot for {Path}", htmlPath);
+            }
         }
     }
 

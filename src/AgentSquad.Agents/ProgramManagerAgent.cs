@@ -991,24 +991,60 @@ public class ProgramManagerAgent : AgentBase
 
                 bool approved;
                 string? reviewBody;
+
+                // A2/B-followup guard: inspect TE comment for UI failures OR App Preview Unavailable.
+                // Applied to BOTH force-approval and no-new-commits auto-approval paths so a broken
+                // SHA can never silently merge.
+                var (uiGateBlocked, uiGateMessage) = await EvaluateUiFailureGateAsync(prNumber, ct);
+
                 if (_forceApprovalPrs.Contains(prNumber))
                 {
-                    _forceApprovalPrs.Remove(prNumber);
-                    approved = true;
-                    reviewBody = $"Force-approving after maximum PM rework cycles reached. " +
-                        $"The PR has been through multiple review iterations and the engineer " +
-                        $"has made best-effort improvements.";
+                    if (uiGateBlocked)
+                    {
+                        _forceApprovalPrs.Remove(prNumber);
+                        Logger.LogWarning(
+                            "PM blocking force-approval on PR #{Number}: {Reason}",
+                            prNumber, uiGateMessage);
+                        approved = false;
+                        reviewBody = $"⛔ Force-approval blocked by UI quality gate.\n\n{uiGateMessage}\n\n" +
+                            $"A dashboard with visible UI failures cannot be merged on a force-approval fast path. " +
+                            $"Please address the failures and push new commits before re-requesting review. " +
+                            $"If these are infrastructure flakes, escalate to a human reviewer via the ReworkExhaustion gate.";
+                    }
+                    else
+                    {
+                        _forceApprovalPrs.Remove(prNumber);
+                        approved = true;
+                        reviewBody = $"Force-approving after maximum PM rework cycles reached. " +
+                            $"The PR has been through multiple review iterations and the engineer " +
+                            $"has made best-effort improvements.";
+                    }
                 }
                 else
                 {
                     var hasNewCommits = await _prWorkflow.HasNewCommitsSinceReviewAsync(prNumber, "ProgramManager", ct);
                     if (!hasNewCommits)
                     {
-                        Logger.LogWarning("No new commits on PR #{Number} since last PM review — approving to unblock", prNumber);
-                        approved = true;
-                        reviewBody = "No new code commits detected since last review. " +
-                            "The author marked the PR as ready but did not push file changes. " +
-                            "Approving to avoid blocking progress — previous feedback still applies.";
+                        // A2 fix #1: do NOT auto-approve same SHA if the UI gate still blocks.
+                        // Otherwise re-running ready-for-review without new commits would bypass the gate.
+                        if (uiGateBlocked)
+                        {
+                            Logger.LogWarning(
+                                "PM refusing no-new-commits auto-approval on PR #{Number}: UI gate still blocks ({Reason})",
+                                prNumber, uiGateMessage);
+                            approved = false;
+                            reviewBody = $"⛔ Cannot approve — UI quality gate still blocks this PR.\n\n{uiGateMessage}\n\n" +
+                                $"No new commits have been pushed since the last review, but the UI failures remain. " +
+                                $"Push a fix or escalate via the ReworkExhaustion gate.";
+                        }
+                        else
+                        {
+                            Logger.LogWarning("No new commits on PR #{Number} since last PM review — approving to unblock", prNumber);
+                            approved = true;
+                            reviewBody = "No new code commits detected since last review. " +
+                                "The author marked the PR as ready but did not push file changes. " +
+                                "Approving to avoid blocking progress — previous feedback still applies.";
+                        }
                     }
                     else
                     {
@@ -2530,6 +2566,10 @@ public class ProgramManagerAgent : AgentBase
 
             var hasScreenshots = screenshotImages.Count > 0 || !string.IsNullOrEmpty(screenshotContext);
 
+            // B2: Load design reference screenshot(s) from repo so PM vision can compare
+            // actual-vs-target. Without these, PM vision has no anchor for design fidelity.
+            var designReferenceImages = await LoadDesignReferenceImagesAsync(ct);
+
             // Log AI description of each screenshot for dashboard visibility
             if (screenshotImages.Count > 0)
             {
@@ -2591,11 +2631,30 @@ public class ProgramManagerAgent : AgentBase
             if (screenshotImages.Count > 0)
             {
                 var items = new ChatMessageContentItemCollection();
-                var screenshotIntro = "\n\n## 📸 Application Screenshots\n" +
-                    "The following screenshots show the actual running application. " +
+                var screenshotIntro = "\n\n## 📸 Application Screenshots (Actual)\n" +
+                    "The following screenshots show the ACTUAL running application for this PR. " +
                     "LOOK AT EACH IMAGE CAREFULLY for errors, blank screens, or broken UI.\n\n";
                 for (var i = 0; i < screenshotImages.Count; i++)
-                    screenshotIntro += $"Screenshot {i + 1}: {screenshotImages[i].Description}\n";
+                    screenshotIntro += $"Actual Screenshot {i + 1}: {screenshotImages[i].Description}\n";
+
+                if (designReferenceImages.Count > 0)
+                {
+                    screenshotIntro += "\n## 🎯 Design Reference (Target)\n" +
+                        "The following image(s) are the TARGET DESIGN that the app must match. " +
+                        "Compare the Actual Screenshot(s) above against this Design Reference.\n\n" +
+                        "**STRICT FIDELITY RULES — REQUEST_CHANGES if ANY are violated:**\n" +
+                        "- If the actual screenshot is blank, mostly white, or contains literal words like " +
+                        "`placeholder`, `(placeholder)`, `Timeline placeholder`, `Heatmap placeholder`, " +
+                        "`Lorem ipsum`, `TODO`, `stub`, or `coming soon` visible to the user → REQUEST_CHANGES.\n" +
+                        "- If major components from the design (e.g., header, timeline, heatmap, data grid, charts) " +
+                        "are missing from the actual screenshot → REQUEST_CHANGES.\n" +
+                        "- If the actual screenshot shows a red error banner or stack trace and the PR is not " +
+                        "specifically a bug-fix for that error → REQUEST_CHANGES.\n" +
+                        "- 'Stubbed with placeholder strings' is NEVER acceptable for a task that claims to wire, " +
+                        "compose, integrate, finalize, or ship a UI component.\n\n";
+                    for (var i = 0; i < designReferenceImages.Count; i++)
+                        screenshotIntro += $"Design Reference {i + 1}: {designReferenceImages[i].Description}\n";
+                }
 
                 items.Add(new TextContent(userMessageText + screenshotIntro));
 
@@ -2603,7 +2662,15 @@ public class ProgramManagerAgent : AgentBase
                 {
                     items.Add(new ImageContent(img.ImageBytes, img.MimeType)
                     {
-                        ModelId = $"screenshot: {img.Description}"
+                        ModelId = $"actual-screenshot: {img.Description}"
+                    });
+                }
+
+                foreach (var img in designReferenceImages)
+                {
+                    items.Add(new ImageContent(img.ImageBytes, img.MimeType)
+                    {
+                        ModelId = $"design-reference: {img.Description}"
                     });
                 }
 
@@ -2899,6 +2966,108 @@ public class ProgramManagerAgent : AgentBase
             Logger.LogWarning(ex, "Failed to read design reference files for PMSpec");
             return null;
         }
+    }
+
+    /// <summary>
+    /// B2/A2 follow-up: inspect the latest TestEngineer comment for UI failure evidence.
+    /// Returns (true, reason) if the PR should NOT be force-approved or auto-approved:
+    ///   - TE reports N UI test failures (N > 0)
+    ///   - TE reports "App Preview Unavailable" (no live screenshot captured)
+    /// Returns (false, null) if the gate permits approval.
+    /// </summary>
+    private async Task<(bool Blocked, string Message)> EvaluateUiFailureGateAsync(
+        int prNumber, CancellationToken ct)
+    {
+        try
+        {
+            var comments = await _github.GetPullRequestCommentsAsync(prNumber, ct);
+
+            // Walk newest-first through TE-authored comments only.
+            for (int i = comments.Count - 1; i >= 0; i--)
+            {
+                var body = comments[i].Body ?? string.Empty;
+                var isTeComment = body.Contains("[TestEngineer]", StringComparison.OrdinalIgnoreCase)
+                    || body.Contains("Test Engineer:", StringComparison.OrdinalIgnoreCase)
+                    || body.Contains("Test Engineer ", StringComparison.OrdinalIgnoreCase);
+
+                if (!isTeComment && !body.Contains("UI Test", StringComparison.OrdinalIgnoreCase)
+                    && !body.Contains("App Preview Unavailable", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                // App Preview Unavailable: explicit "screenshot capture returned no data" signal from TE.
+                if (body.Contains("App Preview Unavailable", StringComparison.OrdinalIgnoreCase))
+                {
+                    return (true, "Test Engineer reports the app preview could not be captured — " +
+                        "the app likely failed to start or render. A PR that does not render cannot be approved.");
+                }
+
+                // Numeric UI test failure count
+                var m = System.Text.RegularExpressions.Regex.Match(
+                    body,
+                    @"UI\s*Tests?\s*:?.*?(\d+)\s*passed\s*,\s*(\d+)\s*failed",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Singleline);
+                if (m.Success && int.TryParse(m.Groups[2].Value, out var failCount) && failCount > 0)
+                {
+                    return (true, $"Test Engineer reports **{failCount} UI test failure(s)** — " +
+                        "these are ground-truth evidence required components are not rendering.");
+                }
+
+                // First relevant TE comment evaluated — don't keep walking further back in history.
+                break;
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex, "EvaluateUiFailureGateAsync failed for PR #{Number} (permitting approval)", prNumber);
+        }
+        return (false, string.Empty);
+    }
+
+    /// <summary>
+    /// B2: Download the design reference screenshot(s) from docs/design-screenshots/*.png
+    /// so the PM vision model can compare the actual PR screenshot against the target design.
+    /// Returns empty list if no design screenshots are present or download fails.
+    /// </summary>
+    private async Task<List<PullRequestWorkflow.ScreenshotImage>> LoadDesignReferenceImagesAsync(CancellationToken ct)
+    {
+        var results = new List<PullRequestWorkflow.ScreenshotImage>();
+        try
+        {
+            var tree = await _github.GetRepositoryTreeAsync("main", ct);
+            var designPngs = tree
+                .Where(f => f.StartsWith("docs/design-screenshots/", StringComparison.OrdinalIgnoreCase) &&
+                            f.EndsWith(".png", StringComparison.OrdinalIgnoreCase))
+                .Take(3) // cap at 3 references to keep token usage sane
+                .ToList();
+
+            if (designPngs.Count == 0) return results;
+
+            using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+            foreach (var path in designPngs)
+            {
+                try
+                {
+                    var url = $"https://raw.githubusercontent.com/{_config.Project.GitHubRepo}/main/{path}";
+                    var resp = await http.GetAsync(url, ct);
+                    if (!resp.IsSuccessStatusCode) continue;
+                    var bytes = await resp.Content.ReadAsByteArrayAsync(ct);
+                    if (bytes.Length < 100 || bytes.Length > 2 * 1024 * 1024) continue;
+                    results.Add(new PullRequestWorkflow.ScreenshotImage(
+                        bytes, "image/png",
+                        $"Target design: {Path.GetFileName(path)}",
+                        url));
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogDebug(ex, "B2: failed to download design reference {Path}", path);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex, "B2: failed to enumerate design-screenshots tree");
+        }
+        return results;
     }
 
     #endregion

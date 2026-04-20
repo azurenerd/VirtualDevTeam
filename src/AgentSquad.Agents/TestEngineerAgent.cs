@@ -1596,6 +1596,32 @@ public class TestEngineerAgent : AgentBase
         {
             try
             {
+                // C3: prune any stale screenshots we previously generated ourselves
+                // (standalone app-preview files only — leave any user/test fixture baselines alone)
+                // so a stale preview from a prior PR merge cannot silently substitute for this PR's capture.
+                try
+                {
+                    var screenshotDir = System.IO.Path.Combine(_workspace.RepoPath, "test-results", "screenshots");
+                    if (System.IO.Directory.Exists(screenshotDir))
+                    {
+                        foreach (var stale in System.IO.Directory.GetFiles(screenshotDir, "pr-*-app-preview.png"))
+                        {
+                            var stem = System.IO.Path.GetFileNameWithoutExtension(stale) ?? string.Empty;
+                            var m = System.Text.RegularExpressions.Regex.Match(stem, @"^pr-(?<n>\d+)-app-preview$",
+                                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                            if (m.Success && int.TryParse(m.Groups["n"].Value, out var n) && n != pr.Number)
+                            {
+                                try { System.IO.File.Delete(stale); Logger.LogDebug("C3: deleted stale screenshot {Path}", stale); }
+                                catch (Exception delEx) { Logger.LogDebug(delEx, "C3: could not delete stale screenshot {Path}", stale); }
+                            }
+                        }
+                    }
+                }
+                catch (Exception pruneEx)
+                {
+                    Logger.LogDebug(pruneEx, "C3: screenshot prune failed (non-fatal)");
+                }
+
                 Logger.LogInformation("No test screenshots found — attempting standalone screenshot capture for PR #{PrNumber}", pr.Number);
                 LogActivity("screenshot", $"📸 Attempting standalone screenshot capture for PR #{pr.Number}");
                 var screenshotBytes = await _playwrightRunner.CaptureAppScreenshotAsync(
@@ -1640,8 +1666,19 @@ public class TestEngineerAgent : AgentBase
                 }
                 else
                 {
-                    Logger.LogDebug("Standalone screenshot capture returned no data for PR #{PrNumber}", pr.Number);
+                    // C2: don't silently fall through. Post an explicit warning so PM review
+                    // knows there's no actual screenshot (rather than relying on stale imagery).
+                    Logger.LogWarning("Standalone screenshot capture returned no data for PR #{PrNumber}", pr.Number);
                     LogActivity("screenshot", $"⚠️ Screenshot capture returned no data for PR #{pr.Number}");
+                    sb.AppendLine("### ⚠️ App Preview Unavailable");
+                    sb.AppendLine();
+                    sb.AppendLine($"Test Engineer attempted to capture a screenshot of the running application for PR #{pr.Number}, " +
+                        "but the capture returned no data. This typically means the app failed to start, " +
+                        "crashed before rendering, or the preview port was unreachable.");
+                    sb.AppendLine();
+                    sb.AppendLine("**PM review note:** treat this as evidence the PR does not render. " +
+                        "Do not approve on the assumption that prior screenshots represent current state.");
+                    sb.AppendLine();
                 }
             }
             catch (Exception ex)
@@ -1687,9 +1724,21 @@ public class TestEngineerAgent : AgentBase
         System.Text.StringBuilder sb,
         CancellationToken ct)
     {
+        // C1: filter out stale app-preview screenshots named for a different PR number.
+        // Only targets OUR OWN standalone file pattern pr-<N>-app-preview.png so we don't
+        // accidentally drop user/test-fixture baseline files that happen to start with pr-.
+        static bool IsStaleOtherPrScreenshot(string path, int currentPr)
+        {
+            var name = System.IO.Path.GetFileNameWithoutExtension(path) ?? string.Empty;
+            var m = System.Text.RegularExpressions.Regex.Match(name,
+                @"^pr-(?<n>\d+)-app-preview$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            return m.Success && int.TryParse(m.Groups["n"].Value, out var n) && n != currentPr;
+        }
+
         var screenshots = tierResults
             .SelectMany(r => r.Artifacts.Screenshots)
             .Where(File.Exists)
+            .Where(p => !IsStaleOtherPrScreenshot(p, pr.Number))
             .Take(5)
             .ToList();
 
