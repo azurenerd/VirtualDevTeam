@@ -130,7 +130,6 @@ else
                                 nodeIdx++;
 
                                 <div @key="@($"issue-{issue.Number}")" class="ntl-node-cluster" style="--node-delay: @(nodeIdx * 0.06)s">
-                                    <div class="ntl-spine-dot @(isClosed ? "done" : "active")"></div>
                                     <div class="ntl-connector"></div>
                                     <div class="ntl-cluster-body">
                                         <div class="ntl-node @(isClosed ? "ntl-node-closed" : "ntl-node-open") @(isSelected ? "ntl-node-selected" : "") @(isAwaitingReview ? "ntl-node-awaiting" : "")"
@@ -332,29 +331,36 @@ else
                     }
                 </div>
             }
-            <div class="ntl-detail-prs" style="margin-top: 8px;">
-                <span class="ntl-detail-section-title">Ready-for-Review Preview</span>
-                @if (!string.IsNullOrEmpty(screenshotUrl))
-                {
-                    @* Winning candidate — green border. Click opens full-size on GitHub.
-                       TODO (ws3-follow-up): when StrategyOrchestrator persists per-candidate
-                       screenshots to .candidates/{strategy}/screenshot.png, loop them here and
-                       keep the green border on the accepted one. *@
-                    <div class="ntl-detail-screenshots">
-                        <a class="ntl-screenshot-thumb ntl-screenshot-winner"
-                           href="@screenshotUrl" target="_blank" rel="noopener"
-                           title="Click to open full size on GitHub">
-                            <img src="@screenshotUrl" alt="PR #@spr.Number ready-for-review preview" loading="lazy"
-                                 onerror="this.parentElement.classList.add('ntl-screenshot-missing'); this.parentElement.querySelector('.ntl-screenshot-fallback')?.removeAttribute('hidden');" />
-                            <span class="ntl-screenshot-label">🏆 Winning candidate</span>
-                            <span class="ntl-screenshot-fallback" hidden>No preview captured for this PR</span>
+            <div class="ntl-detail-prs ntl-detail-gallery-row" style="margin-top: 8px;">
+                <span class="ntl-detail-section-title">Ready-for-Review Previews</span>
+                @{ var candidates = GetScreenshotCandidates(spr); }
+                <div class="ntl-screenshot-gallery">
+                    @foreach (var cand in candidates)
+                    {
+                        var tileClass = cand.IsWinner ? "ntl-screenshot-tile ntl-screenshot-winner" : "ntl-screenshot-tile";
+                        <a class="@tileClass"
+                           href="@cand.ImageUrl" target="_blank" rel="noopener"
+                           title="@(cand.IsWinner ? $"Winning candidate ({cand.MethodLabel}) — click to open on GitHub" : $"{cand.MethodLabel} — click to open on GitHub")">
+                            <div class="ntl-screenshot-image-wrap">
+                                <img src="@cand.ImageUrl"
+                                     alt="PR #@spr.Number @cand.MethodLabel preview"
+                                     loading="lazy"
+                                     onerror="this.style.display='none'; this.parentElement.classList.add('is-pending');" />
+                                <div class="ntl-screenshot-pending">
+                                    <div class="ntl-screenshot-spinner"></div>
+                                    <span class="ntl-screenshot-pending-text">Capturing…</span>
+                                </div>
+                            </div>
+                            <div class="ntl-screenshot-tile-footer">
+                                @if (cand.IsWinner)
+                                {
+                                    <span class="ntl-screenshot-badge">🏆</span>
+                                }
+                                <span class="ntl-screenshot-method">@cand.MethodLabel</span>
+                            </div>
                         </a>
-                    </div>
-                }
-                else
-                {
-                    <div class="ntl-detail-empty">No preview available (PR has no head SHA yet)</div>
-                }
+                    }
+                </div>
             </div>
             @{ var parentIssueNumber = PullRequestWorkflow.ParseLinkedIssueNumber(spr.Body); }
             @if (parentIssueNumber.HasValue && _groupLookup.ContainsKey(parentIssueNumber.Value))
@@ -935,7 +941,7 @@ else
     private List<(string Name, string Icon)> GetUpcomingPhases()
     {
         var allExpected = _devViewMode == "engineering"
-            ? new[] { ("Research", "🔍"), ("PM Spec", "📝"), ("Architecture", "🏗️"), ("Eng Planning", "📋"), ("Development", "⚡"), ("Finalization", "✅") }
+            ? new[] { ("Research", "🔍"), ("PM Spec", "📝"), ("Architecture", "🏗️"), ("Development", "⚡"), ("Finalization", "✅") }
             : new[] { ("Research", "🔍"), ("PM Spec", "📝"), ("Architecture", "🏗️"), ("Development", "⚡"), ("Finalization", "✅") };
 
         var existingNames = _phases.Select(p => p.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -1066,6 +1072,58 @@ else
         var owner = match.Groups[1].Value;
         var repo = match.Groups[2].Value;
         return $"https://raw.githubusercontent.com/{owner}/{repo}/{pr.HeadSha}/.screenshots/pr-{pr.Number}-ready-for-review.png";
+    }
+
+    private record ScreenshotCandidate(string MethodKey, string MethodLabel, string ImageUrl, bool IsWinner);
+
+    // Returns one tile per capture method. Until StrategyOrchestrator persists per-method
+    // PNGs, only the "playwright" (canonical winner) URL points at a real file; the others
+    // show a placeholder spinner via the <img onerror> handler in the tile markup.
+    private List<ScreenshotCandidate> GetScreenshotCandidates(AgentPullRequest pr)
+    {
+        var results = new List<ScreenshotCandidate>();
+        if (string.IsNullOrEmpty(pr.Url) || string.IsNullOrEmpty(pr.HeadSha))
+            return results;
+
+        var m = System.Text.RegularExpressions.Regex.Match(
+            pr.Url,
+            @"github\.com/([^/]+)/([^/]+)/pull/\d+",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (!m.Success) return results;
+        var owner = m.Groups[1].Value;
+        var repo = m.Groups[2].Value;
+
+        // Methods currently used by StrategyOrchestrator. Keys match on-disk filenames
+        // once wiring is implemented (Phase 2b). Winner resolution: body marker
+        // `<!-- winner-method: {key} -->` takes priority; else fall back to "playwright".
+        var winnerKey = "playwright";
+        var bodyMatch = System.Text.RegularExpressions.Regex.Match(
+            pr.Body ?? string.Empty,
+            @"<!--\s*winner-method:\s*([a-z0-9\-]+)\s*-->",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (bodyMatch.Success)
+            winnerKey = bodyMatch.Groups[1].Value.ToLowerInvariant();
+
+        (string Key, string Label)[] methods =
+        {
+            ("playwright", "Playwright"),
+            ("playwright-mcp", "Playwright MCP"),
+            ("chromium", "Chromium"),
+            ("puppeteer", "Puppeteer"),
+        };
+
+        foreach (var (key, label) in methods)
+        {
+            // "playwright" maps to the canonical winner URL so existing captures still work
+            // without wiring changes. Other methods point at their expected per-method path —
+            // they 404 until Phase 2b writes them; the tile then shows the spinner placeholder.
+            var path = key == "playwright"
+                ? $".screenshots/pr-{pr.Number}-ready-for-review.png"
+                : $".screenshots/pr-{pr.Number}-{key}.png";
+            var url = $"https://raw.githubusercontent.com/{owner}/{repo}/{pr.HeadSha}/{path}";
+            results.Add(new ScreenshotCandidate(key, label, url, IsWinner: key == winnerKey));
+        }
+        return results;
     }
 
     private string GetPhaseClass(string name) => name switch
