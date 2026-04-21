@@ -30,11 +30,13 @@ if (args.Length > 0 && (args[0] == "--version" || args[0] == "-v"))
     return 0;
 }
 
-// Drain stdin on a background task so piped prompts don't block the sender.
-_ = Task.Run(async () =>
+// Read stdin prompt (needed for scripted mode; also prevents pipe blocking).
+string? stdinPrompt = null;
+var stdinTask = Task.Run(async () =>
 {
-    try { await Console.In.ReadToEndAsync(); } catch { }
+    try { stdinPrompt = await Console.In.ReadToEndAsync(); } catch { }
 });
+stdinTask.Wait(TimeSpan.FromSeconds(5));
 
 static void Emit(string type, string? content = null)
 {
@@ -149,6 +151,40 @@ try
             Emit("auth_failure", "not logged in");
             return 1;
         }
+        case "scripted":
+        {
+            // Reads prompt→response mappings from FAKE_COPILOT_SCRIPT_FILE (JSON).
+            // Format: [{ "promptContains": "keyword", "response": "text" }, ...]
+            // Matches the first entry whose promptContains is found in stdin.
+            // Falls back to a default response if no match.
+            var scriptFile = Environment.GetEnvironmentVariable("FAKE_COPILOT_SCRIPT_FILE");
+            if (scriptFile is null || !File.Exists(scriptFile))
+            {
+                Emit("assistant.message", "scripted mode but no script file found");
+                return 2;
+            }
+            var scriptJson = File.ReadAllText(scriptFile);
+            var entries = System.Text.Json.JsonSerializer.Deserialize<ScriptEntry[]>(scriptJson,
+                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+                ?? Array.Empty<ScriptEntry>();
+
+            var prompt = stdinPrompt ?? "";
+            string response = "No matching script entry found.";
+            foreach (var entry in entries)
+            {
+                if (!string.IsNullOrEmpty(entry.PromptContains) &&
+                    prompt.Contains(entry.PromptContains, StringComparison.OrdinalIgnoreCase))
+                {
+                    response = entry.Response ?? "OK";
+                    break;
+                }
+            }
+            Emit("assistant.message", response);
+            // Write a marker file so tests can verify the script was used
+            var scriptMarker = Path.Combine(Directory.GetCurrentDirectory(), "fake-cli-marker.txt");
+            File.WriteAllText(scriptMarker, $"scripted response at {DateTime.UtcNow:O}\n{response}");
+            return 0;
+        }
         default:
         {
             Console.Error.WriteLine($"FakeCopilotCli: unknown scenario '{scenario}'");
@@ -161,3 +197,6 @@ catch (Exception ex)
     Console.Error.WriteLine($"FakeCopilotCli crashed: {ex}");
     return 3;
 }
+
+/// <summary>A prompt→response mapping for scripted mode.</summary>
+record ScriptEntry(string? PromptContains, string? Response);
