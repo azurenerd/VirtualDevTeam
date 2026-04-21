@@ -64,6 +64,11 @@ public static class StrategyFrameworkServiceCollectionExtensions
         services.AddSingleton<IFrameworkLifecycle>(sp =>
             sp.GetRequiredService<SquadReadinessChecker>());
 
+        // Squad execution adapter (external framework — not a built-in strategy wrapper)
+        services.AddSingleton<SquadFrameworkAdapter>();
+        services.AddSingleton<IAgenticFrameworkAdapter>(sp =>
+            sp.GetRequiredService<SquadFrameworkAdapter>());
+
         // Default sink is the null sink; Runner overrides with a SignalR-bound one.
         services.AddSingleton<IStrategyEventSink>(_ => NullStrategyEventSink.Instance);
 
