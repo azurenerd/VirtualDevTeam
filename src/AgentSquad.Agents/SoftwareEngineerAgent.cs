@@ -2719,7 +2719,58 @@ public class SoftwareEngineerAgent : EngineerAgentBase
             // and not gitignored. LLMs frequently generate .gitignore rules that exclude data.json.
             await ValidateRequiredRuntimeFilesAsync(branchName, ct);
 
-            // Publish: treat push failures as PUBLISH errors (NOT generation errors).
+            // Commit per-candidate preview screenshots BEFORE pushing so the dashboard
+            // sees them on the first HeadSha it reads from the PR. Write files locally
+            // and commit with git (not GitHub API) so everything ships in one push.
+            var screenshotsWritten = false;
+            foreach (var cand in outcome.Evaluation.Candidates)
+            {
+                try
+                {
+                    if (cand.ScreenshotBytes is null || cand.ScreenshotBytes.Length == 0)
+                    {
+                        Logger.LogWarning(
+                            "Strategy {Strategy} has no screenshot bytes for PR #{PrNumber} — skipping. " +
+                            "Check CandidateEvaluator logs for capture outcome.",
+                            cand.StrategyId, pr.Number);
+                        continue;
+                    }
+
+                    var screenshotRelPath = $".screenshots/pr-{pr.Number}-{cand.StrategyId}.png";
+                    var screenshotFullPath = Path.Combine(Workspace.RepoPath, screenshotRelPath);
+                    Directory.CreateDirectory(Path.GetDirectoryName(screenshotFullPath)!);
+                    await File.WriteAllBytesAsync(screenshotFullPath, cand.ScreenshotBytes, ct);
+                    screenshotsWritten = true;
+                    Logger.LogInformation(
+                        "Wrote {Strategy} preview screenshot ({Size} bytes) to {Path}",
+                        cand.StrategyId, cand.ScreenshotBytes.Length, screenshotRelPath);
+                }
+                catch (Exception screenshotEx)
+                {
+                    Logger.LogWarning(screenshotEx,
+                        "Failed to write {Strategy} screenshot for PR #{PrNumber} — continuing with next candidate",
+                        cand.StrategyId, pr.Number);
+                }
+            }
+
+            if (screenshotsWritten)
+            {
+                try
+                {
+                    await RunGitCommandAsync(Workspace.RepoPath, "add -A .screenshots", ct);
+                    await Workspace.CommitAsync(
+                        $"📸 Strategy preview screenshots for PR #{pr.Number}", ct);
+                }
+                catch (Exception commitEx)
+                {
+                    Logger.LogWarning(commitEx,
+                        "Failed to commit screenshot files for PR #{PrNumber} — screenshots won't appear in dashboard",
+                        pr.Number);
+                }
+            }
+
+            // Publish: push code + screenshots + data.json fix all in one push.
+            // Treat push failures as PUBLISH errors (NOT generation errors).
             // After a successful commit we must NEVER revert or fall back to legacy —
             // doing so throws away perfectly-good generated code. On push failure, log
             // the error, leave the commit in place (next SE loop will push again), and
@@ -2736,40 +2787,6 @@ public class SoftwareEngineerAgent : EngineerAgentBase
                     winner.StrategyId, task.Id, branchName);
                 // Return true: generation succeeded and is committed. Do NOT retry generation.
                 return true;
-            }
-
-            // Capture UI screenshot for visual progress tracking — strategy framework ships in one step.
-            // Best-effort; never blocks the pipeline. The ready-for-review screenshot is still captured
-            // later by MarkReadyForReviewWithScreenshotAsync from the real workspace.
-            // Here we commit per-candidate preview screenshots so the dashboard gallery shows all strategies.
-            foreach (var cand in outcome.Evaluation.Candidates)
-            {
-                try
-                {
-                    if (cand.ScreenshotBytes is null || cand.ScreenshotBytes.Length == 0)
-                    {
-                        Logger.LogWarning(
-                            "Strategy {Strategy} has no screenshot bytes for PR #{PrNumber} — skipping commit. " +
-                            "Check CandidateEvaluator logs for capture outcome.",
-                            cand.StrategyId, pr.Number);
-                        continue;
-                    }
-
-                    var screenshotPath = $".screenshots/pr-{pr.Number}-{cand.StrategyId}.png";
-                    await GitHub.CommitBinaryFileAsync(
-                        screenshotPath, cand.ScreenshotBytes,
-                        $"📸 {cand.StrategyId} strategy preview for PR #{pr.Number}",
-                        branchName, ct);
-                    Logger.LogInformation(
-                        "Committed {Strategy} preview screenshot ({Size} bytes) to {Path}",
-                        cand.StrategyId, cand.ScreenshotBytes.Length, screenshotPath);
-                }
-                catch (Exception screenshotEx)
-                {
-                    Logger.LogWarning(screenshotEx,
-                        "Failed to commit {Strategy} screenshot for PR #{PrNumber} — continuing with next candidate",
-                        cand.StrategyId, pr.Number);
-                }
             }
 
             // Write winner-strategy marker into PR body so dashboard can identify which tile is the winner.
@@ -2853,7 +2870,7 @@ public class SoftwareEngineerAgent : EngineerAgentBase
 
             foreach (var file in requiredFiles)
             {
-                // Check if the file is being ignored by .gitignore
+                // Phase 1: Check if the file is being ignored by .gitignore
                 var checkIgnoreResult = await RunGitCommandAsync(repoPath, $"check-ignore -v {file}", ct);
 
                 if (checkIgnoreResult.ExitCode == 0 && !string.IsNullOrWhiteSpace(checkIgnoreResult.StdOut))
@@ -2889,11 +2906,108 @@ public class SoftwareEngineerAgent : EngineerAgentBase
                     Logger.LogDebug(
                         "Required file {File} is not ignored by .gitignore — OK", file);
                 }
+
+                // Phase 2: Ensure the file actually EXISTS (not just un-ignored).
+                // LLMs commonly create data.sample.json but forget to create data.json itself.
+                await EnsureRequiredFileExistsAsync(repoPath, file, ct);
             }
         }
         catch (Exception ex)
         {
             Logger.LogWarning(ex, "Failed to validate required runtime files — continuing");
+        }
+    }
+
+    /// <summary>
+    /// Ensures a required runtime file (e.g. data.json) actually exists in the workspace.
+    /// Searches all app directories for the file; if missing, copies from the nearest
+    /// template/sample variant. Stages and commits the new file so it ships with the PR.
+    /// </summary>
+    private async Task EnsureRequiredFileExistsAsync(string repoPath, string fileName, CancellationToken ct)
+    {
+        // Find app project directories (non-test csproj files)
+        var appDirs = Directory.EnumerateFiles(repoPath, "*.csproj", SearchOption.AllDirectories)
+            .Where(f => !Path.GetRelativePath(repoPath, f).Contains("test", StringComparison.OrdinalIgnoreCase))
+            .Select(f => Path.GetDirectoryName(f)!)
+            .Distinct()
+            .ToList();
+
+        if (appDirs.Count == 0)
+        {
+            Logger.LogDebug("No app project directories found — skipping {File} existence check", fileName);
+            return;
+        }
+
+        var baseName = Path.GetFileNameWithoutExtension(fileName);
+        var ext = Path.GetExtension(fileName);
+        bool anyCreated = false;
+
+        foreach (var appDir in appDirs)
+        {
+            // Candidate paths where the app might look for data.json
+            var candidatePaths = new[]
+            {
+                Path.Combine(appDir, fileName),
+                Path.Combine(appDir, "Data", fileName),
+                Path.Combine(appDir, "wwwroot", fileName),
+                Path.Combine(appDir, "wwwroot", "data", fileName),
+            };
+
+            // If any candidate already exists, this app dir is fine
+            if (candidatePaths.Any(File.Exists))
+                continue;
+
+            // Search for template/sample variants to copy from
+            var templateCandidates = new[]
+            {
+                Path.Combine(appDir, $"{baseName}.sample{ext}"),
+                Path.Combine(appDir, $"{baseName}.template{ext}"),
+                Path.Combine(appDir, $"{baseName}.example{ext}"),
+                Path.Combine(appDir, "Data", $"{baseName}.sample{ext}"),
+                Path.Combine(appDir, "Data", $"{baseName}.template{ext}"),
+                Path.Combine(repoPath, $"{baseName}.template{ext}"),
+                Path.Combine(repoPath, $"{baseName}.sample{ext}"),
+            };
+
+            var source = templateCandidates.FirstOrDefault(File.Exists);
+            if (source is null)
+            {
+                // No template found — look for any matching JSON test data
+                var testData = Directory.EnumerateFiles(repoPath, $"valid-full*{ext}", SearchOption.AllDirectories)
+                    .Concat(Directory.EnumerateFiles(repoPath, $"valid*{ext}", SearchOption.AllDirectories))
+                    .Where(f => Path.GetRelativePath(repoPath, f).Contains("TestData", StringComparison.OrdinalIgnoreCase))
+                    .FirstOrDefault();
+                if (testData is not null) source = testData;
+            }
+
+            if (source is null)
+            {
+                Logger.LogWarning(
+                    "Required file {File} missing in {AppDir} and no template/sample found to copy from. " +
+                    "The app will likely show a 'file not found' error.",
+                    fileName, Path.GetRelativePath(repoPath, appDir));
+                continue;
+            }
+
+            // Copy to the first candidate path (project root is most common)
+            var dest = candidatePaths[0];
+            Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+            File.Copy(source, dest, overwrite: false);
+            anyCreated = true;
+            Logger.LogInformation(
+                "Created required file {Dest} from {Source} — LLM created the sample but forgot the actual file",
+                Path.GetRelativePath(repoPath, dest),
+                Path.GetRelativePath(repoPath, source));
+        }
+
+        if (anyCreated)
+        {
+            // Stage and commit the newly-created files
+            await RunGitCommandAsync(repoPath, $"add -A {fileName}", ct);
+            await Workspace.CommitAsync(
+                $"fix: create missing {fileName} from template\n\n" +
+                $"LLM generated a sample/template but did not create the actual {fileName}.\n" +
+                $"Copied from nearest template to ensure the app boots correctly.", ct);
         }
     }
 
