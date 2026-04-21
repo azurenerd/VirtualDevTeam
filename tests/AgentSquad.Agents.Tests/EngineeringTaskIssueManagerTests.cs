@@ -1,4 +1,6 @@
+using AgentSquad.Core.GitHub;
 using AgentSquad.Core.GitHub.Models;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace AgentSquad.Agents.Tests;
 
@@ -170,5 +172,99 @@ public class EngineeringTaskIssueManagerTests
         Assert.Contains("**Wave:** W1", body);
         Assert.Contains("**Parent Issue:** #52", body);
         Assert.Contains("**Depends On:** #98, #99", body);
+    }
+
+    // ── Wave Eligibility Tests ─────────────────────────────────────────────
+
+    private static EngineeringTaskIssueManager CreateManagerWithTasks(params EngineeringTask[] tasks)
+    {
+        var mgr = new EngineeringTaskIssueManager(NullLogger.Instance);
+        mgr.SeedCacheForTesting(tasks);
+        return mgr;
+    }
+
+    [Fact]
+    public void IsWaveEligible_W0Task_AlwaysEligible()
+    {
+        var t1 = new EngineeringTask { Id = "T1", Wave = "W0", Status = "Pending" };
+        var t2 = new EngineeringTask { Id = "T2", Wave = "W1", Status = "Pending" };
+        var mgr = CreateManagerWithTasks(t1, t2);
+
+        Assert.True(mgr.IsWaveEligible(t1));
+    }
+
+    [Fact]
+    public void IsWaveEligible_W1Task_BlockedByPendingW0()
+    {
+        var t1 = new EngineeringTask { Id = "T1", Wave = "W0", Status = "Pending" };
+        var t2 = new EngineeringTask { Id = "T2", Wave = "W1", Status = "Pending" };
+        var mgr = CreateManagerWithTasks(t1, t2);
+
+        Assert.False(mgr.IsWaveEligible(t2));
+    }
+
+    [Fact]
+    public void IsWaveEligible_W1Task_EligibleWhenW0Done()
+    {
+        var t1 = new EngineeringTask { Id = "T1", Wave = "W0", Status = "Done" };
+        var t2 = new EngineeringTask { Id = "T2", Wave = "W1", Status = "Pending" };
+        var mgr = CreateManagerWithTasks(t1, t2);
+
+        Assert.True(mgr.IsWaveEligible(t2));
+    }
+
+    [Fact]
+    public void IsWaveEligible_W2Task_BlockedByInProgressW1()
+    {
+        var t1 = new EngineeringTask { Id = "T1", Wave = "W0", Status = "Done" };
+        var t2 = new EngineeringTask { Id = "T2", Wave = "W1", Status = "InProgress" };
+        var t3 = new EngineeringTask { Id = "T3", Wave = "W2", Status = "Pending" };
+        var mgr = CreateManagerWithTasks(t1, t2, t3);
+
+        Assert.False(mgr.IsWaveEligible(t3));
+    }
+
+    [Fact]
+    public void IsWaveEligible_TFinal_DoesNotBlockLaterWaves()
+    {
+        // T-FINAL is in W2 and not done, but should NOT block a W1 task
+        // (T-FINAL always depends on everything so it's excluded from blocking)
+        var t1 = new EngineeringTask { Id = "T1", Wave = "W0", Status = "Done" };
+        var tFinal = new EngineeringTask { Id = "T-FINAL", Wave = "W2", Status = "Pending" };
+        var t2 = new EngineeringTask { Id = "T2", Wave = "W1", Status = "Pending" };
+        var mgr = CreateManagerWithTasks(t1, tFinal, t2);
+
+        // T-FINAL is in W2, T2 is in W1 — T-FINAL doesn't block T2
+        Assert.True(mgr.IsWaveEligible(t2));
+    }
+
+    [Fact]
+    public void IsWaveEligible_NullWave_AlwaysEligible()
+    {
+        var t1 = new EngineeringTask { Id = "T1", Wave = null, Status = "Pending" };
+        var mgr = CreateManagerWithTasks(t1);
+
+        Assert.True(mgr.IsWaveEligible(t1));
+    }
+
+    [Fact]
+    public void IsWaveEligible_MultipleW0Tasks_AllMustBeDone()
+    {
+        var t1 = new EngineeringTask { Id = "T1", Wave = "W0", Status = "Done" };
+        var t2 = new EngineeringTask { Id = "T2", Wave = "W0", Status = "Pending" };
+        var t3 = new EngineeringTask { Id = "T3", Wave = "W1", Status = "Pending" };
+        var mgr = CreateManagerWithTasks(t1, t2, t3);
+
+        Assert.False(mgr.IsWaveEligible(t3)); // T2 in W0 not done
+    }
+
+    [Fact]
+    public void IsWaveEligible_ClosedStatus_CountsAsDone()
+    {
+        var t1 = new EngineeringTask { Id = "T1", Wave = "W0", Status = "closed" };
+        var t2 = new EngineeringTask { Id = "T2", Wave = "W1", Status = "Pending" };
+        var mgr = CreateManagerWithTasks(t1, t2);
+
+        Assert.True(mgr.IsWaveEligible(t2));
     }
 }

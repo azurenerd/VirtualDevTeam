@@ -36,6 +36,13 @@ internal sealed partial class EngineeringTaskIssueManager
         _logger = logger;
     }
 
+    /// <summary>Test-only constructor: creates a manager without a GitHub service for unit testing cache-only methods.</summary>
+    internal EngineeringTaskIssueManager(ILogger logger)
+    {
+        _github = null!;
+        _logger = logger;
+    }
+
     /// <summary>
     /// Set the enhancement issue scope for the current run. Only engineering-task issues
     /// whose ParentIssueNumber is in this set will be loaded. Call this before LoadTasksAsync
@@ -187,6 +194,7 @@ internal sealed partial class EngineeringTaskIssueManager
             var task = _cache.FirstOrDefault(t =>
                 string.Equals(t.Complexity, complexity, StringComparison.OrdinalIgnoreCase)
                 && t.Status == "Pending"
+                && IsWaveEligible(t)
                 && AreDependenciesMet(t));
             if (task is not null)
                 return task;
@@ -225,10 +233,48 @@ internal sealed partial class EngineeringTaskIssueManager
     /// <summary>Check if ALL engineering tasks are done.</summary>
     public bool AreAllTasksDone() => _cache.Count > 0 && _cache.All(IsTaskDone);
 
+    /// <summary>
+    /// Checks wave-level ordering: a task is wave-eligible only when all tasks in earlier
+    /// waves are done. This prevents W1 tasks from being assigned before W0 completes,
+    /// even if their explicit DependencyIssueNumbers happen to be empty.
+    /// </summary>
+    public bool IsWaveEligible(EngineeringTask task)
+    {
+        if (string.IsNullOrEmpty(task.Wave))
+            return true;
+
+        var taskWave = ParseWaveNumber(task.Wave);
+        if (taskWave <= 0)
+            return true; // W0 tasks are always eligible
+
+        // All non-integration tasks in earlier waves must be done
+        return !_cache.Any(t =>
+            t.Id != task.Id
+            && !string.IsNullOrEmpty(t.Wave)
+            && ParseWaveNumber(t.Wave) < taskWave
+            && !IsTaskDone(t)
+            && !string.Equals(t.Id, "T-FINAL", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static int ParseWaveNumber(string? wave)
+    {
+        if (string.IsNullOrEmpty(wave)) return 0;
+        if (wave.StartsWith('W') && int.TryParse(wave.AsSpan(1), out var num))
+            return num;
+        return 0;
+    }
+
     public int PendingCount => _cache.Count(t => t.Status == "Pending");
     public int InProgressCount => _cache.Count(t => t.Status is "Assigned" or "InProgress");
     public int DoneCount => _cache.Count(IsTaskDone);
     public int TotalCount => _cache.Count;
+
+    /// <summary>Test-only: seed the in-memory cache directly without GitHub calls.</summary>
+    internal void SeedCacheForTesting(IEnumerable<EngineeringTask> tasks)
+    {
+        _cache = tasks.ToList();
+        _cacheLoaded = true;
+    }
 
     public static bool IsTaskDone(EngineeringTask task) =>
         string.Equals(task.Status, "Done", StringComparison.OrdinalIgnoreCase) ||

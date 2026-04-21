@@ -1416,6 +1416,15 @@ public class SoftwareEngineerAgent : EngineerAgentBase
                         .Replace("MISSED", "").Replace("missed", "")
                         .Trim().TrimStart('-', ':', ' ', '\n');
 
+                    // Assign to the highest existing wave so auto-created tasks don't
+                    // bypass wave ordering (they'd default to null = always eligible)
+                    var maxWave = _taskManager.Tasks
+                        .Where(t => !string.IsNullOrEmpty(t.Wave) &&
+                                    !string.Equals(t.Id, "T-FINAL", StringComparison.OrdinalIgnoreCase))
+                        .Select(t => t.Wave!)
+                        .OrderByDescending(w => w, StringComparer.OrdinalIgnoreCase)
+                        .FirstOrDefault() ?? "W1";
+
                     var newTaskId = $"T{_taskManager.TotalCount + 1}";
                     var newTask = new EngineeringTask
                     {
@@ -1423,6 +1432,7 @@ public class SoftwareEngineerAgent : EngineerAgentBase
                         Name = $"Implement {enhancement.Title}",
                         Description = $"Auto-created from uncovered enhancement #{enhancement.Number}.\n\n{taskDescription}",
                         Complexity = "Medium",
+                        Wave = maxWave,
                         ParentIssueNumber = enhancement.Number,
                         Dependencies = _taskManager.Tasks.Any(t => t.Id == "T1")
                             ? new List<string> { "T1" }
@@ -1768,10 +1778,10 @@ public class SoftwareEngineerAgent : EngineerAgentBase
                 freeEngineers.Add(engineer);
             }
 
-            // Get all assignable tasks (pending with dependencies met, excluding integration and foundation)
+            // Get all assignable tasks (pending with dependencies met, wave-eligible, excluding integration and foundation)
             // Foundation tasks (T1/W0) are excluded — the SE Lead handles them directly.
             var assignableTasks = _taskManager.Tasks
-                .Where(t => t.Status == "Pending" && _taskManager.AreDependenciesMet(t) && t.Id != IntegrationTaskId && t.IssueNumber.HasValue && !IsFoundationTask(t))
+                .Where(t => t.Status == "Pending" && _taskManager.IsWaveEligible(t) && _taskManager.AreDependenciesMet(t) && t.Id != IntegrationTaskId && t.IssueNumber.HasValue && !IsFoundationTask(t))
                 .ToList();
 
             // LLM-based semantic skill matching: single call matches all tasks to all engineers
