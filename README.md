@@ -264,6 +264,83 @@ You provide a project description
 
 See [docs/agent-behaviors.md](docs/agent-behaviors.md) for detailed behavior documentation.
 
+## Strategy Framework — A/B/C Code Generation & Winner Selection
+
+When enabled (`AgentSquad.StrategyFramework.Enabled = true`), the SE generates multiple candidate implementations for each task in parallel, evaluates them through hard gates and an LLM judge, and applies the best one to the PR branch.
+
+### Strategy Candidates
+
+| Strategy | Description |
+|----------|-------------|
+| **Baseline** | Standard single-pass code generation using the SE's normal prompt pipeline |
+| **MCP-Enhanced** | Augments generation with Model Context Protocol servers for richer context (e.g., file search, symbol lookup) |
+| **Agentic Delegation** | Delegates sub-tasks to child agents that work iteratively with tool access |
+
+Each candidate runs in an **isolated git worktree** — a full copy of the branch at the current HEAD — so candidates cannot interfere with each other.
+
+### Hard Gates (pass/fail)
+
+Before any scoring, every candidate must survive four sequential gates:
+
+1. **OutputProduced** — The candidate generated a non-empty patch
+2. **Build** — The patch applies cleanly to a scratch worktree and `dotnet build` succeeds. Patches that touch reserved evaluator paths or escape the worktree are rejected
+3. **AppStarts** — The application starts successfully (stub: passes for non-web tasks)
+4. **EvaluatorTests** — Custom evaluator test suite passes (stub: passes when no suite configured)
+
+Candidates that fail any gate are eliminated. If zero candidates survive, the SE falls back to legacy single-pass code generation.
+
+### LLM Judge Scoring
+
+Surviving candidates are scored by an LLM judge (`LlmJudge`) on three 0–10 axes:
+
+| Axis | What It Measures |
+|------|-----------------|
+| **Acceptance Criteria (AC)** | How completely the code satisfies the task's acceptance criteria from the issue |
+| **Design** | Architecture quality, API design, separation of concerns, pattern adherence |
+| **Readability** | Code clarity, naming conventions, comment quality, consistency |
+
+The judge receives sanitized diffs (capped at `MaxJudgePatchChars`) for all surviving candidates in a single batch call and returns structured JSON scores.
+
+### Winner Selection & Tiebreaking
+
+Winners are selected using a strict priority cascade:
+
+```
+1. Sole Survivor     → only one candidate passed all gates → automatic winner
+2. LLM Rank          → sort by AC ↓ → Design ↓ → Readability ↓
+3. Token Efficiency   → fewer tokens used (tiebreaker)
+4. Speed             → faster execution time (tiebreaker)
+5. Alphabetical ID   → stable deterministic fallback
+```
+
+If no LLM judge is configured, scoring is skipped and winner selection uses only the token/speed/ID tiebreakers.
+
+### Post-Winner Flow
+
+1. **Patch applied** — `WinnerApplyService` applies the winning patch to the PR branch via `git apply`
+2. **Screenshots** — `CandidateEvaluator` captures a Playwright screenshot for each candidate and commits them to `.screenshots/pr-{N}-{strategyId}.png` on the PR branch
+3. **PR annotation** — A `<!-- winner-strategy: {key} -->` HTML comment is embedded in the PR body
+4. **Full review** — The PR proceeds through normal Architect → PM → TE review pipeline (configurable via `PostWinnerFlow`)
+5. **Dashboard** — The `/strategies` page shows live experiment data; the Project Timeline shows per-candidate screenshot tiles with the winner highlighted in gold
+
+### Configuration
+
+```json
+{
+  "AgentSquad": {
+    "StrategyFramework": {
+      "Enabled": false,
+      "PostWinnerFlow": "full-review",
+      "Evaluator": {
+        "MaxJudgePatchChars": 8000
+      }
+    }
+  }
+}
+```
+
+Per-strategy cost attribution is tracked in `AgentUsageTracker`, with live data available at `/api/strategies/*`. An optional `AdaptiveStrategySelector` learns from past experiment results to weight strategy sampling probabilities over time.
+
 ## Configuration
 
 Configuration lives in `src/AgentSquad.Runner/appsettings.json` under the `AgentSquad` section (committed to git). Secrets (GitHub PAT, API keys) are stored separately via [.NET User Secrets](https://learn.microsoft.com/en-us/aspnet/core/security/app-secrets) and never committed.
