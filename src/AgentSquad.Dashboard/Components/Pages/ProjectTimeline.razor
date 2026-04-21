@@ -1076,9 +1076,12 @@ else
 
     private record ScreenshotCandidate(string MethodKey, string MethodLabel, string ImageUrl, bool IsWinner);
 
-    // Returns one tile per capture method. Until StrategyOrchestrator persists per-method
-    // PNGs, only the "playwright" (canonical winner) URL points at a real file; the others
-    // show a placeholder spinner via the <img onerror> handler in the tile markup.
+    // Returns one tile per code-generation strategy. StrategyOrchestrator runs up to three
+    // strategies for a given task (baseline, MCP-enhanced, agentic-delegation) and the winning
+    // strategy produces the merged PR. Each strategy gets its own screenshot of the resulting UI.
+    // Until StrategyOrchestrator persists per-strategy PNGs (Phase 2b), only the canonical
+    // "ready-for-review" image exists — the other tiles show a placeholder spinner via the
+    // <img onerror> handler in the tile markup.
     private List<ScreenshotCandidate> GetScreenshotCandidates(AgentPullRequest pr)
     {
         var results = new List<ScreenshotCandidate>();
@@ -1093,31 +1096,30 @@ else
         var owner = m.Groups[1].Value;
         var repo = m.Groups[2].Value;
 
-        // Methods currently used by StrategyOrchestrator. Keys match on-disk filenames
-        // once wiring is implemented (Phase 2b). Winner resolution: body marker
-        // `<!-- winner-method: {key} -->` takes priority; else fall back to "playwright".
-        var winnerKey = "playwright";
+        // Three code-generation strategies from StrategyOrchestrator. Keys match on-disk
+        // filenames once wiring is implemented (Phase 2b). Winner resolution: body marker
+        // `<!-- winner-strategy: {key} -->` takes priority; else fall back to "baseline".
+        var winnerKey = "baseline";
         var bodyMatch = System.Text.RegularExpressions.Regex.Match(
             pr.Body ?? string.Empty,
-            @"<!--\s*winner-method:\s*([a-z0-9\-]+)\s*-->",
+            @"<!--\s*winner-(?:strategy|method):\s*([a-z0-9\-]+)\s*-->",
             System.Text.RegularExpressions.RegexOptions.IgnoreCase);
         if (bodyMatch.Success)
             winnerKey = bodyMatch.Groups[1].Value.ToLowerInvariant();
 
-        (string Key, string Label)[] methods =
+        (string Key, string Label)[] strategies =
         {
-            ("playwright", "Playwright"),
-            ("playwright-mcp", "Playwright MCP"),
-            ("chromium", "Chromium"),
-            ("puppeteer", "Puppeteer"),
+            ("baseline", "Baseline"),
+            ("mcp-enhanced", "MCP-Enhanced"),
+            ("agentic", "Agentic Delegation"),
         };
 
-        foreach (var (key, label) in methods)
+        foreach (var (key, label) in strategies)
         {
-            // "playwright" maps to the canonical winner URL so existing captures still work
-            // without wiring changes. Other methods point at their expected per-method path —
-            // they 404 until Phase 2b writes them; the tile then shows the spinner placeholder.
-            var path = key == "playwright"
+            // Winner maps to the canonical ready-for-review URL so existing captures still work
+            // without wiring changes. Non-winning strategies point at their expected per-strategy
+            // path — they 404 until Phase 2b writes them; tile then shows the placeholder.
+            var path = key == winnerKey
                 ? $".screenshots/pr-{pr.Number}-ready-for-review.png"
                 : $".screenshots/pr-{pr.Number}-{key}.png";
             var url = $"https://raw.githubusercontent.com/{owner}/{repo}/{pr.HeadSha}/{path}";
