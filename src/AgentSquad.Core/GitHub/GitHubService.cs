@@ -314,7 +314,23 @@ public class GitHubService : IGitHubService
                 TrackRateLimit();
                 var mapped = prs.Select(pr => MapPullRequest(pr, pr.Labels.Select(l => l.Name).ToList())).ToList();
                 if (_runStartedUtc.HasValue)
-                    mapped = mapped.Where(pr => pr.CreatedAt >= _runStartedUtc.Value).ToList();
+                {
+                    // Keep per-run PRs PLUS the most-recent doc PR of each agent prefix so the
+                    // dashboard timeline can still anchor Research / PM Spec / Architecture
+                    // columns after a mini-reset that preserved docs but deleted branches.
+                    string[] anchorPrefixes = { "Researcher:", "ProgramManager:", "Architect:" };
+                    var anchorPrs = anchorPrefixes
+                        .Select(prefix => mapped
+                            .Where(pr => pr.Title.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                            .OrderByDescending(pr => pr.CreatedAt)
+                            .FirstOrDefault())
+                        .Where(pr => pr is not null)
+                        .Cast<AgentPullRequest>()
+                        .ToList();
+                    var inRun = mapped.Where(pr => pr.CreatedAt >= _runStartedUtc.Value).ToList();
+                    var combined = inRun.Concat(anchorPrs.Where(a => !inRun.Any(p => p.Number == a.Number))).ToList();
+                    mapped = combined;
+                }
                 return mapped;
             }, ct);
 

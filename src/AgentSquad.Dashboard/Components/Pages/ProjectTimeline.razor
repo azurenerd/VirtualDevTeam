@@ -935,7 +935,7 @@ else
     private List<(string Name, string Icon)> GetUpcomingPhases()
     {
         var allExpected = _devViewMode == "engineering"
-            ? new[] { ("Research", "🔍"), ("PM Spec", "📝"), ("Architecture", "🏗️"), ("Eng Planning", "📋"), ("Development", "⚡"), ("Testing", "🧪"), ("Finalization", "✅") }
+            ? new[] { ("Research", "🔍"), ("PM Spec", "📝"), ("Architecture", "🏗️"), ("Eng Planning", "📋"), ("Development", "⚡"), ("Finalization", "✅") }
             : new[] { ("Research", "🔍"), ("PM Spec", "📝"), ("Architecture", "🏗️"), ("Development", "⚡"), ("Finalization", "✅") };
 
         var existingNames = _phases.Select(p => p.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);

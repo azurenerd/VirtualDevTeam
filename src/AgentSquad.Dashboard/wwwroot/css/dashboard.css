@@ -5310,18 +5310,8 @@ div[title] .config-agent-name {
     margin-left: 18px;
     position: relative;
 }
-/* Vertical trunk of the L-tree — stops 10px before the last child so the last ╰ looks correct */
-.ntl-children::before {
-    content: '';
-    position: absolute;
-    left: -9px;
-    top: -2px;
-    bottom: calc(100% - var(--trunk-stop, 100%));
-    width: 1px;
-    background: rgba(88, 166, 255, 0.35);
-}
 .ntl-child-connector {
-    /* Legacy thin vertical tick retained but collapsed: layout now uses ::before pseudo-elements */
+    /* Legacy thin tick retained but collapsed — layout now uses ::before/::after on children */
     display: none;
 }
 .ntl-child-node {
@@ -5338,29 +5328,28 @@ div[title] .config-agent-name {
     max-width: 220px;
     position: relative;
 }
-/* Horizontal arm of the L (─) that joins the trunk to the child pill */
+/* Horizontal arm (─) joining trunk to the pill at the pill's vertical middle */
 .ntl-child-node::before {
     content: '';
     position: absolute;
-    left: -9px;
+    left: -10px;
     top: 50%;
-    width: 9px;
+    width: 10px;
     height: 1px;
-    background: rgba(88, 166, 255, 0.35);
+    background: rgba(88,166,255,0.35);
 }
-/* Short vertical segment above the arm (the ├ piece) — stops under the previous child */
+/* Vertical trunk segment:
+   — middle children: top:-4px, height: 100% + 8px → spans through full row + gap → ├
+   — last child    : top:-4px, height: calc(50% + 4px) → stops at the arm → └ */
 .ntl-child-node::after {
     content: '';
     position: absolute;
-    left: -9px;
+    left: -10px;
     top: -4px;
     width: 1px;
-    height: calc(50% + 4px);
-    background: rgba(88, 166, 255, 0.35);
+    height: calc(100% + 8px);
+    background: rgba(88,166,255,0.35);
 }
-/* First child doesn't need the extra ::after (trunk already handles the top segment) */
-.ntl-children > .ntl-child-node:first-child::after { display: none; }
-/* Last child's trunk segment only extends down to 50% (the ╰) */
 .ntl-children > .ntl-child-node:last-child::after {
     height: calc(50% + 4px);
 }
