@@ -38,6 +38,31 @@
 28. [Standalone Dashboard Must Use HTTP-Based Data Service](#28-standalone-dashboard-must-use-http-based-data-service)
 29. [Persisted SME Definitions Auto-Respawn on Startup](#29-persisted-sme-definitions-auto-respawn-on-startup)
 30. [JSON Case Sensitivity Breaks Dashboard Polling](#30-json-case-sensitivity-breaks-dashboard-polling)
+31. [Exact String Skill Matching Fails for Semantic Concepts](#32-exact-string-skill-matching-fails-for-semantic-concepts)
+32. [Per-PR Rework Counting Causes Premature Exhaustion](#33-per-pr-rework-counting-causes-premature-exhaustion)
+33. [Blank Screenshots from Unstyled Placeholder Components](#34-blank-screenshots-from-unstyled-placeholder-components)
+34. [Don't Gitignore Data Files — They Break Screenshots and Clones](#35-dont-gitignore-data-files--they-break-screenshots-and-clones)
+35. [Port-Binding Bugs Are a Recurring Class — Unify the Launch Pipeline](#36-port-binding-bugs-are-a-recurring-class--unify-the-launch-pipeline)
+36. [Layer Periodic Health Checks on Top of Event-Driven Ones](#37-layer-periodic-health-checks-on-top-of-event-driven-ones)
+37. [Duplicate-Action Guards Are Mandatory for Multi-Agent State Transitions](#38-duplicate-action-guards-are-mandatory-for-multi-agent-state-transitions)
+38. [Re-Inject Source Artifacts at Every Prompt Hop > 1](#39-re-inject-source-artifacts-at-every-prompt-hop--1)
+39. [Every GitHub API Call Must Assume the Target State Has Changed](#40-every-github-api-call-must-assume-the-target-state-has-changed)
+40. [Surface AI Reasoning in the UI, Not Just the Logs](#41-surface-ai-reasoning-in-the-ui-not-just-the-logs)
+41. [Partial-Reset Scripts Dramatically Speed Up Late-Stage Debugging](#42-partial-reset-scripts-dramatically-speed-up-late-stage-debugging)
+42. [MCP Server Auth Changes Require Process Restart](#43-mcp-server-auth-changes-require-process-restart)
+43. [Centralize Model Version Strings to a Single Constant](#44-centralize-model-version-strings-to-a-single-constant)
+44. [Rubber-Duck Critique Between Plan and Implementation Prevents Over-Engineering](#45-rubber-duck-critique-between-plan-and-implementation-prevents-over-engineering)
+45. [`Configure<T>.Bind` Appends to Collection Defaults — It Does Not Replace](#46-configuretbind-appends-to-collection-defaults--it-does-not-replace)
+46. [`.git/config.lock` Races Invisibly Under Parallel `git worktree add`](#47-gitconfiglock-races-invisibly-under-parallel-git-worktree-add)
+47. [Emit `Completed(false)` Synchronously on `Started` Path Failures](#48-emit-completedfalse-synchronously-on-started-path-failures--never-let-exceptions-propagate-to-taskwhenall)
+48. [val-e2e: Close Open PRs Before Live Runs](#49-val-e2e-close-open-prs-before-live-runs--checkpoint-recovery-bypasses-new-features)
+49. [Copilot CLI Doesn't Report Tokens — Cost Attribution Is `$0` Until API-Key Fallback](#50-copilot-cli-doesnt-report-tokens--cost-attribution-is-0-until-api-key-fallback)
+50. [Experiment Data Paths: Relative Paths Resolve Against Runner Cwd](#51-experiment-data-paths-relative-paths-resolve-against-runner-cwd-bin-dir-not-repo-root)
+51. [SinglePRMode Task Leak — `ValidateEnhancementCoverageAsync` Must Respect Mode](#52-singleprmodemode-task-leak--validateenhancementcoverageasync-must-respect-mode)
+52. [Per-Candidate Strategy Screenshots — Capture at Build Gate, Not at Winner Selection](#53-per-candidate-strategy-screenshots--capture-at-build-gate-not-at-winner-selection)
+53. [Dashboard Strategy Key Mismatch — Use Canonical IDs Everywhere](#54-dashboard-strategy-key-mismatch--use-canonical-ids-everywhere)
+54. [Own-PR Review Downgrade Loses Inline Comment Positions](#55-own-pr-review-downgrade-loses-inline-comment-positions)
+55. [Wave Ordering Collisions — Hash-Based IDs Prevent Task Drops](#56-wave-ordering-collisions--hash-based-ids-prevent-task-drops)
 
 ---
 
@@ -1138,3 +1163,94 @@ if (_gateCheck.RequiresHuman("pm_spec_review"))
 - Actually written fine, just to `src/AgentSquad.Runner/bin/Debug/net8.0/experiment-data/20260419T231321Z.ndjson`.
 
 **Rule:** Either resolve relative paths against `IHostEnvironment.ContentRootPath` in service constructors, or set absolute paths in `appsettings.json`. Document the behavior loudly for anyone debugging "missing" artifacts.
+
+---
+
+# Late April 2026 Session — SinglePRMode, Strategy Screenshots, Review Workflow
+
+## 52. SinglePRMode Task Leak — `ValidateEnhancementCoverageAsync` Must Respect Mode
+
+**Lesson:** In SinglePRMode, the SE creates a single monolithic task (T1) covering all enhancements. But `ValidateEnhancementCoverageAsync` ran unconditionally and checked whether each enhancement had a task with a matching `ParentIssueNumber`. T1 only stored the FIRST enhancement's number as its `ParentIssueNumber`, so the remaining enhancements appeared "uncovered" and the LLM created phantom tasks T2–T7, defeating the purpose of SinglePRMode.
+
+**What happened:**
+- SE entered SinglePRMode and created T1 with `ParentIssueNumber` pointing to enhancement #1.
+- `ValidateEnhancementCoverageAsync` iterated all 7 enhancements and found only #1 covered.
+- The method asked the LLM to generate "MISSED" tasks for #2–#7.
+- The system now had 7 tasks — identical to multi-PR mode — and created 7 PRs.
+
+**Fix:**
+- Skip validation entirely in SinglePRMode at the call site.
+- Defense-in-depth: added inner guard inside `ValidateEnhancementCoverageAsync` itself to early-return when SinglePRMode is active.
+- Added `RelatedEnhancementNumbers` collection field to `EngineeringTask` so T1 can express multi-enhancement coverage without relying solely on the scalar `ParentIssueNumber`.
+
+**Rule:** When a feature has a "single vs. multi" mode toggle, EVERY downstream validation must check that toggle. A method that creates work items must be guarded by mode checks at BOTH the call site and inside the method itself (defense-in-depth). Data models must support the cardinality of the mode — if one task covers N enhancements, the model needs a collection field, not just a scalar.
+
+---
+
+## 53. Per-Candidate Strategy Screenshots — Capture at Build Gate, Not at Winner Selection
+
+**Lesson:** The strategy framework runs multiple code-generation approaches (baseline, MCP-enhanced, agentic-delegation) and picks a winner. Originally, only the winner got a screenshot via `MarkReadyForReviewWithScreenshotAsync`, so the dashboard gallery showed "Capturing…" spinners for non-winners forever.
+
+**What happened:**
+- Three candidates ran through `CandidateEvaluator.RunGatesAsync` — build, test, screenshot gates.
+- Only the winner was passed to the screenshot capture step after selection.
+- Losing candidates' dashboard tiles permanently displayed spinner placeholders.
+- No visual comparison between strategies was possible.
+
+**Fix:**
+- Capture screenshots in `CandidateEvaluator.RunGatesAsync` right after the build gate passes — at that point the scratch worktree has the candidate's code applied and built.
+- Store bytes on `CandidateResult.ScreenshotBytes`.
+- After winner selection, commit ALL candidates' screenshots to `.screenshots/pr-{N}-{strategyId}.png`.
+- Write `<!-- winner-strategy: {key} -->` in PR body for dashboard winner detection.
+
+**Rule:** Capture artifacts at the point of maximum information (post-build worktree), not at the point of decision (winner selection). Losers' artifacts are valuable for comparison and debugging. Also: when a helper like PlaywrightRunner mutates its `WorkspaceConfig` internally, always clone the config before calling.
+
+---
+
+## 54. Dashboard Strategy Key Mismatch — Use Canonical IDs Everywhere
+
+**Lesson:** The dashboard hardcoded strategy key `"agentic"` but the actual strategy class's `Id` property returned `"agentic-delegation"`. This caused the agentic tile to never match its screenshot URL, rendering a permanent placeholder.
+
+**What happened:**
+- `StrategyTile.razor` used a hardcoded string `"agentic"` to build screenshot URLs.
+- The `AgenticDelegationStrategy` class returned `Id = "agentic-delegation"`.
+- Screenshot files were saved as `pr-42-agentic-delegation.png`.
+- The tile looked for `pr-42-agentic.png` — file not found, permanent spinner.
+
+**Rule:** Strategy IDs should be sourced from one canonical location (the strategy class's `Id` property) and propagated through the entire pipeline — never hardcoded in UI code. A simple constant or enum shared between strategy classes and UI components would prevent this class of bug.
+
+---
+
+## 55. Own-PR Review Downgrade Loses Inline Comment Positions
+
+**Lesson:** When using a single PAT, GitHub's API rejects `REQUEST_CHANGES` and `APPROVE` review events on your own PRs. The fallback code downgraded to a `COMMENT` event but concatenated inline comments into the review body text instead of keeping them as per-line review comments, losing their file/line positions.
+
+**What happened:**
+- Test Engineer submitted a review with 5 inline comments on specific file locations.
+- GitHub rejected `REQUEST_CHANGES` because the PAT owner authored the PR.
+- Fallback logic caught the 422 and re-submitted as `COMMENT`, but built the body by joining comment text, discarding the `path` and `line` fields.
+- All 5 comments appeared as a single block in the Conversation tab instead of on the Files-changed tab.
+
+**Fix:**
+- Use `COMMENT` event type for ALL reviews (which GitHub allows on own PRs) and include inline comments in the review payload's `comments` array.
+- GitHub renders them on the Files-changed tab even for `COMMENT` reviews.
+
+**Rule:** The single-PAT setup is a fundamental constraint that affects review workflows. Test the full review pipeline with the actual PAT permissions, not just with mocked GitHub responses. `COMMENT` events are the safe universal path for inline comments.
+
+---
+
+## 56. Wave Ordering Collisions — Hash-Based IDs Prevent Task Drops
+
+**Lesson:** Sequential task IDs caused collisions when multiple waves of tasks were assigned concurrently during rate-limit recovery. Tasks from later waves overwrote earlier wave tasks in the cache, silently dropping work.
+
+**What happened:**
+- Rate-limit recovery triggered two waves of task assignment simultaneously.
+- Both waves used a sequential counter starting from the same base (e.g., T1, T2, T3).
+- Wave 2's T1 overwrote Wave 1's T1 in the task cache.
+- Three tasks from Wave 1 were silently dropped — no error, no log, just missing PRs.
+
+**Fix:**
+- Use collision-safe hash-based task IDs (content-addressed from task title + enhancement number + timestamp).
+- Merge (not replace) cache entries on API delay recovery, preserving both waves' tasks.
+
+**Rule:** Any ID generation scheme used in concurrent workflows must be collision-resistant. Sequential counters are dangerous when multiple producers run in parallel. Content-addressed or UUID-based IDs eliminate this class of bug entirely.

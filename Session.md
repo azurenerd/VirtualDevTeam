@@ -218,6 +218,8 @@ CREATE TABLE IF NOT EXISTS run_monitor (
 - TE in "API-only mode" — tests committed without building/running
 - TE UI test failure "App did not respond at http://localhost:XXXX within 90s" — likely hardcoded port in AI-generated Program.cs (see Lesson #20 in LessonsLearned.md)
 - Agent card flashing "⏳ Awaiting human approval..." when gates are in auto mode — pre-gate status update not guarded (see Lesson #22)
+- **SinglePRMode task inflation**: In SinglePRMode, only T1 should be created. If T2+ tasks appear, the `ValidateEnhancementCoverageAsync` guard has regressed — check that it short-circuits before spawning additional work items.
+- **Wave ID collisions**: Tasks use hash-based IDs, not sequential. If you see ID collisions in logs, check the cache merge logic in the wave builder.
 
 ---
 
@@ -237,6 +239,7 @@ Optional independent process. Connects to Runner REST API at `/api/dashboard/*`.
 - **Agent Overview**: Real-time agent cards with visibility filter (hide/show agents)
 - **Repository**: Combined Pull Requests + Issues view with tab navigation
 - **Force refresh**: SVG refresh button on Timeline and Overview pages
+- **Strategy Gallery**: When strategy framework is enabled, shows per-candidate screenshots for all approaches (baseline, mcp-enhanced, agentic-delegation). Winner tile displays the live screenshot or "Capturing..." while the upload is in progress. Non-winner tiles show "No preview" text (not a spinner). Winner identification reads the `<!-- winner-strategy: {key} -->` HTML comment from the PR body.
 
 ### Timeline data flow
 - Issues/PRs fetched via `DashboardDataService` (30s TTL cache, shared with GitHubService)
@@ -261,6 +264,7 @@ Key settings:
 - `AgentSquad.HumanInteraction.Enabled`: `true` (enables human gate checkpoints)
 - `AgentSquad.HumanInteraction.Preset`: Use Full Auto / Supervised / Full Control via Configuration page
 - Note: Gate configuration is hot-reloadable — changes take effect without runner restart
+- `AgentSquad.StrategyFramework.EnabledStrategies`: Defaults to empty — baseline always runs regardless; other strategies (mcp-enhanced, agentic-delegation) must be explicitly listed
 
 ### Model tier strategy
 | Tier | Used By | Default Model |
@@ -289,6 +293,8 @@ Key settings:
 
 13. **Strategy Framework worktree leaks**: When enabled (`AgentSquad.StrategyFramework.Enabled=true`), per-candidate git worktrees live under `<agent-repo>/.candidates/<runId>-<strategy>/`. The orchestrator cleans up on exit, but if the runner is killed mid-orchestration they persist. Run `git worktree prune` in the agent repo + delete `.candidates/` if disk fills up. ndjson artifacts go to `experiment-data/` — by default resolved against the runner's cwd (bin dir), not the repo root.
 14. **Copilot CLI reports 0 tokens**: The `copilot` binary doesn't emit usage counts, so per-strategy cost attribution is always `$0` with the default provider. Cost budget enforcement only kicks in when using an API-key fallback (Anthropic/OpenAI/Azure OpenAI direct). Not a bug — documented limitation.
+15. **`.screenshots/` directory in target repo**: The strategy framework commits per-candidate screenshots to `.screenshots/pr-{N}-{strategyId}.png` on PR branches. These are lightweight artifacts (~50–200KB PNGs) that persist after merge into the target repo. Reset scripts do not clean them (they live in the target repo, not the agent workspace). Harmless but accumulate over runs — delete manually from the target repo if desired.
+16. **Winner-strategy marker in PR bodies**: PR bodies contain a `<!-- winner-strategy: {key} -->` HTML comment used by the dashboard for winner identification. If the dashboard misidentifies the winner, inspect the PR body for a missing or malformed marker.
 
 Note: Don't do any long pauses that are more than 1 minute long in the Copilot chat, as that makes it so you ignore me for X minutes--always keep checking back no more than a minute so the chat
 thread isn't blocked to get instructions from me. 
