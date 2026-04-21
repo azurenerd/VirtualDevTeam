@@ -11,7 +11,7 @@
 #>
 param(
     [string]$LogDir = (Join-Path $PSScriptRoot ".." "logs"),
-    [string]$ProjectDir = (Join-Path $PSScriptRoot ".." "src" "AgentSquad.Runner"),
+    [string]$ProjectDir = (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "src") "AgentSquad.Runner"),
     [string]$PidFile = (Join-Path $PSScriptRoot ".." "runner.pid")
 )
 

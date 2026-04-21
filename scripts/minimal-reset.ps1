@@ -36,9 +36,15 @@ param(
     [string]$GitHubToken = "",
     [string]$PreserveFiles = "OriginalDesignConcept.html,Research.md,PMSpec.md,Architecture.md",
     [string]$WorkspaceRoot = "C:\Agents",
-    [string]$RunnerDir = "$PSScriptRoot\..\src\AgentSquad.Runner",
+    [string]$RunnerDir = "",
     [switch]$SkipGitHub
 )
+
+# Resolve RunnerDir robustly (works even when $PSScriptRoot is empty)
+if (-not $RunnerDir) {
+    $scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+    $RunnerDir = Join-Path (Join-Path (Join-Path $scriptDir "..") "src") "AgentSquad.Runner"
+}
 
 $ErrorActionPreference = "Continue"
 $preserveList = $PreserveFiles -split "," | ForEach-Object { $_.Trim() }
@@ -118,7 +124,7 @@ if ($SkipGitHub) {
 }
 else {
     if (-not $GitHubToken) {
-        $runnerProject = Join-Path $PSScriptRoot ".." "src" "AgentSquad.Runner"
+        $runnerProject = $RunnerDir
         try {
             $secretsOutput = dotnet user-secrets list --project $runnerProject 2>&1
             $patLine = $secretsOutput | Where-Object { $_ -match 'GitHubToken' }

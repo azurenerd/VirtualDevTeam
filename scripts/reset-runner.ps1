@@ -16,8 +16,8 @@
 #>
 param(
     [string]$WorkspaceRoot = "C:\Agents",
-    [string]$SettingsPath = (Join-Path $PSScriptRoot ".." "src" "AgentSquad.Runner" "appsettings.json"),
-    [string]$RunnerProjectDir = (Join-Path $PSScriptRoot ".." "src" "AgentSquad.Runner"),
+    [string]$SettingsPath = (Join-Path (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "src") "AgentSquad.Runner") "appsettings.json"),
+    [string]$RunnerProjectDir = (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "src") "AgentSquad.Runner"),
     [string]$PreserveFiles = "OriginalDesignConcept.html,.gitignore",
     [switch]$SkipGitHub,
     [switch]$SkipLocal
@@ -184,7 +184,7 @@ if (-not $SkipLocal) {
 
 # ── Phase 4: Delete checkpoint DB ────────────────────
 Write-Host "`n▶ Phase 4/5: Deleting checkpoint database..." -ForegroundColor Yellow
-$runnerDir = Join-Path $PSScriptRoot ".." "src" "AgentSquad.Runner"
+$runnerDir = Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "src") "AgentSquad.Runner"
 $dbFiles = Get-ChildItem -Path $runnerDir -Filter "agentsquad_*.db*" -ErrorAction SilentlyContinue
 if ($dbFiles) {
     foreach ($db in $dbFiles) {
