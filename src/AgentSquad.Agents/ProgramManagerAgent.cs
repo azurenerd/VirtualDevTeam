@@ -1313,8 +1313,19 @@ public class ProgramManagerAgent : AgentBase
             }
             else
             {
-                Logger.LogInformation("No open PRs remain — all merged. Signaling reviews complete");
-                UpdateStatus(AgentStatus.Idle, "All reviews complete — all merged");
+                // Only declare "all merged" if at least one PR was actually merged.
+                // After a mini-reset there are 0 open PRs but nothing has been merged yet.
+                var mergedPRs = await _github.GetMergedPullRequestsAsync(ct);
+                if (mergedPRs.Count > 0)
+                {
+                    Logger.LogInformation("No open PRs remain — all merged ({Count} merged). Signaling reviews complete", mergedPRs.Count);
+                    UpdateStatus(AgentStatus.Idle, "All reviews complete — all merged");
+                }
+                else
+                {
+                    Logger.LogDebug("No open PRs and no merged PRs — waiting for engineering to create PRs");
+                    UpdateStatus(AgentStatus.Idle, "Monitoring for review requests");
+                }
             }
         }
         catch (Exception ex)
@@ -1390,7 +1401,8 @@ public class ProgramManagerAgent : AgentBase
                     if (_config.Limits.SinglePRMode)
                     {
                         var openPRs = await _github.GetOpenPullRequestsAsync(ct);
-                        if (openPRs.Count == 0)
+                        var mergedPRs = await _github.GetMergedPullRequestsAsync(ct);
+                        if (openPRs.Count == 0 && mergedPRs.Count > 0)
                         {
                             await _github.AddIssueCommentAsync(issue.Number,
                                 $"✅ **PM Final Review — APPROVED (SinglePRMode)**\n\n" +
