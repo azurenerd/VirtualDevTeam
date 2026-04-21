@@ -254,7 +254,7 @@ else
                         <div class="agent-detail">
                             <span class="detail-label">Steps</span>
                             <span class="detail-value">
-                                <div class="step-compact">
+                                <div class="step-compact" title="@stepInfo.tooltip">
                                     <span class="step-compact-text">Step @(stepInfo.completed)/@(stepInfo.total): @(stepInfo.currentName ?? "—")</span>
                                     <div class="step-compact-bar">
                                         <div class="step-compact-fill" style="width: @(stepPct)%"></div>
@@ -725,13 +725,28 @@ else
         return "Approval required";
     }
 
-    private (int completed, int total, string? currentName) GetAgentStepInfo(string agentId)
+    private (int completed, int total, string? currentName, string? tooltip) GetAgentStepInfo(string agentId)
     {
         if (_taskTracker is null)
-            return (0, 0, null);
+            return (0, 0, null, null);
         var progress = _taskTracker.GetProgress(agentId);
         var currentStep = _taskTracker.GetCurrentStep(agentId);
-        return (progress.completed, progress.total, currentStep?.Name);
+        string? tooltip = null;
+        if (currentStep is not null)
+        {
+            var parts = new List<string> { $"Current: {currentStep.Name}" };
+            if (currentStep.Elapsed.HasValue)
+                parts.Add($"Duration: {FormatDuration(currentStep.Elapsed.Value)}");
+            if (!string.IsNullOrEmpty(currentStep.ModelUsed))
+                parts.Add($"Model: {currentStep.ModelUsed}");
+            if (currentStep.LlmCallCount > 0)
+                parts.Add($"LLM calls: {currentStep.LlmCallCount}");
+            if (!string.IsNullOrEmpty(currentStep.Description))
+                parts.Add($"Details: {(currentStep.Description.Length > 120 ? currentStep.Description[..120] + "…" : currentStep.Description)}");
+            parts.Add($"Progress: {progress.completed}/{progress.total} steps");
+            tooltip = string.Join("\n", parts);
+        }
+        return (progress.completed, progress.total, currentStep?.Name, tooltip);
     }
 
     public void Dispose()

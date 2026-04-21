@@ -244,7 +244,7 @@ else
                                                 || step.Status == AgentTaskStepStatus.InProgress;
                                             var childSteps = group.Steps.Where(s => s.ParentStepId == step.Id).ToList();
                                             var childCompleted = childSteps.Count(s => s.Status is AgentTaskStepStatus.Completed or AgentTaskStepStatus.Skipped);
-                                            <div class="step-item step-container @(step.Status == AgentTaskStepStatus.InProgress ? "step-active" : "")">
+                                            <div class="step-item step-container @(step.Status == AgentTaskStepStatus.InProgress ? "step-active" : "")" title="@BuildStepTooltip(step)">
                                                 <div class="step-container-header" @onclick="() => ToggleContainerStep(step.Id)">
                                                     <span class="step-container-chevron @(containerExpanded ? "expanded" : "")">▶</span>
                                                     <span class="step-icon">@GetStepIcon(step.Status)</span>
@@ -266,7 +266,7 @@ else
                                                     <div class="step-children">
                                                         @foreach (var child in childSteps)
                                                         {
-                                                            <div class="step-item step-child @GetStrategyStepClass(child)">
+                                                            <div class="step-item step-child @GetStrategyStepClass(child)" title="@BuildStepTooltip(child)">
                                                                 <span class="step-icon">@GetStrategyIcon(child)</span>
                                                                 <span class="step-name">@child.Name</span>
                                                                 <div class="step-meta">
@@ -297,7 +297,7 @@ else
                                         else
                                         {
                                             // Regular (leaf) step — original rendering
-                                            <div class="step-item @(step.Status == AgentTaskStepStatus.InProgress ? "step-active" : "")">
+                                            <div class="step-item @(step.Status == AgentTaskStepStatus.InProgress ? "step-active" : "")" title="@BuildStepTooltip(step)">
                                                 <span class="step-icon">@GetStepIcon(step.Status)</span>
                                                 <span class="step-name @(step.Status == AgentTaskStepStatus.Pending ? "step-name-pending" : "")">@step.Name</span>
                                                 <div class="step-meta">
@@ -712,6 +712,24 @@ else
         < 1m => cost.ToString("$0.00"),
         _ => cost.ToString("$#,##0.00")
     };
+
+    private static string BuildStepTooltip(AgentSquad.Core.Agents.Steps.AgentTaskStep step)
+    {
+        var parts = new List<string> { step.Name };
+        if (step.Status != AgentSquad.Core.Agents.Steps.AgentTaskStepStatus.Pending)
+            parts.Add($"Status: {step.Status}");
+        if (step.Elapsed.HasValue)
+            parts.Add($"Duration: {FormatStepDuration(step.Elapsed.Value)}");
+        if (!string.IsNullOrEmpty(step.ModelUsed))
+            parts.Add($"Model: {step.ModelUsed}");
+        if (step.LlmCallCount > 0)
+            parts.Add($"LLM calls: {step.LlmCallCount}");
+        if (step.EstimatedCost > 0)
+            parts.Add($"Cost: {FormatStepCost(step.EstimatedCost)}");
+        if (!string.IsNullOrEmpty(step.Description))
+            parts.Add(step.Description.Length > 150 ? step.Description[..150] + "…" : step.Description);
+        return string.Join("\n", parts);
+    }
 
     public void Dispose()
     {

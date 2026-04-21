@@ -125,7 +125,8 @@ else
                                             || group.Status == AgentTaskStepStatus.WaitingOnHuman;
                                         var groupPct = group.Total > 0 ? (int)(100.0 * group.Completed / group.Total) : 0;
 
-                                        <div class="step-task-group @(group.Status == AgentTaskStepStatus.InProgress ? "step-task-active" : "")">
+                                        <div class="step-task-group @(group.Status == AgentTaskStepStatus.InProgress ? "step-task-active" : "")"
+                                             title="@BuildTaskGroupTooltip(group)">
                                             <div class="step-task-header" @onclick="() => ToggleTaskGroup(groupKey)">
                                                 <span class="step-task-chevron @(isGroupExpanded ? "expanded" : "")">▶</span>
                                                 <span class="step-task-icon">@GetTaskGroupIcon(group.Status)</span>
@@ -151,7 +152,8 @@ else
                                                     <div class="step-list">
                                                         @foreach (var step in group.Steps)
                                                         {
-                                                            <div class="step-item @(step.Status == AgentTaskStepStatus.InProgress ? "step-active" : "")">
+                                                            <div class="step-item @(step.Status == AgentTaskStepStatus.InProgress ? "step-active" : "")"
+                                                                 title="@BuildStepTooltip(step)">
                                                                 <span class="step-icon">@GetStepStatusIcon(step.Status)</span>
                                                                 <span class="step-name @(step.Status == AgentTaskStepStatus.Pending ? "step-name-pending" : "")">@step.Name</span>
                                                                 <div class="step-meta">
@@ -583,6 +585,36 @@ else
         < 1m => cost.ToString("$0.00"),
         _ => cost.ToString("$#,##0.00")
     };
+
+    private static string BuildStepTooltip(AgentSquad.Core.Agents.Steps.AgentTaskStep step)
+    {
+        var parts = new List<string> { step.Name };
+        if (step.Status != AgentSquad.Core.Agents.Steps.AgentTaskStepStatus.Pending)
+            parts.Add($"Status: {step.Status}");
+        if (step.Elapsed.HasValue)
+            parts.Add($"Duration: {FormatStepDuration(step.Elapsed.Value)}");
+        if (!string.IsNullOrEmpty(step.ModelUsed))
+            parts.Add($"Model: {step.ModelUsed}");
+        if (step.LlmCallCount > 0)
+            parts.Add($"LLM calls: {step.LlmCallCount}");
+        if (step.EstimatedCost > 0)
+            parts.Add($"Cost: {FormatStepCost(step.EstimatedCost)}");
+        if (!string.IsNullOrEmpty(step.Description))
+            parts.Add(step.Description.Length > 150 ? step.Description[..150] + "…" : step.Description);
+        return string.Join("\n", parts);
+    }
+
+    private static string BuildTaskGroupTooltip(AgentSquad.Core.Agents.Steps.AgentTaskGroup group)
+    {
+        var parts = new List<string> { group.DisplayName, $"Progress: {group.Completed}/{group.Total} steps" };
+        if (group.TotalElapsed.HasValue)
+            parts.Add($"Total time: {FormatStepDuration(group.TotalElapsed.Value)}");
+        if (group.TotalLlmCalls > 0)
+            parts.Add($"Total LLM calls: {group.TotalLlmCalls}");
+        if (group.TotalCost > 0)
+            parts.Add($"Total cost: {FormatStepCost(group.TotalCost)}");
+        return string.Join("\n", parts);
+    }
 
     public void Dispose()
     {
