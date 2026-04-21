@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using AgentSquad.Core.AI;
 using AgentSquad.Core.Configuration;
+using AgentSquad.Core.Frameworks;
 using AgentSquad.Core.Strategies.Contracts;
 
 namespace AgentSquad.Core.Strategies;
@@ -23,6 +24,7 @@ public class StrategyOrchestrator
     private readonly StrategyConcurrencyGate _gate;
     private readonly IOptionsMonitor<StrategyFrameworkConfig> _cfg;
     private readonly IReadOnlyDictionary<string, ICodeGenerationStrategy> _strategies;
+    private readonly IReadOnlyDictionary<string, IAgenticFrameworkAdapter> _externalAdapters;
     private readonly IStrategyEventSink _events;
     private readonly StrategySamplingPolicy? _sampling;
     private readonly RunBudgetTracker? _budget;
@@ -39,7 +41,8 @@ public class StrategyOrchestrator
         IStrategyEventSink? events = null,
         StrategySamplingPolicy? sampling = null,
         RunBudgetTracker? budget = null,
-        AgentUsageTracker? usage = null)
+        AgentUsageTracker? usage = null,
+        IEnumerable<IAgenticFrameworkAdapter>? adapters = null)
     {
         _logger = logger;
         _worktree = worktree;
@@ -48,11 +51,23 @@ public class StrategyOrchestrator
         _gate = gate;
         _cfg = cfg;
         _strategies = strategies.ToDictionary(s => s.Id, StringComparer.OrdinalIgnoreCase);
+
+        // External adapters: only keep adapters whose Id does NOT already exist as a
+        // built-in ICodeGenerationStrategy. This avoids double-executing built-in
+        // strategies through their wrapper adapters.
+        _externalAdapters = (adapters ?? Enumerable.Empty<IAgenticFrameworkAdapter>())
+            .Where(a => !_strategies.ContainsKey(a.Id))
+            .ToDictionary(a => a.Id, StringComparer.OrdinalIgnoreCase);
+
         _events = events ?? NullStrategyEventSink.Instance;
         _sampling = sampling;
         _budget = budget;
         _usage = usage;
     }
+
+    /// <summary>All known framework/strategy IDs (built-in + external adapters).</summary>
+    public IReadOnlyCollection<string> AllKnownIds =>
+        _strategies.Keys.Concat(_externalAdapters.Keys).ToList().AsReadOnly();
 
     /// <summary>Run all enabled strategies for a task and evaluate. Does not apply the winner.</summary>
     public async Task<OrchestrationOutcome> RunCandidatesAsync(TaskContext task, CancellationToken ct)
@@ -68,7 +83,7 @@ public class StrategyOrchestrator
         // can't fully recover from cleanup file locks). Distinct() here is the
         // surgical fix; root cause is in StrategyFrameworkConfig's default init.
         var enabled = cfg.EnabledStrategies
-            .Where(id => _strategies.ContainsKey(id))
+            .Where(id => _strategies.ContainsKey(id) || _externalAdapters.ContainsKey(id))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
@@ -182,8 +197,54 @@ public class StrategyOrchestrator
     private async Task<(StrategyExecutionResult? exec, string patch)> RunOneAsync(
         TaskContext task, string strategyId, StrategyFrameworkConfig cfg, CancellationToken ct)
     {
-        var strategy = _strategies[strategyId];
+        var isExternal = _externalAdapters.ContainsKey(strategyId);
         var timeout = cfg.Timeouts.GetTimeout(strategyId);
+
+        // External adapters: pre-flight lifecycle check (readiness).
+        if (isExternal && _externalAdapters[strategyId] is IFrameworkLifecycle lifecycle)
+        {
+            try
+            {
+                var readiness = await lifecycle.CheckReadinessAsync(ct);
+                if (readiness.Status != FrameworkReadiness.Ready)
+                {
+                    _logger.LogWarning(
+                        "Framework {Id} not ready ({Status}): {Msg}. Missing: {Missing}",
+                        strategyId, readiness.Status, readiness.Message,
+                        string.Join(", ", readiness.MissingDependencies));
+
+                    var failExec = new StrategyExecutionResult
+                    {
+                        StrategyId = strategyId,
+                        Succeeded = false,
+                        FailureReason = $"framework-not-ready: {readiness.Message}",
+                        Elapsed = TimeSpan.Zero,
+                    };
+                    await _events.EmitAsync(StrategyEvents.CandidateCompleted,
+                        new CandidateCompletedEvent(task.RunId, task.TaskId, strategyId,
+                            false, failExec.FailureReason, 0, null), ct);
+                    return (failExec, "");
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogError(ex, "Readiness check threw for framework {Id}", strategyId);
+                var failExec = new StrategyExecutionResult
+                {
+                    StrategyId = strategyId,
+                    Succeeded = false,
+                    FailureReason = $"readiness-check-error: {ex.Message}",
+                    Elapsed = TimeSpan.Zero,
+                };
+                await _events.EmitAsync(StrategyEvents.CandidateCompleted,
+                    new CandidateCompletedEvent(task.RunId, task.TaskId, strategyId,
+                        false, failExec.FailureReason, 0, null), ct);
+                return (failExec, "");
+            }
+        }
+
+        var strategy = isExternal ? null : _strategies[strategyId];
+        var adapter = isExternal ? _externalAdapters[strategyId] : null;
 
         await _events.EmitAsync(StrategyEvents.CandidateStarted,
             new CandidateStartedEvent(task.RunId, task.TaskId, strategyId, DateTimeOffset.UtcNow), ct);
@@ -240,7 +301,18 @@ public class StrategyOrchestrator
             string patch = "";
             try
             {
-                exec = await strategy.ExecuteAsync(invocation, timeoutCts.Token);
+                if (strategy is not null)
+                {
+                    exec = await strategy.ExecuteAsync(invocation, timeoutCts.Token);
+                }
+                else
+                {
+                    // External adapter path: convert to FrameworkInvocation, execute, convert back.
+                    var fwResult = await adapter!.ExecuteAsync(
+                        ToFrameworkInvocation(invocation), timeoutCts.Token);
+                    exec = FromFrameworkResult(fwResult);
+                }
+
                 if (exec.Succeeded)
                 {
                     patch = await _worktree.ExtractPatchAsync(handle.Path, handle.BaseSha, ct);
@@ -291,6 +363,42 @@ public class StrategyOrchestrator
             if (handle is not null) await handle.DisposeAsync();
         }
     }
+
+    // ── Framework ↔ Strategy type converters ──
+
+    private static FrameworkInvocation ToFrameworkInvocation(StrategyInvocation si) => new()
+    {
+        Task = new FrameworkTaskContext
+        {
+            TaskId = si.Task.TaskId,
+            TaskTitle = si.Task.TaskTitle,
+            TaskDescription = si.Task.TaskDescription,
+            PrBranch = si.Task.PrBranch,
+            BaseSha = si.Task.BaseSha,
+            RunId = si.Task.RunId,
+            AgentRepoPath = si.Task.AgentRepoPath,
+            Complexity = si.Task.Complexity,
+            IsWebTask = si.Task.IsWebTask,
+            PmSpec = si.Task.PmSpec,
+            Architecture = si.Task.Architecture,
+            TechStack = si.Task.TechStack,
+            IssueContext = si.Task.IssueContext,
+            DesignContext = si.Task.DesignContext,
+        },
+        WorktreePath = si.WorktreePath,
+        FrameworkId = si.StrategyId,
+        Timeout = si.Timeout,
+    };
+
+    private static StrategyExecutionResult FromFrameworkResult(FrameworkExecutionResult fr) => new()
+    {
+        StrategyId = fr.FrameworkId,
+        Succeeded = fr.Succeeded,
+        FailureReason = fr.FailureReason,
+        Elapsed = fr.Elapsed,
+        TokensUsed = fr.TokensUsed,
+        Log = fr.Log,
+    };
 }
 
 public record OrchestrationOutcome(TaskContext Task, EvaluationResult Evaluation)
