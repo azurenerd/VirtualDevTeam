@@ -267,4 +267,43 @@ public class EngineeringTaskIssueManagerTests
 
         Assert.True(mgr.IsWaveEligible(t2));
     }
+
+    [Fact]
+    public void NextAvailableTaskId_EmptyCache_ReturnsT1()
+    {
+        var mgr = CreateManagerWithTasks();
+        Assert.Equal("T1", mgr.NextAvailableTaskId());
+    }
+
+    [Fact]
+    public void NextAvailableTaskId_ExistingTasks_ReturnsNextId()
+    {
+        var t1 = new EngineeringTask { Id = "T1", Wave = "W0", Status = "Pending" };
+        var t2 = new EngineeringTask { Id = "T2", Wave = "W1", Status = "Pending" };
+        var mgr = CreateManagerWithTasks(t1, t2);
+
+        Assert.Equal("T3", mgr.NextAvailableTaskId());
+    }
+
+    [Fact]
+    public void NextAvailableTaskId_SkipsSpecialIds()
+    {
+        var t1 = new EngineeringTask { Id = "T1", Wave = "W0", Status = "Pending" };
+        var tFinal = new EngineeringTask { Id = "T-FINAL", Wave = "W99", Status = "Pending" };
+        var mgr = CreateManagerWithTasks(t1, tFinal);
+
+        // T-FINAL should not affect numbering (starts with "T-")
+        Assert.Equal("T2", mgr.NextAvailableTaskId());
+    }
+
+    [Fact]
+    public void NextAvailableTaskId_GapInIds_UsesMax()
+    {
+        var t1 = new EngineeringTask { Id = "T1", Wave = "W0", Status = "Pending" };
+        var t5 = new EngineeringTask { Id = "T5", Wave = "W1", Status = "Pending" };
+        var mgr = CreateManagerWithTasks(t1, t5);
+
+        // Should use max (5) + 1, not count (2) + 1
+        Assert.Equal("T6", mgr.NextAvailableTaskId());
+    }
 }

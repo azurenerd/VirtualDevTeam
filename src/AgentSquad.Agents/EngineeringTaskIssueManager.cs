@@ -24,6 +24,10 @@ internal sealed partial class EngineeringTaskIssueManager
     private List<EngineeringTask> _cache = new();
     private bool _cacheLoaded;
 
+    // Tasks freshly created via CreateTaskIssuesAsync that may not yet be visible
+    // in the GitHub API due to indexing delay. Merged back into _cache on LoadTasksAsync.
+    private readonly Dictionary<int, EngineeringTask> _pendingVisibilityTasks = new();
+
     // Scope filter: when set, LoadTasksAsync only returns tasks whose ParentIssueNumber
     // is in this set. This prevents stale tasks from prior runs from polluting the cache.
     private HashSet<int>? _enhancementScope;
@@ -85,6 +89,36 @@ internal sealed partial class EngineeringTaskIssueManager
                     before, allTasks.Count, before - allTasks.Count);
         }
 
+        // Merge back freshly-created tasks that aren't yet visible in the GitHub API
+        // (eventual-consistency delay). Remove from pending set once they appear.
+        var loadedIssueNumbers = new HashSet<int>(allTasks.Where(t => t.IssueNumber.HasValue).Select(t => t.IssueNumber!.Value));
+        var mergedFromPending = 0;
+        foreach (var (issueNum, pendingTask) in _pendingVisibilityTasks)
+        {
+            if (loadedIssueNumbers.Contains(issueNum))
+                continue; // Now visible — will be removed below
+            allTasks.Add(pendingTask);
+            mergedFromPending++;
+        }
+        // Remove tasks that are now visible from the pending set
+        foreach (var issueNum in loadedIssueNumbers)
+            _pendingVisibilityTasks.Remove(issueNum);
+        if (mergedFromPending > 0)
+        {
+            allTasks = allTasks.OrderBy(t => t.Id, StringComparer.OrdinalIgnoreCase).ToList();
+            _logger.LogWarning("Merged {Count} freshly-created tasks not yet visible in GitHub API back into cache",
+                mergedFromPending);
+        }
+
+        // Detect duplicate task IDs (broken invariant that causes foundation-task misrouting)
+        var idGroups = allTasks.GroupBy(t => t.Id, StringComparer.OrdinalIgnoreCase).Where(g => g.Count() > 1).ToList();
+        if (idGroups.Count > 0)
+        {
+            foreach (var g in idGroups)
+                _logger.LogWarning("Duplicate task ID '{TaskId}' detected across issues: {IssueNumbers}",
+                    g.Key, string.Join(", ", g.Select(t => $"#{t.IssueNumber}")));
+        }
+
         _cache = allTasks;
         _cacheLoaded = true;
         _logger.LogInformation("Loaded {Count} engineering tasks from GitHub issues ({Open} open, {Closed} closed)",
@@ -139,6 +173,8 @@ internal sealed partial class EngineeringTaskIssueManager
                 };
                 created.Add(updatedTask);
                 _cache.Add(updatedTask);
+                // Track for merge-back in LoadTasksAsync (GitHub API indexing delay)
+                _pendingVisibilityTasks[issue.Number] = updatedTask;
 
                 // Link as sub-issue of parent PM enhancement issue
                 if (task.ParentIssueNumber.HasValue && issue.GitHubId > 0)
@@ -268,6 +304,30 @@ internal sealed partial class EngineeringTaskIssueManager
     public int InProgressCount => _cache.Count(t => t.Status is "Assigned" or "InProgress");
     public int DoneCount => _cache.Count(IsTaskDone);
     public int TotalCount => _cache.Count;
+
+    /// <summary>
+    /// Generate the next collision-safe task ID by scanning all known tasks.
+    /// Returns IDs like "T8", "T9", etc. Thread-safe within single-threaded agent loop.
+    /// </summary>
+    public string NextAvailableTaskId()
+    {
+        var maxNum = _cache
+            .Where(t => t.Id is not null &&
+                        t.Id.StartsWith("T", StringComparison.OrdinalIgnoreCase) &&
+                        !t.Id.StartsWith("T-", StringComparison.OrdinalIgnoreCase))
+            .Select(t => int.TryParse(t.Id.AsSpan(1), out var n) ? n : 0)
+            .DefaultIfEmpty(0)
+            .Max();
+        // Also check pending-visibility tasks (freshly created, may not be in _cache after reload)
+        foreach (var (_, pt) in _pendingVisibilityTasks)
+        {
+            if (pt.Id?.StartsWith("T", StringComparison.OrdinalIgnoreCase) == true &&
+                !pt.Id.StartsWith("T-", StringComparison.OrdinalIgnoreCase) &&
+                int.TryParse(pt.Id.AsSpan(1), out var pn) && pn > maxNum)
+                maxNum = pn;
+        }
+        return $"T{maxNum + 1}";
+    }
 
     /// <summary>Test-only: seed the in-memory cache directly without GitHub calls.</summary>
     internal void SeedCacheForTesting(IEnumerable<EngineeringTask> tasks)

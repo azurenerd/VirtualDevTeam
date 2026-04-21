@@ -1425,7 +1425,7 @@ public class SoftwareEngineerAgent : EngineerAgentBase
                         .OrderByDescending(w => w, StringComparer.OrdinalIgnoreCase)
                         .FirstOrDefault() ?? "W1";
 
-                    var newTaskId = $"T{_taskManager.TotalCount + 1}";
+                    var newTaskId = _taskManager.NextAvailableTaskId();
                     var newTask = new EngineeringTask
                     {
                         Id = newTaskId,
@@ -1952,11 +1952,13 @@ public class SoftwareEngineerAgent : EngineerAgentBase
                 // Prioritize foundation task (T1/W0) for self-implementation — it sets the
                 // project structure that all other tasks depend on, so the Lead handles it directly.
                 var foundationTask = _taskManager.Tasks
-                    .FirstOrDefault(t => t.Status == "Pending"
+                    .Where(t => t.Status == "Pending"
                         && _taskManager.AreDependenciesMet(t)
                         && t.Id != IntegrationTaskId
                         && t.IssueNumber.HasValue
-                        && IsFoundationTask(t));
+                        && IsFoundationTask(t))
+                    .OrderBy(t => t.IssueNumber) // Prefer earliest-created when duplicates exist
+                    .FirstOrDefault();
 
                 if (foundationTask is not null)
                 {
