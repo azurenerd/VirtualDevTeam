@@ -2418,7 +2418,6 @@ public class ProgramManagerAgent : AgentBase
         try
         {
             // Idempotency: check if OPEN enhancement issues already exist
-            // Only skip if there are open ones — closed issues from prior runs don't count
             var existingEnhancements = await _github.GetIssuesByLabelAsync(
                 IssueWorkflow.Labels.Enhancement, "open", ct);
             if (existingEnhancements.Count > 0)
@@ -2436,6 +2435,19 @@ public class ProgramManagerAgent : AgentBase
                     MessageType = "PlanningComplete",
                     IssueCount = existingEnhancements.Count
                 }, ct);
+                return;
+            }
+
+            // Prior-run detection: if closed enhancement issues exist, a previous run
+            // already completed this project. Don't re-create duplicates.
+            var closedEnhancements = await _github.GetIssuesByLabelAsync(
+                IssueWorkflow.Labels.Enhancement, "closed", ct);
+            if (closedEnhancements.Count > 0)
+            {
+                Logger.LogInformation(
+                    "Prior run detected: {Count} closed enhancement issues exist — skipping re-creation to avoid duplicates",
+                    closedEnhancements.Count);
+                _userStoryIssuesCreated = true;
                 return;
             }
 
