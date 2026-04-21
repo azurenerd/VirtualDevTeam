@@ -65,8 +65,8 @@ public record StrategyExecutionResult
     public string? FailureReason { get; init; }
     /// <summary>Wall-clock elapsed time.</summary>
     public required TimeSpan Elapsed { get; init; }
-    /// <summary>Tokens consumed (input + output) if the strategy tracks them. 0 when unknown.</summary>
-    public long TokensUsed { get; init; }
+    /// <summary>Tokens consumed (input + output) if the strategy tracks them. Null when unknown.</summary>
+    public long? TokensUsed { get; init; }
     /// <summary>Diagnostic log lines (truncated). Stored in experiment record.</summary>
     public IReadOnlyList<string> Log { get; init; } = Array.Empty<string>();
 }

@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using AgentSquad.Core.Agents.Steps;
+using AgentSquad.Core.Configuration;
 using AgentSquad.Core.Strategies.Contracts;
 
 namespace AgentSquad.Core.Strategies;
@@ -27,11 +29,15 @@ public sealed class StrategyTaskStepBridge : IStrategyEventSink
     public StrategyTaskStepBridge(
         IStrategyEventSink inner,
         IAgentTaskTracker tracker,
-        ILogger<StrategyTaskStepBridge> logger)
+        ILogger<StrategyTaskStepBridge> logger,
+        IOptions<StrategyFrameworkConfig>? config = null)
     {
         _inner = inner ?? throw new ArgumentNullException(nameof(inner));
         _tracker = tracker ?? throw new ArgumentNullException(nameof(tracker));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+
+        if (config?.Value.DisplayNames is { Count: > 0 } names)
+            SetDisplayNames(names);
     }
 
     /// <summary>
@@ -121,7 +127,7 @@ public sealed class StrategyTaskStepBridge : IStrategyEventSink
         if (e.Succeeded)
         {
             _tracker.RecordSubStep(stepId,
-                $"Completed in {e.ElapsedSec:F1}s — {e.TokensUsed:N0} tokens",
+                $"Completed in {e.ElapsedSec:F1}s{(e.TokensUsed.HasValue ? $" — {e.TokensUsed.Value:N0} tokens" : "")}",
                 TimeSpan.FromSeconds(e.ElapsedSec));
             // Don't complete yet — wait for scoring/winner selection
         }
@@ -161,13 +167,29 @@ public sealed class StrategyTaskStepBridge : IStrategyEventSink
         }
     }
 
-    internal static string FormatStrategyName(string strategyId) => strategyId switch
+    private static readonly Dictionary<string, string> BuiltInDisplayNames = new(StringComparer.Ordinal)
     {
-        "baseline" => "Baseline",
-        "mcp-enhanced" => "MCP-Enhanced",
-        "agentic-delegation" => "Agentic Delegation",
-        _ => strategyId
+        ["baseline"] = "Baseline",
+        ["mcp-enhanced"] = "MCP-Enhanced",
+        ["agentic-delegation"] = "Agentic Delegation",
     };
+
+    /// <summary>
+    /// Optional config-driven display names. Set via <see cref="SetDisplayNames"/> at startup.
+    /// </summary>
+    private static IReadOnlyDictionary<string, string>? _configDisplayNames;
+
+    /// <summary>Inject per-strategy display names from configuration.</summary>
+    public static void SetDisplayNames(IReadOnlyDictionary<string, string>? names) => _configDisplayNames = names;
+
+    internal static string FormatStrategyName(string strategyId)
+    {
+        if (_configDisplayNames is not null && _configDisplayNames.TryGetValue(strategyId, out var configName))
+            return configName;
+        if (BuiltInDisplayNames.TryGetValue(strategyId, out var builtIn))
+            return builtIn;
+        return strategyId;
+    }
 
     /// <summary>Holds per-task registration state for the bridge.</summary>
     private sealed class TaskRegistration

@@ -146,7 +146,7 @@ public class GitWorktreeManager
         // ignored by one of your .gitignore files" when the user's global
         // core.excludesfile already lists .sandbox. The sandbox is scaffolding;
         // it is never part of the candidate's output.
-        await EnsureSandboxExcludedAsync(worktreePath, ct);
+        await EnsureFrameworkPathsExcludedAsync(worktreePath, ct);
 
         // Best-effort: stage any uncommitted/untracked work so `git diff base`
         // sees it. If the strategy already committed everything (agentic case),
@@ -195,14 +195,24 @@ public class GitWorktreeManager
     }
 
     /// <summary>
-    /// Writes <c>.sandbox/</c> to the worktree-local <c>info/exclude</c> file
-    /// so that subsequent <c>git add -A</c> invocations skip the agentic sandbox
-    /// scaffolding without requiring pathspec-exclude tokens. Idempotent.
+    /// Writes framework-specific directories to the worktree-local <c>info/exclude</c> file
+    /// so that subsequent <c>git add -A</c> invocations skip agentic framework scaffolding
+    /// without requiring pathspec-exclude tokens. Idempotent.
     /// Uses <c>git rev-parse --git-path info/exclude</c> so the correct path
     /// resolves for both normal repos and linked worktrees (where the per-
     /// worktree excludes live under <c>.git/worktrees/&lt;name&gt;/info/exclude</c>).
     /// </summary>
-    private async Task EnsureSandboxExcludedAsync(string worktreePath, CancellationToken ct)
+    private static readonly string[] FrameworkExcludePaths = new[]
+    {
+        ".sandbox/",
+        ".squad/",
+        ".copilot/",
+        ".claude/",
+        ".github/agents/",
+        ".github/workflows/",
+    };
+
+    private async Task EnsureFrameworkPathsExcludedAsync(string worktreePath, CancellationToken ct)
     {
         try
         {
@@ -217,20 +227,28 @@ public class GitWorktreeManager
             var existing = File.Exists(excludeFull)
                 ? await File.ReadAllTextAsync(excludeFull, ct)
                 : string.Empty;
-            var already = existing
+            var existingLines = existing
                 .Split('\n')
                 .Select(l => l.Trim().TrimEnd('\r'))
-                .Any(l => l == ".sandbox/" || l == ".sandbox" || l == "/.sandbox" || l == "/.sandbox/");
-            if (!already)
+                .ToHashSet(StringComparer.Ordinal);
+
+            var toAdd = FrameworkExcludePaths
+                .Where(p => !existingLines.Contains(p) &&
+                            !existingLines.Contains(p.TrimEnd('/')) &&
+                            !existingLines.Contains("/" + p) &&
+                            !existingLines.Contains("/" + p.TrimEnd('/')))
+                .ToList();
+
+            if (toAdd.Count > 0)
             {
                 var prefix = (existing.Length == 0 || existing.EndsWith('\n')) ? string.Empty : "\n";
-                await File.AppendAllTextAsync(excludeFull, prefix + ".sandbox/\n", ct);
+                await File.AppendAllTextAsync(excludeFull, prefix + string.Join("\n", toAdd) + "\n", ct);
             }
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex,
-                "Failed to add .sandbox/ to worktree info/exclude; patch extraction may fail on deep agentic sandbox trees");
+                "Failed to add framework paths to worktree info/exclude; patch extraction may include framework scaffolding");
         }
     }
 

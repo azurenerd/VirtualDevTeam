@@ -1,7 +1,9 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using AgentSquad.Core.Agents.Steps;
+using AgentSquad.Core.Configuration;
 using AgentSquad.Core.Mcp;
 
 namespace AgentSquad.Core.Strategies;
@@ -70,7 +72,8 @@ public static class StrategyFrameworkServiceCollectionExtensions
             new StrategyTaskStepBridge(
                 sp.GetRequiredService<StrategyEventBroadcaster>(),
                 sp.GetRequiredService<IAgentTaskTracker>(),
-                sp.GetRequiredService<ILogger<StrategyTaskStepBridge>>()));
+                sp.GetRequiredService<ILogger<StrategyTaskStepBridge>>(),
+                sp.GetService<IOptions<StrategyFrameworkConfig>>()));
         // Expose the bridge as the primary event sink
         services.Replace(ServiceDescriptor.Singleton<IStrategyEventSink>(sp =>
             sp.GetRequiredService<StrategyTaskStepBridge>()));

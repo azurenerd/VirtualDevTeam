@@ -94,7 +94,7 @@ public class CandidateEvaluator
                 .OrderByDescending(c => c.Score?.AcceptanceCriteriaScore ?? -1)
                 .ThenByDescending(c => c.Score?.DesignScore ?? -1)
                 .ThenByDescending(c => c.Score?.ReadabilityScore ?? -1)
-                .ThenBy(c => c.Execution.TokensUsed)
+                .ThenBy(c => c.Execution.TokensUsed ?? long.MaxValue)
                 .ThenBy(c => c.Execution.Elapsed)
                 .ThenBy(c => c.StrategyId, StringComparer.Ordinal)
                 .ToList();
@@ -111,7 +111,7 @@ public class CandidateEvaluator
         {
             // No judge configured -> deterministic tiebreak only.
             var ordered = survivors
-                .OrderBy(c => c.Execution.TokensUsed)
+                .OrderBy(c => c.Execution.TokensUsed ?? long.MaxValue)
                 .ThenBy(c => c.Execution.Elapsed)
                 .ThenBy(c => c.StrategyId, StringComparer.Ordinal)
                 .ToList();

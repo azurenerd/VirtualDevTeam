@@ -25,6 +25,13 @@ public class StrategyFrameworkConfig
     public List<string> EnabledStrategies { get; set; } = new();
 
     /// <summary>
+    /// Per-strategy display names keyed by strategy ID. Falls back to built-in names
+    /// for baseline/mcp-enhanced/agentic-delegation, or the raw ID for unknown strategies.
+    /// External frameworks (Squad, Claude Code, etc.) register their display name here.
+    /// </summary>
+    public Dictionary<string, string> DisplayNames { get; set; } = new();
+
+    /// <summary>
     /// How often strategies run.
     /// - <c>always</c>: run every enabled strategy on every task (highest cost, most data).
     /// - <c>high-complexity-only</c>: only when task complexity >= 3.
@@ -89,6 +96,29 @@ public class TimeoutsConfig
     public int BuildGateSeconds { get; set; } = 120;
     public int AppStartGateSeconds { get; set; } = 30;
     public int EvaluatorTestsSeconds { get; set; } = 180;
+
+    /// <summary>
+    /// Per-strategy timeout overrides keyed by strategy ID. Used by the orchestrator
+    /// to look up timeouts without hardcoding strategy IDs. Falls back to
+    /// <see cref="BaselineSeconds"/> for unknown strategies.
+    /// Auto-populated from the named properties when empty.
+    /// </summary>
+    public Dictionary<string, int> PerStrategy { get; set; } = new();
+
+    /// <summary>Resolve the timeout for a given strategy ID.</summary>
+    public TimeSpan GetTimeout(string strategyId)
+    {
+        if (PerStrategy.TryGetValue(strategyId, out var seconds))
+            return TimeSpan.FromSeconds(seconds);
+
+        // Fallback to named properties for backward compatibility
+        return strategyId switch
+        {
+            "agentic-delegation" => TimeSpan.FromSeconds(AgenticSeconds),
+            "mcp-enhanced" => TimeSpan.FromSeconds(McpSeconds),
+            _ => TimeSpan.FromSeconds(BaselineSeconds),
+        };
+    }
 }
 
 public class ConcurrencyConfig

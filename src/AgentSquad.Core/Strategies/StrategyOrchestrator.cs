@@ -161,7 +161,7 @@ public class StrategyOrchestrator
             WinnerStrategyId = evalResult.Winner?.StrategyId,
             TieBreakReason = evalResult.TieBreakReason,
             EvaluationElapsedSec = evalResult.EvaluationElapsed.TotalSeconds,
-            TotalTokens = evalResult.Candidates.Sum(c => c.Execution.TokensUsed),
+            TotalTokens = evalResult.Candidates.Sum(c => c.Execution.TokensUsed ?? 0),
         });
 
         LogOrchestrationSummary(task.TaskId, runSw, evalResult);
@@ -183,12 +183,7 @@ public class StrategyOrchestrator
         TaskContext task, string strategyId, StrategyFrameworkConfig cfg, CancellationToken ct)
     {
         var strategy = _strategies[strategyId];
-        var timeout = strategyId switch
-        {
-            "agentic-delegation" => TimeSpan.FromSeconds(cfg.Timeouts.AgenticSeconds),
-            "mcp-enhanced" => TimeSpan.FromSeconds(cfg.Timeouts.McpSeconds),
-            _ => TimeSpan.FromSeconds(cfg.Timeouts.BaselineSeconds),
-        };
+        var timeout = cfg.Timeouts.GetTimeout(strategyId);
 
         await _events.EmitAsync(StrategyEvents.CandidateStarted,
             new CandidateStartedEvent(task.RunId, task.TaskId, strategyId, DateTimeOffset.UtcNow), ct);
@@ -280,14 +275,14 @@ public class StrategyOrchestrator
             // Phase 5: charge tokens to the per-run budget. Trips the breaker once
             // the configured cap is exceeded; subsequent tasks in the run see
             // IsExhausted=true and the sampling policy narrows to baseline-only.
-            if (_budget is not null && exec.TokensUsed > 0)
-                _budget.Charge(task.RunId, exec.TokensUsed);
+            if (_budget is not null && exec.TokensUsed is > 0)
+                _budget.Charge(task.RunId, exec.TokensUsed.Value);
 
             // Phase 6: per-strategy cost attribution. Uses the model reported
             // by the candidate; falls back to a generic label if unknown so we
             // still get a row for the strategy.
-            if (_usage is not null && exec.TokensUsed > 0)
-                _usage.RecordStrategyTokens(strategyId, "cli-estimated", exec.TokensUsed);
+            if (_usage is not null && exec.TokensUsed is > 0)
+                _usage.RecordStrategyTokens(strategyId, "cli-estimated", exec.TokensUsed.Value);
 
             return (exec, patch);
         }

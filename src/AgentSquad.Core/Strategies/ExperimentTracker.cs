@@ -81,7 +81,7 @@ public record CandidateRecord
     public string? FailedGate { get; init; }
     public double ElapsedSec { get; init; }
     public int PatchSizeBytes { get; init; }
-    public long TokensUsed { get; init; }
+    public long? TokensUsed { get; init; }
     public int? AcceptanceCriteriaScore { get; init; }
     public int? DesignScore { get; init; }
     public int? ReadabilityScore { get; init; }

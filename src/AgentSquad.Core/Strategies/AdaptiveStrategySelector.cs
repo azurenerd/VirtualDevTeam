@@ -149,7 +149,7 @@ public sealed class AdaptiveStrategySelector
             Count++;
             if (won) Wins++;
             if (c.Succeeded) Survived++;
-            TokensSum += c.TokensUsed;
+            TokensSum += c.TokensUsed ?? 0;
         }
 
         public StrategyStats Build() => new()
