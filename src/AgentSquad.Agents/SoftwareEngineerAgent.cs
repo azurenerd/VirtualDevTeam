@@ -1236,7 +1236,17 @@ public class SoftwareEngineerAgent : EngineerAgentBase
         _taskTracker.CompleteStep(createIssuesStepId);
 
         // REQ-PE-009: Validate all PM enhancements have engineering tasks
-        await ValidateEnhancementCoverageAsync(enhancementIssues, ct);
+        // Skip in SinglePRMode — T1 monolithic task covers ALL enhancements by design
+        if (Config.Limits.SinglePRMode)
+        {
+            Logger.LogInformation(
+                "SinglePRMode — skipping enhancement coverage validation (T1 covers all {Count} enhancements)",
+                enhancementIssues.Count);
+        }
+        else
+        {
+            await ValidateEnhancementCoverageAsync(enhancementIssues, ct);
+        }
 
         // Validate engineering plan structure: wave dependencies, issue links, design references
         await ValidateEngineeringPlanStructureAsync(ct);
