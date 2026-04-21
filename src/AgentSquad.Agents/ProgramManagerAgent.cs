@@ -54,6 +54,7 @@ public class ProgramManagerAgent : AgentBase
     private bool _userStoryIssuesCreated;
     private bool _teamCompositionComplete;
     private readonly HashSet<int> _reviewedEnhancementIssues = new();
+    private string _designHtmlContext = "";
 
     private readonly List<IDisposable> _subscriptions = new();
 
@@ -1481,23 +1482,43 @@ public class ProgramManagerAgent : AgentBase
                 }
                 else
                 {
-                    // PM found gaps — comment but don't close
+                    // PM found gaps — all tasks are closed/merged so SE can't re-engage.
+                    // Close the enhancement as "delivered with known gaps" and create
+                    // a follow-up issue to track the identified improvements.
                     var gapText = responseText
                         .Replace("NEEDS_MORE_WORK", "").Replace("needs_more_work", "")
                         .Trim().TrimStart('-', ':', ' ', '\n');
 
+                    // Create a follow-up issue tracking the gaps
+                    var followUpTitle = $"Follow-up improvements for: {issue.Title}";
+                    var followUpBody = $"## Background\n\n" +
+                        $"Enhancement #{issue.Number} ({issue.Title}) was delivered with all " +
+                        $"{subIssues.Count} engineering tasks completed and merged. During final " +
+                        $"PM acceptance review, the following gaps were identified:\n\n" +
+                        $"## Identified Gaps\n\n{gapText}\n\n" +
+                        $"## Source\nOriginal enhancement: #{issue.Number}";
+
+                    var followUp = await _github.CreateIssueAsync(
+                        followUpTitle, followUpBody,
+                        new[] { "enhancement", "follow-up" }, ct);
+
+                    // Close the original with a reference to the follow-up
                     await _github.AddIssueCommentAsync(issue.Number,
-                        $"🔍 **PM Final Review — Additional Work Needed**\n\n" +
-                        $"All {subIssues.Count} engineering tasks are closed, but gaps remain:\n\n" +
-                        $"{gapText}\n\n" +
-                        $"Keeping this issue open for further engineering work.",
+                        $"🔍 **PM Final Review — Delivered with Known Gaps**\n\n" +
+                        $"All {subIssues.Count} engineering tasks are closed and merged. " +
+                        $"PM identified improvements needed, but no active engineering " +
+                        $"work remains to dispatch to.\n\n" +
+                        $"**Gaps identified:**\n{gapText}\n\n" +
+                        $"Closing as delivered. Follow-up improvements tracked in #{followUp.Number}.",
                         ct);
+                    await _github.CloseIssueAsync(issue.Number, ct);
                     _reviewedEnhancementIssues.Add(issue.Number);
 
                     Logger.LogInformation(
-                        "PM flagged enhancement issue #{Number} as needing more work: {Title}",
-                        issue.Number, issue.Title);
-                    LogActivity("review", $"🔍 Enhancement #{issue.Number} needs more work: {issue.Title}");
+                        "PM closed enhancement #{Number} as delivered with gaps. Follow-up: #{FollowUp}",
+                        issue.Number, followUp.Number);
+                    LogActivity("review",
+                        $"🔍 Enhancement #{issue.Number} delivered with gaps → follow-up #{followUp.Number}");
                 }
             }
         }
@@ -2825,6 +2846,23 @@ public class ProgramManagerAgent : AgentBase
                     for (var i = 0; i < designReferenceImages.Count; i++)
                         screenshotIntro += $"Design Reference {i + 1}: {designReferenceImages[i].Description}\n";
                 }
+                else
+                {
+                    // No rendered design reference images — still enforce strict visual rules
+                    screenshotIntro += "\n## ⚠️ No Design Reference Image Available\n" +
+                        "No rendered design screenshot was found in `docs/design-screenshots/`. " +
+                        "Apply these strict visual quality rules to the actual screenshot:\n\n" +
+                        "**STRICT VISUAL RULES — REQUEST_CHANGES if ANY are violated:**\n" +
+                        "- If the actual screenshot is blank, mostly white, or shows only a white page → REQUEST_CHANGES.\n" +
+                        "- If literal placeholder strings like `placeholder`, `(placeholder)`, `Timeline placeholder`, " +
+                        "`Heatmap placeholder`, `Lorem ipsum`, `TODO`, `stub`, or `coming soon` are visible → REQUEST_CHANGES.\n" +
+                        "- If the actual screenshot shows a red error banner, stack trace, or 'Loading...' text " +
+                        "and the PR is not specifically a bug-fix → REQUEST_CHANGES.\n" +
+                        "- If the PR title claims to wire, compose, integrate, or finalize a UI component but the " +
+                        "screenshot shows no meaningful rendered content → REQUEST_CHANGES.\n" +
+                        "- 'Stubbed with placeholder strings' is NEVER acceptable.\n\n" +
+                        _designHtmlContext; // HTML design context if available
+                }
 
                 items.Add(new TextContent(userMessageText + screenshotIntro));
 
@@ -3245,7 +3283,40 @@ public class ProgramManagerAgent : AgentBase
                 .Take(3) // cap at 3 references to keep token usage sane
                 .ToList();
 
-            if (designPngs.Count == 0) return results;
+            if (designPngs.Count == 0)
+            {
+                // No rendered PNGs — try to find HTML design files for text context
+                var designHtmlFiles = tree
+                    .Where(f => f.EndsWith(".html", StringComparison.OrdinalIgnoreCase) &&
+                        (f.Contains("design", StringComparison.OrdinalIgnoreCase) ||
+                         f.Contains("concept", StringComparison.OrdinalIgnoreCase) ||
+                         f.Contains("mock", StringComparison.OrdinalIgnoreCase) ||
+                         f.Contains("wireframe", StringComparison.OrdinalIgnoreCase)))
+                    .Where(f => !f.StartsWith("src/", StringComparison.OrdinalIgnoreCase) &&
+                                !f.StartsWith("node_modules/", StringComparison.OrdinalIgnoreCase))
+                    .Take(1)
+                    .ToList();
+
+                if (designHtmlFiles.Count > 0)
+                {
+                    try
+                    {
+                        using var http2 = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+                        var htmlUrl = $"https://raw.githubusercontent.com/{_config.Project.GitHubRepo}/main/{designHtmlFiles[0]}";
+                        var htmlContent = await http2.GetStringAsync(htmlUrl, ct);
+                        // Extract key structural elements (cap at 2000 chars to avoid token bloat)
+                        var summary = ExtractDesignHtmlSummary(htmlContent, designHtmlFiles[0]);
+                        _designHtmlContext = summary;
+                        Logger.LogInformation("B2: Loaded HTML design context from {Path} ({Len} chars)",
+                            designHtmlFiles[0], summary.Length);
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.LogDebug(ex, "B2: failed to load HTML design file {Path}", designHtmlFiles[0]);
+                    }
+                }
+                return results;
+            }
 
             using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(15) };
             foreach (var path in designPngs)
@@ -3273,6 +3344,63 @@ public class ProgramManagerAgent : AgentBase
             Logger.LogDebug(ex, "B2: failed to enumerate design-screenshots tree");
         }
         return results;
+    }
+
+    /// <summary>
+    /// Extract key structural information from an HTML design file to use as text context
+    /// when no rendered PNG is available. Caps output at ~2000 chars.
+    /// </summary>
+    private static string ExtractDesignHtmlSummary(string html, string filePath)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"\n## 📐 Design Template Context (from `{filePath}`)");
+        sb.AppendLine("No rendered design image is available, but the HTML design template describes these components:\n");
+
+        // Extract title
+        var titleMatch = System.Text.RegularExpressions.Regex.Match(html, @"<title[^>]*>([^<]+)</title>",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (titleMatch.Success)
+            sb.AppendLine($"- **Page title:** {titleMatch.Groups[1].Value.Trim()}");
+
+        // Extract headings (h1-h3)
+        var headings = System.Text.RegularExpressions.Regex.Matches(html,
+            @"<h[1-3][^>]*>([^<]+)</h[1-3]>", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (headings.Count > 0)
+        {
+            sb.AppendLine("- **Key headings:**");
+            foreach (System.Text.RegularExpressions.Match h in headings.Take(10))
+                sb.AppendLine($"  - {h.Groups[1].Value.Trim()}");
+        }
+
+        // Extract major structural elements (divs with meaningful class/id names)
+        var divClasses = System.Text.RegularExpressions.Regex.Matches(html,
+            @"class=""([^""]+)""", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        var meaningfulClasses = divClasses.Cast<System.Text.RegularExpressions.Match>()
+            .Select(m => m.Groups[1].Value)
+            .Where(c => c.Length > 3 && !c.Contains("col-") && !c.Contains("row"))
+            .Distinct()
+            .Take(15)
+            .ToList();
+        if (meaningfulClasses.Count > 0)
+            sb.AppendLine($"- **Key CSS classes:** {string.Join(", ", meaningfulClasses.Select(c => $"`{c}`"))}");
+
+        // Extract SVG/canvas references (indicates charts/graphics)
+        if (html.Contains("<svg", StringComparison.OrdinalIgnoreCase))
+            sb.AppendLine("- **Contains SVG graphics** (likely timeline, charts, or icons)");
+        if (html.Contains("<canvas", StringComparison.OrdinalIgnoreCase))
+            sb.AppendLine("- **Contains Canvas elements** (likely charts or graphs)");
+
+        // Extract grid/table indicators
+        if (html.Contains("grid", StringComparison.OrdinalIgnoreCase))
+            sb.AppendLine("- **Uses CSS Grid layout** (likely heatmap or data grid)");
+        if (html.Contains("<table", StringComparison.OrdinalIgnoreCase))
+            sb.AppendLine("- **Contains table(s)** (likely data display)");
+
+        sb.AppendLine("\nThe actual PR screenshot must show these structural elements rendered — " +
+            "not placeholder text or blank space.\n");
+
+        var result = sb.ToString();
+        return result.Length > 2000 ? result[..2000] + "…\n" : result;
     }
 
     #endregion
