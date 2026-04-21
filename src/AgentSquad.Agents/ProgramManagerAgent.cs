@@ -156,6 +156,24 @@ public class ProgramManagerAgent : AgentBase
                 await ProcessClarificationRequestsAsync(ct);
                 Logger.LogInformation("PM loop: ReviewPullRequests (entering)");
                 await ReviewPullRequestsAsync(ct);
+                // Retry guard: if PMSpec exists but enhancement issues were never created
+                // (e.g., due to a transient Copilot CLI failure), retry creation
+                if (!_userStoryIssuesCreated)
+                {
+                    var openEnhancements = await _github.GetIssuesByLabelAsync(
+                        IssueWorkflow.Labels.Enhancement, "open", ct);
+                    if (openEnhancements.Count == 0)
+                    {
+                        var specContent = await _projectFiles.GetPMSpecAsync(ct);
+                        if (!string.IsNullOrWhiteSpace(specContent) &&
+                            !specContent.Contains("No PM specification has been created yet"))
+                        {
+                            Logger.LogInformation("Retry: PMSpec exists but no open enhancement issues — retrying User Story creation");
+                            await CreateUserStoryIssuesAsync(ct);
+                        }
+                    }
+                }
+
                 Logger.LogInformation("PM loop: ReviewEnhancementIssueCompletion");
                 await ReviewEnhancementIssueCompletionAsync(ct);
                 Logger.LogInformation("PM loop: UpdateProjectTracking");
