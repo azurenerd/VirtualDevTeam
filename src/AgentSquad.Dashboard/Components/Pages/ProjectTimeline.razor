@@ -149,7 +149,7 @@ else
                                                 @foreach (var child in group.ChildIssues)
                                                 {
                                                     var childClosed = child.State == "closed";
-                                                    <div class="ntl-child-node @(childClosed ? "ntl-child-closed" : "ntl-child-open")"
+                                                    <div @key="@($"child-{child.Number}")" class="ntl-child-node @(childClosed ? "ntl-child-closed" : "ntl-child-open")"
                                                          @onclick="() => SelectNode(child.Number)" @onclick:stopPropagation="true"
                                                          title="@child.Title">
                                                         <div class="ntl-child-indicator @(childClosed ? "ind-closed" : "ind-open")"></div>
@@ -459,27 +459,36 @@ else
             if (fp == _dataFingerprint && !showOverlay)
                 return; // nothing changed — skip rebuild and re-render
 
-            _rawIssues = newIssues;
-            _rawPullRequests = newPRs;
-            _dataFingerprint = fp;
-            BuildTimeline();
+            // Mutate state + trigger render atomically on the UI thread
+            // to prevent race conditions with the Blazor render tree diff builder
+            await InvokeAsync(() =>
+            {
+                _rawIssues = newIssues;
+                _rawPullRequests = newPRs;
+                _dataFingerprint = fp;
+                BuildTimeline();
 
-            if (_phases.Count == 0)
-                _ = RetryAfterDelay(TimeSpan.FromSeconds(_isRateLimited ? 30 : 15));
+                if (_phases.Count == 0)
+                    _ = RetryAfterDelay(TimeSpan.FromSeconds(_isRateLimited ? 30 : 15));
+
+                _loading = false;
+                _initialLoadComplete = true;
+                StateHasChanged();
+            });
         }
         catch
         {
-            _rawIssues = [];
-            _rawPullRequests = [];
-            _dataFingerprint = "";
-            BuildTimeline();
-            _ = RetryAfterDelay(TimeSpan.FromSeconds(15));
-        }
-        finally
-        {
-            _loading = false;
-            _initialLoadComplete = true;
-            await InvokeAsync(StateHasChanged);
+            await InvokeAsync(() =>
+            {
+                _rawIssues = [];
+                _rawPullRequests = [];
+                _dataFingerprint = "";
+                BuildTimeline();
+                _ = RetryAfterDelay(TimeSpan.FromSeconds(15));
+                _loading = false;
+                _initialLoadComplete = true;
+                StateHasChanged();
+            });
         }
     }
 
