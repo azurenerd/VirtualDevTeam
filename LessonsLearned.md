@@ -67,6 +67,7 @@
 57. [In-Memory State Flags Lost on Process Restart — Recover from Durable State](#58-in-memory-state-flags-lost-on-process-restart--recover-from-durable-state)
 58. [EMU GitHub Restrictions — `gh` CLI Fails for Enterprise Managed Users](#59-emu-github-restrictions--gh-cli-fails-for-enterprise-managed-users)
 59. [First Successful End-to-End Run — What Made It Work](#60-first-successful-end-to-end-run--what-made-it-work)
+60. [External Agentic Framework Integration — Spike Before You Abstract](#61-external-agentic-framework-integration--spike-before-you-abstract)
 
 ---
 
@@ -1327,3 +1328,26 @@ if (_gateCheck.RequiresHuman("pm_spec_review"))
 **Fix:** N/A — this was a cumulative success. The lesson is that multi-agent systems fail in combinatorial ways. Each individual fix seems small, but their interaction effects are what make the system work. You need to fix ALL the failure modes in a single pass, not just the most recent one.
 
 **Rule:** Multi-agent orchestration systems have emergent failure modes that only surface when all agents interact end-to-end. A "fix → monitor → fix" loop with live runs is essential. Plan for 3-5 fix-and-run cycles to get from "mostly works" to "reliably completes."
+
+## 61. External Agentic Framework Integration — Spike Before You Abstract
+
+**Problem:** We wanted to integrate Squad (and eventually Claude Code, GitHub Copilot Agent, etc.) as pluggable coding frameworks under AgentSquad's orchestration. The natural instinct was to start by designing the adapter interfaces and abstraction layer — but that would have been building on unverified assumptions.
+
+**What went wrong (avoided):** A rubber-duck critique caught the "abstract first" anti-pattern before we committed to it. Without a feasibility spike, we would have designed interfaces around assumed capabilities (e.g., expecting `.squad/log/` files for telemetry, expecting token reporting, assuming clean containment) — all of which turned out to be wrong.
+
+**Key discoveries from the feasibility spike:**
+- Squad's `.squad/log/` and `.squad/orchestration-log/` directories are **NOT created** during headless execution — stdout is the ONLY real-time telemetry source.
+- Squad contaminates far beyond `.squad/`: also creates `.copilot/` (37 files), `.github/agents/` (82KB), `.github/workflows/` (4 files). The exclusion list had to be much larger than expected.
+- Token metrics ARE parseable from stdout (`Tokens ↑ 620.4k · ↓ 3.2k`) — we originally assumed $0 cost attribution for external frameworks.
+- Pre-populating `.squad/team.md` bypasses Squad's interactive Init Mode — enabling true headless execution.
+- `TokensUsed = 0` (the default for unknown) biases the evaluator in favor of frameworks that can't report tokens. This had to be fixed (nullable `long?`) BEFORE adding Squad.
+
+**Architecture decisions that worked:**
+1. **Composable interfaces** (IAgenticFrameworkAdapter + optional IFrameworkLifecycle + optional IFrameworkTelemetrySource) instead of one fat interface. Adapters only implement what their framework supports.
+2. **Wrapping existing strategies** (BaselineAdapter, McpEnhancedAdapter) as adapters enables gradual migration — old `ICodeGenerationStrategy` code paths keep working.
+3. **External adapter filtering** in the orchestrator: adapters with IDs matching built-in strategies are excluded from `_externalAdapters` to prevent double-execution.
+4. **Pre/post execution gates** for external frameworks: log the sandbox summary before running, log the result metrics after. Built-in strategies skip gates (they're already fully visible).
+
+**Fix:** Always spike first. Run the framework in a real environment, inspect every output, file, and side effect before designing interfaces. The abstractions should fit the reality, not the documentation.
+
+**Rule:** When integrating external tools into an orchestration system: (1) prove headless execution works, (2) audit all side effects and containment requirements, (3) map actual telemetry sources (not assumed ones), (4) fix any evaluation biases before adding new competitors, (5) THEN design the minimal abstraction that fits what you've proven. Defer mass renaming and UI polish until the integration is working end-to-end.
