@@ -21,32 +21,53 @@ Also read the `.github/copilot-instructions.md` (auto-loaded) for architecture, 
 
 ## 2. GitHub Reset (Fresh Run)
 
-Before starting a new agent workflow run, fully reset the target GitHub repo:
+Before starting a new agent workflow run, fully reset the target GitHub repo.
 
-> ⚠️ **ALWAYS use a reset script (Option A or B).** Never do manual resets — the scripts handle DB cleanup, workspace deletion, process stops, file cleanup, AND verify everything. Manual resets miss steps (e.g., stale SQLite DB causes ghost notifications).
+> 🚨 **CRITICAL: NEVER DO A MANUAL RESET. ALWAYS USE THE SCRIPTS.**
+>
+> This is a **hard rule with no exceptions.** Manual resets (ad-hoc process kills, manual DB deletes, manual GitHub API calls) **always miss steps** and leave the environment in an inconsistent state. Known failures from manual resets:
+> - **Stale code left in GitHub repo** — agents build on top of old code instead of starting fresh
+> - **Open issues/PRs not closed** — agents pick up stale work items and produce duplicate/conflicting work
+> - **SQLite DB not deleted** — ghost notifications, phantom agents, corrupted workflow state
+> - **Agent workspaces not cleaned** — worktree conflicts, stale file locks
+> - **Agent branches not deleted** — merge conflicts, branch pollution
+>
+> The reset scripts handle ALL of these atomically and verify the result. If a script fails, fix the script — do not work around it manually.
 
-### Option A: Use the fresh-reset script (recommended)
+### Option A: Fresh reset (full clean slate — recommended for new projects)
 ```powershell
-# No PAT argument needed — reads from dotnet user-secrets automatically
+# Cleans EVERYTHING — only OriginalDesignConcept.html preserved
 .\scripts\fresh-reset.ps1
-
-# Or with explicit PAT
-.\scripts\fresh-reset.ps1 -GitHubToken $pat
-
-# Preserve the HTML design reference (scaffold PR creates .gitignore)
-.\scripts\fresh-reset.ps1 -PreserveFiles "OriginalDesignConcept.html"
 ```
 
-### Option B: Use reset-runner script (reads PAT from user-secrets automatically)
+### Option B: Minimal reset (preserves startup docs — recommended for re-running engineering)
+```powershell
+# Preserves Research.md, PMSpec.md, Architecture.md so pipeline fast-forwards to engineering
+.\scripts\minimal-reset.ps1
+```
+
+### Option C: Reset-runner (legacy, also works)
 ```powershell
 # Full reset — reads PAT from user-secrets (falls back to appsettings.json), stops runner, cleans GitHub + local state
 .\scripts\reset-runner.ps1
 ```
 
-### Option C: Dashboard UI reset
+### Option D: Dashboard UI reset
 Navigate to the **Configuration** page (http://localhost:5050/configuration) in the embedded dashboard.
 Use the "Scan Repository" button to preview, then "Clean & Restart" to execute.
 This is only available in embedded mode (Runner-hosted dashboard on port 5050).
+
+> **What the scripts do (so you don't have to):**
+> 1. Kill running dotnet processes
+> 2. Delete SQLite DBs + WAL/SHM files
+> 3. Purge agent-created SME definitions
+> 4. Clean agent workspaces (C:\Agents\*)
+> 5. Clean Playwright temp files
+> 6. Clone repo → delete all non-preserved files → commit → push
+> 7. Delete all remote agent branches
+> 8. Close all open issues (paginated, with retry)
+> 9. Close all open PRs (paginated, with retry)
+> 10. **Verify everything is clean before reporting success**
 
 ### ⚠️ MANDATORY: Verify reset before proceeding
 

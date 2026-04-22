@@ -160,10 +160,14 @@ public class ProgramManagerAgent : AgentBase
                 // Retry guard: if PMSpec exists but no open enhancement issues,
                 // re-create them. This handles mini-reset (closed issues from prior runs
                 // incorrectly set _userStoryIssuesCreated) and transient CLI failures.
+                // IMPORTANT: Do NOT re-create if the PM itself already closed them
+                // (i.e., _reviewedEnhancementIssues has entries). That means the project
+                // completed successfully — re-creating would cause an infinite
+                // create-close-recreate loop.
                 {
                     var openEnhancements = await _github.GetIssuesByLabelAsync(
                         IssueWorkflow.Labels.Enhancement, "open", ct);
-                    if (openEnhancements.Count == 0)
+                    if (openEnhancements.Count == 0 && _reviewedEnhancementIssues.Count == 0)
                     {
                         var specContent = await _projectFiles.GetPMSpecAsync(ct);
                         if (!string.IsNullOrWhiteSpace(specContent) &&
@@ -173,6 +177,13 @@ public class ProgramManagerAgent : AgentBase
                             _userStoryIssuesCreated = false;
                             await CreateUserStoryIssuesAsync(ct, skipClosedIssueGuard: true);
                         }
+                    }
+                    else if (openEnhancements.Count == 0 && _reviewedEnhancementIssues.Count > 0)
+                    {
+                        // PM already closed all enhancements — project is done. Don't recreate.
+                        Logger.LogInformation(
+                            "All {Count} enhancement issues were already reviewed and closed by PM — project complete, skipping retry guard",
+                            _reviewedEnhancementIssues.Count);
                     }
                     else if (!_userStoryIssuesCreated)
                     {
