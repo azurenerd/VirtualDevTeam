@@ -110,6 +110,7 @@ public sealed class CandidateStateStore
             AcScore = e.AcScore,
             DesignScore = e.DesignScore,
             ReadabilityScore = e.ReadabilityScore,
+            ScreenshotBase64 = e.ScreenshotBase64,
         };
 
         var snapshot = _active.AddOrUpdate(
@@ -193,6 +194,8 @@ public sealed record CandidateSnapshot
     public int? AcScore { get; init; }
     public int? DesignScore { get; init; }
     public int? ReadabilityScore { get; init; }
+    /// <summary>Base64-encoded PNG screenshot captured after build gate passed (null if not available).</summary>
+    public string? ScreenshotBase64 { get; init; }
 }
 
 public sealed record TaskSnapshot

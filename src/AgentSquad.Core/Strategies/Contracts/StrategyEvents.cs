@@ -17,5 +17,5 @@ public static class StrategyEvents
 public record CandidateStartedEvent(string RunId, string TaskId, string StrategyId, DateTimeOffset At);
 public record CandidateCompletedEvent(string RunId, string TaskId, string StrategyId, bool Succeeded, string? FailureReason, double ElapsedSec, long? TokensUsed);
 public record GateEvent(string RunId, string TaskId, string StrategyId, string GateId, bool? Passed, string? Detail);
-public record CandidateScoredEvent(string RunId, string TaskId, string StrategyId, int AcScore, int DesignScore, int ReadabilityScore);
+public record CandidateScoredEvent(string RunId, string TaskId, string StrategyId, int AcScore, int DesignScore, int ReadabilityScore, string? ScreenshotBase64 = null);
 public record WinnerSelectedEvent(string RunId, string TaskId, string StrategyId, string TieBreakReason, double EvaluationElapsedSec);

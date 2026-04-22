@@ -139,9 +139,13 @@ public class StrategyOrchestrator
         {
             if (c.Score is not null)
             {
+                var screenshotBase64 = c.ScreenshotBytes is { Length: > 0 }
+                    ? Convert.ToBase64String(c.ScreenshotBytes)
+                    : null;
                 await _events.EmitAsync(StrategyEvents.CandidateScored, new CandidateScoredEvent(
                     task.RunId, task.TaskId, c.StrategyId,
-                    c.Score.AcceptanceCriteriaScore, c.Score.DesignScore, c.Score.ReadabilityScore), ct);
+                    c.Score.AcceptanceCriteriaScore, c.Score.DesignScore, c.Score.ReadabilityScore,
+                    screenshotBase64), ct);
             }
         }
         if (evalResult.Winner is not null)
