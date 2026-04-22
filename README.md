@@ -332,22 +332,38 @@ The judge receives sanitized diffs (capped at `MaxJudgePatchChars`) for all surv
 Winners are selected using a strict priority cascade:
 
 ```mermaid
-flowchart LR
-    S1["1️⃣ Sole Survivor<br/><i>only one candidate<br/>passed all gates</i>"]
-    S2["2️⃣ LLM Rank<br/><i>AC ↓ → Design ↓<br/>→ Readability ↓</i>"]
-    S3["3️⃣ Token Efficiency<br/><i>fewer tokens used</i>"]
-    S4["4️⃣ Speed<br/><i>faster execution</i>"]
-    S5["5️⃣ Alphabetical ID<br/><i>stable fallback</i>"]
+flowchart TB
+    S1(["1️⃣ Sole Survivor"])
+    S1D["Only one candidate passed all gates → automatic winner"]
 
-    S1 --> S2 --> S3 --> S4 --> S5
+    subgraph S2G["2️⃣ LLM Rank"]
+        direction LR
+        AC["Acceptance Criteria ↓"] --> DS["Design ↓"] --> RD["Readability ↓"]
+    end
+
+    S3(["3️⃣ Token Efficiency"])
+    S3D["Fewer tokens used — tiebreaker"]
+
+    S4(["4️⃣ Speed"])
+    S4D["Faster execution time — tiebreaker"]
+
+    S5(["5️⃣ Alphabetical ID"])
+    S5D["Stable deterministic fallback"]
+
+    S1 --- S1D --> S2G --> S3
+    S3 --- S3D --> S4
+    S4 --- S4D --> S5 --- S5D
 
     classDef purple fill:#6a0dad,stroke:#bf00ff,stroke-width:2px,color:#fff
     classDef pink fill:#c2185b,stroke:#ff4081,stroke-width:2px,color:#fff
     classDef blue fill:#0277bd,stroke:#00b0ff,stroke-width:2px,color:#fff
+    classDef desc fill:none,stroke:none,color:#ccc,font-style:italic
 
     class S1,S5 purple
-    class S2,S4 pink
+    class AC,DS,RD pink
     class S3 blue
+    class S4 pink
+    class S1D,S3D,S4D,S5D desc
 ```
 
 If no LLM judge is configured, scoring is skipped and winner selection uses only the token/speed/ID tiebreakers.
