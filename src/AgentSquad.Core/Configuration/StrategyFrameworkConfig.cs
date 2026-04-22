@@ -93,6 +93,8 @@ public class TimeoutsConfig
     public int BaselineSeconds { get; set; } = 900;
     public int McpSeconds { get; set; } = 900;
     public int AgenticSeconds { get; set; } = 1800;
+    /// <summary>Squad spawns sub-agents that each invoke copilot CLI, needing 20-30min total.</summary>
+    public int SquadSeconds { get; set; } = 1800;
     public int BuildGateSeconds { get; set; } = 120;
     public int AppStartGateSeconds { get; set; } = 30;
     public int EvaluatorTestsSeconds { get; set; } = 180;
@@ -116,6 +118,7 @@ public class TimeoutsConfig
         {
             "agentic-delegation" => TimeSpan.FromSeconds(AgenticSeconds),
             "mcp-enhanced" => TimeSpan.FromSeconds(McpSeconds),
+            "squad" => TimeSpan.FromSeconds(SquadSeconds),
             _ => TimeSpan.FromSeconds(BaselineSeconds),
         };
     }
