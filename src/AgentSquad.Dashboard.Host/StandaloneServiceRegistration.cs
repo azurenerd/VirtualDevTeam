@@ -1,6 +1,7 @@
 using System.Net.Http.Json;
 using AgentSquad.Core.Agents;
 using AgentSquad.Core.Configuration;
+using AgentSquad.Core.Frameworks;
 using AgentSquad.Core.GitHub;
 using AgentSquad.Core.GitHub.Models;
 using AgentSquad.Core.Metrics;
@@ -37,6 +38,9 @@ public static class StandaloneServiceRegistration
 
         // PromptTemplateService — reads/writes prompt .md files on disk
         services.AddSingleton<IPromptTemplateService, PromptTemplateService>();
+
+        // SquadReadinessChecker — needed by Configuration page for Squad status checks
+        services.AddSingleton<SquadReadinessChecker>();
 
         return services;
     }
