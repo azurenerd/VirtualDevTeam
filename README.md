@@ -60,34 +60,42 @@ AgentSquad is a .NET 8 multi-agent AI system that manages a full software develo
 flowchart TB
     subgraph Runner["🖥️ AgentSquad.Runner — Host · port 5050"]
         direction TB
-        subgraph Orch["🎛️ AgentSquad.Orchestrator"]
+
+        subgraph Orch["🎛️ Orchestrator"]
+            direction TB
             AR[AgentRegistry] ~~~ SM[SpawnManager]
-            WSM["WorkflowStateMachine<br/><i>Init → Research → Arch → Plan<br/>→ Dev → Test → Review → Done</i>"]
             HM[HealthMonitor] ~~~ DD[DeadlockDetect]
+            subgraph WSM["⚙️ Workflow State Machine"]
+                direction LR
+                W1([Init]) --> W2([Research]) --> W3([Arch]) --> W4([Plan])
+                W4 --> W5([Dev]) --> W6([Test]) --> W7([Review]) --> W8([Done])
+            end
         end
 
-        BUS["📡 InProcessMessageBus · Channels<br/><i>TaskAssignment · StatusUpdate · HelpRequest<br/>ResourceRequest · ReviewRequest · SpawnSme · SmeResult</i>"]
+        subgraph Bus["📡 Message Bus — Channels"]
+            direction LR
+            M1([TaskAssignment]) ~~~ M2([StatusUpdate]) ~~~ M3([HelpRequest])
+            M4([ResourceRequest]) ~~~ M5([ReviewRequest]) ~~~ M6([SpawnSme])
+        end
 
         subgraph Team["👥 Agent Team"]
             direction LR
-            PM["🎯 PM"] ~~~ RS["🔍 Researcher"] ~~~ ARCH["🏗️ Architect"] ~~~ SE["⚡ SE Leader"]
+            PM["🎯 PM"] ~~~ RS["🔍 Researcher"] ~~~ ARC["🏗️ Architect"] ~~~ SE["⚡ SE Leader"]
             SEW["👨‍💻 SE Workers ×n"] ~~~ TE["🧪 Test Engineer"] ~~~ SME["🎓 SME ×n"]
         end
 
         subgraph Infra["⚙️ Shared Infrastructure"]
-            GHS["GitHubService · 60s TTL cache · REST API"]
-            CCS["CopilotCliChatCompletionService · MCP Servers"]
-            DB["AgentStateStore · AgentMemoryStore — SQLite"]
-            WK["LocalWorkspace · BuildRunner · TestRunner"]
-            PW["PlaywrightRunner · PlaywrightHealthService"]
+            direction LR
+            GHS["GitHubService<br/>60s TTL · REST"] ~~~ CCS["CopilotCli<br/>MCP Servers"]
+            DB["StateStore<br/>MemoryStore<br/>SQLite"] ~~~ WK["Workspace<br/>Build · Test"] ~~~ PW["Playwright<br/>HealthService"]
         end
     end
 
-    GH["🐙 GitHub — Remote<br/>PRs · Issues · Code<br/>Research.md · PMSpec.md<br/>Architecture.md · EngineeringPlan.md<br/>TeamComposition.md"]
-    DASH["📊 Dashboard.Host — port 5051<br/>Blazor Server — standalone<br/>15 pages: Overview · Timeline · Metrics<br/>Health · PRs · Issues · Eng Plan · Team<br/>Director CLI · Approvals · Config<br/>Agent Detail · Reasoning · Feed · Repo"]
+    GH["🐙 GitHub — Remote<br/>PRs · Issues · Code · Docs"]
+    DASH["📊 Dashboard — port 5051<br/>Blazor Server · 15 pages"]
 
-    Orch -->|coordinates| BUS
-    BUS -->|routes messages| Team
+    Orch -->|coordinates| Bus
+    Bus -->|routes messages| Team
     Team -->|uses| Infra
     Infra -->|artifacts| GH
     Infra -->|feeds data| DASH
@@ -97,10 +105,12 @@ flowchart TB
     classDef blue fill:#0277bd,stroke:#00b0ff,stroke-width:2px,color:#fff
     classDef deepPurple fill:#4a148c,stroke:#ea80fc,stroke-width:2px,color:#fff
     classDef cyan fill:#006064,stroke:#00e5ff,stroke-width:2px,color:#fff
+    classDef phase fill:#37006e,stroke:#d050ff,stroke-width:1px,color:#e8c0ff
 
-    class AR,SM,WSM,HM,DD purple
-    class BUS pink
-    class PM,RS,ARCH,SE,SEW,TE,SME blue
+    class AR,SM,HM,DD purple
+    class W1,W2,W3,W4,W5,W6,W7,W8 phase
+    class M1,M2,M3,M4,M5,M6 pink
+    class PM,RS,ARC,SE,SEW,TE,SME blue
     class GHS,CCS,DB,WK,PW deepPurple
     class GH,DASH cyan
 ```
@@ -202,19 +212,44 @@ Standalone mode lets you restart the dashboard without disrupting running agents
 flowchart TB
     START(["📋 You provide a project description"])
 
-    INIT["🚀 <b>Initialization</b><br/>PM spawns → Researcher, Architect,<br/>SE, Engineers, Test Engineer"]
+    subgraph INIT["🚀 Initialization"]
+        direction LR
+        I1["PM spawns team"] --> I2["Researcher · Architect<br/>SE · Engineers · TE"]
+    end
 
-    RESEARCH["🔍 <b>Research</b><br/>Researcher conducts multi-turn<br/>technical research → Research.md"]
+    subgraph RESEARCH["🔍 Research"]
+        direction LR
+        R1["Multi-turn technical research"] --> R2["→ Research.md"]
+    end
 
-    ARCHITECTURE["🏗️ <b>Architecture</b><br/>PM writes PMSpec.md — business spec with user stories<br/>Architect designs system → Architecture.md — reviewed by SE"]
+    subgraph ARCHITECTURE["🏗️ Architecture"]
+        direction LR
+        A1["PM writes PMSpec.md"] --> A2["Architect designs system"] --> A3["SE reviews<br/>→ Architecture.md"]
+    end
 
-    PLANNING["📝 <b>Engineering Planning</b><br/>SE decomposes Architecture into tasks with dependencies<br/>PM proposes team composition — core agents + SME specialists<br/>Human gate → approve team → EngineeringPlan.md"]
+    subgraph PLANNING["📝 Engineering Planning"]
+        direction LR
+        P1["SE decomposes tasks"] --> P2["PM proposes team"]
+        P2 --> P3["🔒 Human gate"] --> P4["→ EngineeringPlan.md"]
+    end
 
-    DEV["⚡ <b>Parallel Development</b><br/>SE assigns tasks to engineers based on complexity<br/>Engineers create PRs with implementation — local build verification<br/>SE + Architect review PRs → approve or request rework<br/>SME agents provide specialist input on-demand"]
+    subgraph DEV["⚡ Parallel Development"]
+        direction LR
+        D1["SE assigns by complexity"] --> D2["Engineers create PRs"]
+        D2 --> D3["Local build verification"] --> D4["SE + Architect review"]
+        D1 -.-> D5["SME specialist input"]
+    end
 
-    TEST["🧪 <b>Testing</b><br/>Test Engineer scans approved PRs → generates test strategy<br/>Creates test PRs: unit → integration → UI/E2E — Playwright<br/>Classifies failures as test bugs vs source bugs → routes rework"]
+    subgraph TEST["🧪 Testing"]
+        direction LR
+        T1["TE scans approved PRs"] --> T2["Unit → Integration<br/>→ UI/E2E Playwright"]
+        T2 --> T3["Classify failures<br/>→ route rework"]
+    end
 
-    FINAL["✅ <b>Review & Finalization</b><br/>PM conducts final review for business alignment<br/>All PRs merged → project complete"]
+    subgraph FINAL["✅ Review & Finalization"]
+        direction LR
+        F1["PM final business review"] --> F2["All PRs merged ✓"]
+    end
 
     START --> INIT --> RESEARCH --> ARCHITECTURE
     ARCHITECTURE --> PLANNING --> DEV --> TEST --> FINAL
@@ -226,10 +261,10 @@ flowchart TB
     classDef green fill:#1b5e20,stroke:#69f0ae,stroke-width:2px,color:#fff
 
     class START start
-    class INIT,PLANNING purple
-    class RESEARCH,DEV blue
-    class ARCHITECTURE,TEST pink
-    class FINAL green
+    class I1,I2,P1,P2,P3,P4 purple
+    class R1,R2,D1,D2,D3,D4,D5 blue
+    class A1,A2,A3,T1,T2,T3 pink
+    class F1,F2 green
 ```
 
 ## Agent Roles
