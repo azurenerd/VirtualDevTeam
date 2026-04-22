@@ -40,12 +40,13 @@ AgentSquad is a .NET 8 multi-agent AI system that manages a full software develo
 - **Per-Reviewer Rework Limits** — Rework cycles tracked per (PR, reviewer) pair. Each reviewer (Architect, SE, PM, TE) gets 1 cycle independently, so a PR with 3 reviewers gets up to 3 rounds total
 - **Visual Scaffold Placeholders** — Foundation tasks for web/UI projects create components with colored backgrounds, dashed borders, and bold labels. Playwright screenshots show a clear grid of sections, never blank white
 - **Crash-Resilient Sessions** — CLI session IDs persist to SQLite so agents resume the same Copilot conversation after runner restarts. SE agents recover in-memory state flags (`_allTasksComplete`, `_integrationPrCreated`, `_engineeringSignaled`) from GitHub on restart, preventing duplicate task/PR creation
-- **15-Page Real-Time Dashboard** — Blazor Server UI with agent overview, project timeline, metrics, health monitor, PR/issue browsers, engineering plan graph, team visualization, director CLI terminal, and approval management. Standalone mode (port 5051) provides full data via HTTP polling to the Runner API
+- **16-Page Real-Time Dashboard** — Blazor Server UI with agent overview, project timeline, features management, agentic frameworks, metrics, health monitor, PR/issue browsers, engineering plan graph, team visualization, director CLI terminal, and approval management. Standalone mode (port 5051) provides full data via HTTP polling to the Runner API
 - **Run-Scoped Task Management** — All GitHub queries (merged PRs, open PRs, open issues) are scoped to the current run via `_runStartedUtc` to prevent stale data from previous runs interfering with task assignment or overlap detection
 - **Decision Impact Classification & Gating** — Agents classify decisions by impact level (XS–XL) using AI. High-impact decisions are gated for human approval before agents proceed. Configurable threshold levels, structured implementation plans for gated decisions, and a rich dashboard UI for reviewing and approving decisions
 - **Agent Task Steps** — Real-time workflow visibility: all 7 agents report step-by-step progress (BeginStep/CompleteStep/RecordSubStep) with per-step timing, LLM call counts, and cost. Dashboard shows live step timelines with progress bars, expected-step templates per role, and rich tooltips with detailed context on mouseover — zero LLM overhead, pure observability
 - **SE Parallelism Enhancements** — Software Engineer validates file overlap across parallel tasks, enforces wave scheduling (W1/W2/W3+) with collision-safe task IDs and cache-merge on API delay to prevent dropped tasks during rate-limit recovery, uses typed dependencies, and logs parallelism metrics. AI-assisted repair of file conflicts ensures engineers can work in parallel without merge conflicts
-- **Strategy Framework (A/B/C Code Generation)** — The SE can generate multiple candidate implementations in parallel (baseline, mcp-enhanced, agentic-delegation) in isolated git worktrees, score each via an LLM judge on Acceptance Criteria / Design / Readability, and apply the winner to the PR branch. After the build gate passes, `CandidateEvaluator` captures a Playwright screenshot for each strategy candidate and commits them to `.screenshots/pr-{N}-{strategyId}.png` on the PR branch. A `<!-- winner-strategy: {key} -->` HTML comment is appended to the PR body so the dashboard can identify the winning tile. Feature-flagged via `AgentSquad.StrategyFramework.Enabled` (default OFF). Sampling policy + cost budget + optional adaptive selector built in; per-strategy cost attribution in `AgentUsageTracker`; live experiment data in `/api/strategies/*` and the `/strategies` dashboard page. Validated end-to-end against live Copilot CLI in April 2026
+- **Strategy Framework (A/B/C/D Code Generation)** — The SE can generate multiple candidate implementations in parallel (baseline, mcp-enhanced, agentic-delegation, squad) in isolated git worktrees, score each via an LLM judge on Acceptance Criteria / Design / Readability, and apply the winner to the PR branch. After the build gate passes, `CandidateEvaluator` captures a Playwright screenshot for each strategy candidate and commits them to `.screenshots/pr-{N}-{strategyId}.png` on the PR branch. Screenshots are displayed inline in the expandable candidate detail rows on the Frameworks dashboard page. A `<!-- winner-strategy: {key} -->` HTML comment is appended to the PR body so the dashboard can identify the winning tile. Feature-flagged via `AgentSquad.StrategyFramework.Enabled` (default OFF). Sampling policy + cost budget + optional adaptive selector built in; per-strategy cost attribution in `AgentUsageTracker`; live experiment data in `/api/strategies/*` and the `/strategies` dashboard page. Validated end-to-end against live Copilot CLI in April 2026
+- **Feature Mode (WIP)** — In addition to greenfield project creation, AgentSquad supports building individual features against existing repositories. Define features via the `/features` dashboard page with title, description, acceptance criteria, base branch, and optional tech stack overrides. Each run (project or feature) is wrapped in an `ActiveRun` with a unique `RunId` — all workflow state, gates, issues, and PRs are scoped per-run. `RunCoordinator` enforces single-active-run semantics. `WorkflowProfile` abstraction provides different gate definitions, artifact paths, and agent requirements for each mode. Project Control card on the Overview page provides Start/Stop controls
 - **Phase-Gated Workflow** — State machine enforces linear progression: Initialization → Research → Architecture → Planning → Development → Testing → Review → Finalization
 - **SinglePRMode** — When enabled, the entire project is delivered through a single engineering task and PR, simplifying the workflow for smaller projects. PM correctly gates issue closure on positive merge evidence (at least one merged PR must exist), preventing premature closure after resets
 - **GitHub-Native Coordination** — Dual-layer communication: in-process message bus (<1ms, real-time) + GitHub API (durable PRs/Issues, human-visible). All work products are real GitHub artifacts
@@ -92,7 +93,7 @@ flowchart TB
     end
 
     GH["🐙 GitHub — Remote<br/>PRs · Issues · Code · Docs"]
-    DASH["📊 Dashboard — port 5051<br/>Blazor Server · 15 pages"]
+    DASH["📊 Dashboard — port 5051<br/>Blazor Server · 16 pages"]
 
     Orch -->|coordinates| Bus
     Bus -->|routes messages| Team
@@ -301,6 +302,7 @@ When enabled (`AgentSquad.StrategyFramework.Enabled = true`), the SE generates m
 | **Baseline** | Standard single-pass code generation using the SE's normal prompt pipeline |
 | **MCP-Enhanced** | Augments generation with Model Context Protocol servers for richer context (e.g., file search, symbol lookup) |
 | **Agentic Delegation** | Delegates sub-tasks to child agents that work iteratively with tool access |
+| **Squad** | External agentic framework ([bradygaster/squad](https://github.com/bradygaster/squad)) — installed on first use, runs as `copilot --agent squad`, with automatic stuck detection and configurable timeout |
 
 Each candidate runs in an **isolated git worktree** — a full copy of the branch at the current HEAD — so candidates cannot interfere with each other.
 
@@ -424,11 +426,14 @@ See [docs/setup-guide.md](docs/setup-guide.md) for a detailed walkthrough of eve
 
 ## Dashboard
 
-The Blazor Server dashboard provides real-time visibility into the agent team with 15 pages. Runs embedded in the Runner or as a standalone process. The strategy gallery shows per-candidate screenshots for all strategy candidates (not just the winner), with non-winner tiles displaying "No preview" text instead of a misleading spinner.
+The Blazor Server dashboard provides real-time visibility into the agent team with 16 pages. Runs embedded in the Runner or as a standalone process. The Agentic Frameworks page shows expandable candidate detail cards with scores, progress pipelines, metrics, and preview screenshots for each strategy candidate.
 
 | Page | Route | Description |
 |------|-------|-------------|
-| **Agent Overview** | `/` | Grid of all agents with status badges, model selectors, chat, error tracking, and deadlock alerts |
+| **Agent Overview** | `/` | Grid of all agents with status badges, model selectors, chat, error tracking, deadlock alerts, and Project Control card with Start/Stop buttons |
+| **Features** | `/features` | Define, manage, and launch feature builds against existing repos with acceptance criteria and tech stack overrides |
+| **Configuration** | `/configuration` | Settings editor, gate presets, SME management, GitHub cleanup |
+| **Agentic Frameworks** | `/strategies` | Live strategy framework experiment data with expandable candidate detail cards showing scores, metrics, progress pipeline, and preview screenshots |
 | **Project Timeline** | `/timeline` | Visual workflow timeline with PM/Engineering views, phase grouping, PR/Issue type indicators |
 | **Metrics** | `/metrics` | System health, utilization ring chart, status breakdown, longest-running tasks |
 | **Health Monitor** | `/health` | Real-time health checks, stuck agent detection, system diagnostics |
@@ -438,7 +443,6 @@ The Blazor Server dashboard provides real-time visibility into the agent team wi
 | **Team View** | `/team` | Visual office-metaphor layout with agent desks and connection lines |
 | **Director CLI** | `/director-cli` | Terminal interface for issuing executive directives to agents |
 | **Approvals** | `/approvals` | Human gate approval management with filter buttons |
-| **Configuration** | `/configuration` | Settings editor, gate presets, SME management, GitHub cleanup |
 | **Agent Detail** | `/agent/{id}` | Deep dive into a single agent with pause/resume/terminate controls |
 | **Agent Reasoning** | `/reasoning` | View agent decision-making chains, AI conversation history, and step-by-step task progress |
 | **GitHub Feed** | `/github-feed` | Live feed of GitHub activity across the project |
@@ -454,7 +458,9 @@ AgentSquad/
 │   │   ├── Agents/                     # AgentBase, IAgent, AgentRole, AgentStatus, messages
 │   │   │   └── Steps/                  # AgentTaskStep, IAgentTaskTracker, AgentStepTemplates
 │   │   ├── AI/                         # CopilotCli provider, MCP config, knowledge pipeline
-│   │   ├── Configuration/              # Config models, SME definitions, MCP server defs
+│   │   ├── Configuration/              # Config models, SME definitions, MCP server defs,
+│   │   │                               #   WorkModels (ActiveRun, FeatureDefinition),
+│   │   │                               #   WorkflowProfile (Project/Feature mode profiles)
 │   │   ├── GitHub/                     # GitHubService, rate limiting, PR/Issue workflows
 │   │   ├── Messaging/                  # IMessageBus, InProcessMessageBus (Channels)
 │   │   ├── Persistence/                # AgentStateStore, AgentMemoryStore (SQLite)
@@ -482,10 +488,11 @@ AgentSquad/
 │   │   ├── GracefulShutdownHandler.cs  # Clean shutdown with state persistence
 │   │   ├── DecisionGateService.cs     # AI impact classification, plan generation, gate workflow
 │   │   ├── DecisionLog.cs             # Thread-safe in-memory decision storage (IDecisionLog)
-│   │   └── DecisionGatingConfig.cs    # Gate level thresholds, timeouts, fallback actions
+│   │   ├── DecisionGatingConfig.cs    # Gate level thresholds, timeouts, fallback actions
+│   │   └── RunCoordinator.cs          # Run lifecycle management, single-run enforcement
 │   │
 │   ├── AgentSquad.Dashboard/           # Real-time monitoring UI (shared library)
-│   │   ├── Components/Pages/           # 15 Blazor pages (incl. decision approval UI)
+│   │   ├── Components/Pages/           # 16 Blazor pages (incl. Features, Frameworks, decision UI)
 │   │   ├── Hubs/AgentHub.cs            # SignalR hub for push updates
 │   │   └── Services/                   # IDashboardDataService, HttpDashboardDataService
 │   │       # Dashboard decision UI: Reasoning tab filters, Approvals tab decision view,
@@ -497,9 +504,9 @@ AgentSquad/
 │       └── AgentSquadWorker.cs         # Bootstrap: spawns core agents in phased sequence
 │
 ├── tests/
-│   ├── AgentSquad.Core.Tests/          # ~340 unit tests
-│   ├── AgentSquad.Agents.Tests/        # ~50 agent behavior tests
-│   └── AgentSquad.Integration.Tests/   # ~38 integration tests
+│   ├── AgentSquad.Core.Tests/          # ~395 unit tests
+│   ├── AgentSquad.Agents.Tests/        # ~93 agent behavior tests
+│   └── AgentSquad.Integration.Tests/   # ~66 integration tests
 │
 ├── scripts/
 │   ├── start-runner.ps1                # Start the Runner process
@@ -546,7 +553,7 @@ dotnet build AgentSquad.sln
 ### Test
 
 ```bash
-# Run all 350+ tests
+# Run all 790+ tests
 dotnet test AgentSquad.sln
 
 # Run a specific test project
@@ -590,8 +597,11 @@ The Runner exposes lightweight health endpoints for monitoring and debugging:
 | `/health` | Overall Runner health, agent counts, workflow phase |
 | `/health/playwright` | Playwright subsystem status — `OccupiedPortCount`, `LastPortCheckUtc`, browser validity, stale `.playwright-bak` cleanup stats (refreshed every 5 minutes by `PlaywrightHealthService`) |
 
-### Recent Changes (2025)
+### Recent Changes (2025–2026)
 
+- **Feature Mode (WIP)** — New `ActiveRun` model scopes all workflow state by `RunId`. `RunCoordinator` manages run lifecycle with single-active-run enforcement. Features dashboard page for defining, managing, and launching feature builds. Project Control card on Overview for Start/Stop. REST APIs at `/api/runs/*` and `/api/features/*`
+- **Squad Framework Integration** — [bradygaster/squad](https://github.com/bradygaster/squad) added as a 4th strategy candidate alongside baseline, MCP-enhanced, and agentic-delegation. Auto-installs on first use. Configurable timeout via `SquadSeconds` (default 1800s). Stuck detection threshold 600s for long-running sub-agents
+- **Framework Screenshots in Dashboard** — Expandable candidate detail rows on the Agentic Frameworks page now show preview screenshots inline (base64 PNG), with scores, progress pipeline, timing, and failure details for each strategy candidate
 - **SE restart state recovery** — In-memory flags recovered from GitHub state on restart, eliminating duplicate task/PR creation
 - **Premature closure prevention** — PM requires positive merge evidence (`mergedPRs.Count > 0`) before closing enhancement issues or declaring completion
 - **Post-merge issue closure** — Enhancement issues correctly closed after their PR merges, with SinglePRMode closing all issues on the single PR merge
