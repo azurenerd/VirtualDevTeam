@@ -80,6 +80,10 @@
                                     <div>Read <span>@(candidate.ReadabilityScore ?? 0)</span></div>
                                 </div>
                             }
+                            else if (candidate.State == CandidateState.Evaluated && candidate.Survived == true)
+                            {
+                                <div class="candidate-scores muted">@(candidate.JudgeSkippedReason ?? "not scored")</div>
+                            }
                             @if (candidate.Succeeded == false)
                             {
                                 <div class="candidate-fail">@candidate.FailureReason</div>
@@ -156,12 +160,27 @@
                                             <div class="cd-pipeline">
                                                 <span class="cd-pip @(candidate.State >= CandidateState.Running ? "pip-done" : "")">Started</span>
                                                 <span class="cd-pip-arrow">→</span>
-                                                <span class="cd-pip @(candidate.Succeeded == true || candidate.State >= CandidateState.Scored ? "pip-done" : candidate.Succeeded == false ? "pip-fail" : "")">
-                                                    @(candidate.Succeeded == true ? "Built ✓" : candidate.Succeeded == false ? "Failed ✗" : "Building…")
+                                                <span class="cd-pip @(candidate.Survived == true || candidate.State >= CandidateState.Evaluated ? "pip-done" : candidate.Survived == false && candidate.State >= CandidateState.Evaluated ? "pip-fail" : candidate.Succeeded == false ? "pip-fail" : "")">
+                                                    @(candidate.Survived == true ? "Gates ✓" : candidate.Survived == false && candidate.State >= CandidateState.Evaluated ? "Gate Failed ✗" : candidate.Succeeded == false ? "Failed ✗" : "Evaluating…")
                                                 </span>
                                                 <span class="cd-pip-arrow">→</span>
-                                                <span class="cd-pip @(candidate.State >= CandidateState.Scored ? "pip-done" : "")">
-                                                    @(candidate.State >= CandidateState.Scored ? "Scored ✓" : "Scoring…")
+                                                <span class="cd-pip @(candidate.State >= CandidateState.Scored ? "pip-done" : candidate.State >= CandidateState.Evaluated && !string.IsNullOrEmpty(candidate.JudgeSkippedReason) ? "pip-skip" : "")">
+                                                    @if (candidate.State >= CandidateState.Scored)
+                                                    {
+                                                        @:Scored ✓
+                                                    }
+                                                    else if (candidate.State >= CandidateState.Evaluated && !string.IsNullOrEmpty(candidate.JudgeSkippedReason))
+                                                    {
+                                                        @:Judge skipped
+                                                    }
+                                                    else if (candidate.Survived == false && candidate.State >= CandidateState.Evaluated)
+                                                    {
+                                                        @:—
+                                                    }
+                                                    else
+                                                    {
+                                                        @:Scoring…
+                                                    }
                                                 </span>
                                                 @if (isWinner)
                                                 {
@@ -194,9 +213,19 @@
                                                     </div>
                                                 </div>
                                             }
+                                            else if (candidate.Survived == false && candidate.State >= CandidateState.Evaluated)
+                                            {
+                                                <div class="cd-no-scores">Not scored — failed gate: @(candidate.FailureReason ?? "unknown")</div>
+                                            }
+                                            else if (!string.IsNullOrEmpty(candidate.JudgeSkippedReason))
+                                            {
+                                                <div class="cd-no-scores cd-judge-skipped">
+                                                    No LLM judge scoring — <strong>@candidate.JudgeSkippedReason</strong>
+                                                </div>
+                                            }
                                             else if (candidate.Succeeded == false)
                                             {
-                                                <div class="cd-no-scores">Not scored — did not pass build gate</div>
+                                                <div class="cd-no-scores">Not scored — strategy execution failed</div>
                                             }
                                             else
                                             {
@@ -255,6 +284,7 @@
     .candidate-card { border: 1px solid var(--border, #2d3240); border-radius: 5px; padding: .75rem; }
     .candidate-card.state-running { border-left: 3px solid #4dabf7; }
     .candidate-card.state-completed { border-left: 3px solid #51cf66; }
+    .candidate-card.state-evaluated { border-left: 3px solid #ab9ae6; }
     .candidate-card.state-scored { border-left: 3px solid #ffd43b; }
     .candidate-card.state-winner { border-left: 3px solid gold; background: rgba(255, 215, 0, .08); }
     .candidate-head { display: flex; justify-content: space-between; margin-bottom: .25rem; font-weight: 500; }
@@ -291,6 +321,7 @@
     .cd-state { font-size: .7em; text-transform: uppercase; letter-spacing: .05em; padding: .15rem .4rem; border-radius: 3px; }
     .cd-state-running { background: rgba(77, 171, 247, .15); color: #4dabf7; }
     .cd-state-completed { background: rgba(81, 207, 102, .15); color: #51cf66; }
+    .cd-state-evaluated { background: rgba(171, 154, 230, .15); color: #ab9ae6; }
     .cd-state-scored { background: rgba(255, 212, 59, .15); color: #ffd43b; }
     .cd-state-winner { background: rgba(255, 215, 0, .2); color: gold; }
 
@@ -299,6 +330,7 @@
     .cd-pip { padding: .15rem .35rem; border-radius: 3px; background: rgba(255,255,255,.05); opacity: .45; }
     .cd-pip.pip-done { opacity: 1; background: rgba(81, 207, 102, .12); color: #51cf66; }
     .cd-pip.pip-fail { opacity: 1; background: rgba(255, 107, 107, .12); color: #ff6b6b; }
+    .cd-pip.pip-skip { opacity: .75; background: rgba(255, 212, 59, .1); color: #ffd43b; font-style: italic; }
     .cd-pip.pip-winner { opacity: 1; background: rgba(255, 215, 0, .15); color: gold; }
     .cd-pip-arrow { opacity: .3; }
 
@@ -311,6 +343,7 @@
     .cd-score-val { font-size: .75em; font-family: monospace; width: 2.5rem; opacity: .8; }
     .cd-score-total { text-align: right; font-size: .8em; margin-top: .25rem; opacity: .8; }
     .cd-no-scores { font-size: .8em; opacity: .4; font-style: italic; margin-bottom: .5rem; }
+    .cd-judge-skipped { opacity: .6; color: #ffd43b; font-style: normal; }
 
     /* Metrics */
     .cd-metrics { display: flex; gap: .75rem; font-size: .8em; opacity: .7; margin-bottom: .35rem; }

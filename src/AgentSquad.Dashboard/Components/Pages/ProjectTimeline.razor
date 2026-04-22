@@ -2,9 +2,11 @@
 @rendermode InteractiveServer
 @using AgentSquad.Core.GitHub.Models
 @using AgentSquad.Core.GitHub
+@using AgentSquad.Core.Strategies
 @using AgentSquad.Dashboard.Services
 @implements IAsyncDisposable
 @inject IDashboardDataService DataService
+@inject CandidateStateStore CandidateStore
 @inject NavigationManager Navigation
 @inject IJSRuntime JS
 
@@ -1092,12 +1094,8 @@ else
 
     private record ScreenshotCandidate(string MethodKey, string MethodLabel, string ImageUrl, bool IsWinner);
 
-    // Returns one tile per code-generation strategy. StrategyOrchestrator runs up to three
-    // strategies for a given task (baseline, MCP-enhanced, agentic-delegation) and the winning
-    // strategy produces the merged PR. Each strategy gets its own screenshot of the resulting UI.
-    // Until StrategyOrchestrator persists per-strategy PNGs (Phase 2b), only the canonical
-    // "ready-for-review" image exists — the other tiles show a placeholder spinner via the
-    // <img onerror> handler in the tile markup.
+    // Returns one tile per code-generation strategy. Checks CandidateStateStore for in-memory
+    // screenshot data first (base64 from evaluation), then falls back to GitHub raw URLs.
     private List<ScreenshotCandidate> GetScreenshotCandidates(AgentPullRequest pr)
     {
         var results = new List<ScreenshotCandidate>();
@@ -1112,9 +1110,7 @@ else
         var owner = m.Groups[1].Value;
         var repo = m.Groups[2].Value;
 
-        // Code-generation strategies from StrategyOrchestrator. Keys match on-disk
-        // filenames once wiring is implemented (Phase 2b). Winner resolution: body marker
-        // `<!-- winner-strategy: {key} -->` takes priority; else fall back to "baseline".
+        // Winner resolution: body marker `<!-- winner-strategy: {key} -->` takes priority.
         var winnerKey = "baseline";
         var bodyMatch = System.Text.RegularExpressions.Regex.Match(
             pr.Body ?? string.Empty,
@@ -1122,6 +1118,30 @@ else
             System.Text.RegularExpressions.RegexOptions.IgnoreCase);
         if (bodyMatch.Success)
             winnerKey = bodyMatch.Groups[1].Value.ToLowerInvariant();
+
+        // Try to find in-memory screenshot data from the CandidateStateStore.
+        var storeScreenshots = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var task in CandidateStore.GetRecentTasks(20))
+        {
+            foreach (var (stratId, snap) in task.Candidates)
+            {
+                if (!string.IsNullOrEmpty(snap.ScreenshotBase64) && !storeScreenshots.ContainsKey(stratId))
+                {
+                    storeScreenshots[stratId] = $"data:image/png;base64,{snap.ScreenshotBase64}";
+                }
+            }
+        }
+        // Also check active tasks
+        foreach (var task in CandidateStore.GetActiveTasks())
+        {
+            foreach (var (stratId, snap) in task.Candidates)
+            {
+                if (!string.IsNullOrEmpty(snap.ScreenshotBase64) && !storeScreenshots.ContainsKey(stratId))
+                {
+                    storeScreenshots[stratId] = $"data:image/png;base64,{snap.ScreenshotBase64}";
+                }
+            }
+        }
 
         (string Key, string Label)[] strategies =
         {
@@ -1133,13 +1153,17 @@ else
 
         foreach (var (key, label) in strategies)
         {
-            // Each strategy gets its own screenshot file committed by the evaluator.
-            // The winner ALSO has the canonical ready-for-review capture (taken later from
-            // the real workspace by MarkReadyForReviewWithScreenshotAsync). Try the per-strategy
-            // file first; it exists once the evaluator screenshot wiring is active.
-            var path = $".screenshots/pr-{pr.Number}-{key}.png";
-            var url = $"https://raw.githubusercontent.com/{owner}/{repo}/{pr.HeadSha}/{path}";
-            results.Add(new ScreenshotCandidate(key, label, url, IsWinner: key == winnerKey));
+            // Prefer in-memory screenshot from evaluation; fall back to GitHub raw URL.
+            if (storeScreenshots.TryGetValue(key, out var dataUrl))
+            {
+                results.Add(new ScreenshotCandidate(key, label, dataUrl, IsWinner: key == winnerKey));
+            }
+            else
+            {
+                var path = $".screenshots/pr-{pr.Number}-{key}.png";
+                var url = $"https://raw.githubusercontent.com/{owner}/{repo}/{pr.HeadSha}/{path}";
+                results.Add(new ScreenshotCandidate(key, label, url, IsWinner: key == winnerKey));
+            }
         }
         return results;
     }

@@ -94,6 +94,9 @@ public sealed class StrategyTaskStepBridge : IStrategyEventSink
                 case StrategyEvents.CandidateCompleted when payload is CandidateCompletedEvent e:
                     OnCandidateCompleted(e);
                     break;
+                case StrategyEvents.CandidateEvaluated when payload is CandidateEvaluatedEvent e:
+                    OnCandidateEvaluated(e);
+                    break;
                 case StrategyEvents.CandidateScored when payload is CandidateScoredEvent e:
                     OnCandidateScored(e);
                     break;
@@ -129,11 +132,30 @@ public sealed class StrategyTaskStepBridge : IStrategyEventSink
             _tracker.RecordSubStep(stepId,
                 $"Completed in {e.ElapsedSec:F1}s{(e.TokensUsed.HasValue ? $" — {e.TokensUsed.Value:N0} tokens" : "")}",
                 TimeSpan.FromSeconds(e.ElapsedSec));
-            // Don't complete yet — wait for scoring/winner selection
+            // Don't complete yet — wait for evaluation/scoring/winner selection
         }
         else
         {
             _tracker.FailStep(stepId, e.FailureReason ?? "Strategy failed");
+        }
+    }
+
+    private void OnCandidateEvaluated(CandidateEvaluatedEvent e)
+    {
+        if (!_registrations.TryGetValue((e.RunId, e.TaskId), out var reg)) return;
+        if (!reg.CandidateStepIds.TryGetValue(e.StrategyId, out var stepId)) return;
+
+        if (e.Survived)
+        {
+            var detail = e.JudgeSkippedReason is not null
+                ? $"Passed build gates — judge skipped ({e.JudgeSkippedReason})"
+                : "Passed build gates — awaiting judge scoring";
+            _tracker.RecordSubStep(stepId, detail);
+        }
+        else
+        {
+            _tracker.RecordSubStep(stepId, $"Failed gate: {e.FailedGate} — {e.FailureDetail}");
+            _tracker.FailStep(stepId, $"Gate failed: {e.FailedGate}");
         }
     }
 

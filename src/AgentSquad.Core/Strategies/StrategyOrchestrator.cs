@@ -134,7 +134,30 @@ public class StrategyOrchestrator
             .ToList();
         var evalResult = await _evaluator.EvaluateAsync(task, evalInput, ct);
 
-        // Emit scored / winner events.
+        // Determine judge-skipped reason for surviving candidates.
+        var survivorCount = evalResult.Candidates.Count(c => c.Survived);
+        string? judgeSkippedReason = survivorCount switch
+        {
+            0 => "no-survivors",
+            1 => "sole-survivor",
+            _ when evalResult.Candidates.All(c => c.Score is null) => "no-judge-configured",
+            _ => null, // judge ran normally
+        };
+
+        // Emit evaluated events for ALL candidates (screenshot + gate result).
+        foreach (var c in evalResult.Candidates)
+        {
+            var screenshotBase64 = c.ScreenshotBytes is { Length: > 0 }
+                ? Convert.ToBase64String(c.ScreenshotBytes)
+                : null;
+            await _events.EmitAsync(StrategyEvents.CandidateEvaluated, new CandidateEvaluatedEvent(
+                task.RunId, task.TaskId, c.StrategyId,
+                c.Survived, c.FailedGate, c.FailureDetail,
+                screenshotBase64,
+                c.Survived ? judgeSkippedReason : null), ct);
+        }
+
+        // Emit scored events only for candidates that actually went through LLM judge.
         foreach (var c in evalResult.Candidates)
         {
             if (c.Score is not null)

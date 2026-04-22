@@ -95,6 +95,32 @@ public sealed class CandidateStateStore
         OnChange?.Invoke(snapshot);
     }
 
+    public void RecordEvaluated(CandidateEvaluatedEvent e)
+    {
+        var key = (e.RunId, e.TaskId);
+        if (!_active.TryGetValue(key, out var task)) return;
+
+        var existingCandidate = task.Candidates.TryGetValue(e.StrategyId, out var c)
+            ? c
+            : new CandidateSnapshot { StrategyId = e.StrategyId, State = CandidateState.Completed };
+
+        var updated = existingCandidate with
+        {
+            State = CandidateState.Evaluated,
+            Survived = e.Survived,
+            ScreenshotBase64 = e.ScreenshotBase64 ?? existingCandidate.ScreenshotBase64,
+            JudgeSkippedReason = e.JudgeSkippedReason,
+            // For failed-gate candidates, override FailureReason with gate detail
+            FailureReason = e.Survived ? existingCandidate.FailureReason : (e.FailureDetail ?? existingCandidate.FailureReason),
+        };
+
+        var snapshot = _active.AddOrUpdate(
+            key,
+            _ => task with { Candidates = task.Candidates.SetItem(e.StrategyId, updated) },
+            (_, existing) => existing with { Candidates = existing.Candidates.SetItem(e.StrategyId, updated) });
+        OnChange?.Invoke(snapshot);
+    }
+
     public void RecordScored(CandidateScoredEvent e)
     {
         var key = (e.RunId, e.TaskId);
@@ -177,6 +203,8 @@ public enum CandidateState
     Pending,
     Running,
     Completed,
+    /// <summary>Post-evaluation: build gates ran, screenshot captured, but LLM judge may not have scored.</summary>
+    Evaluated,
     Scored,
     Winner,
 }
@@ -196,6 +224,10 @@ public sealed record CandidateSnapshot
     public int? ReadabilityScore { get; init; }
     /// <summary>Base64-encoded PNG screenshot captured after build gate passed (null if not available).</summary>
     public string? ScreenshotBase64 { get; init; }
+    /// <summary>True if the candidate survived build gates (null if evaluation hasn't run yet).</summary>
+    public bool? Survived { get; init; }
+    /// <summary>Why the LLM judge was skipped, e.g. "sole-survivor". Null when judge ran normally.</summary>
+    public string? JudgeSkippedReason { get; init; }
 }
 
 public sealed record TaskSnapshot

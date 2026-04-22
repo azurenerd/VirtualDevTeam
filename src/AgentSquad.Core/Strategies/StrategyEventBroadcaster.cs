@@ -50,6 +50,9 @@ public sealed class StrategyEventBroadcaster : IStrategyEventSink
                 case StrategyEvents.CandidateCompleted when payload is CandidateCompletedEvent c:
                     _store.RecordCompleted(c);
                     break;
+                case StrategyEvents.CandidateEvaluated when payload is CandidateEvaluatedEvent ev:
+                    _store.RecordEvaluated(ev);
+                    break;
                 case StrategyEvents.CandidateScored when payload is CandidateScoredEvent sc:
                     _store.RecordScored(sc);
                     break;
