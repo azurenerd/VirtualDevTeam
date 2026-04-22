@@ -172,6 +172,8 @@ public class StrategyOrchestrator
                 AcceptanceCriteriaScore = c.Score?.AcceptanceCriteriaScore,
                 DesignScore = c.Score?.DesignScore,
                 ReadabilityScore = c.Score?.ReadabilityScore,
+                FrameworkId = c.StrategyId,
+                IsExternalFramework = _externalAdapters.ContainsKey(c.StrategyId),
             }).ToList(),
             WinnerStrategyId = evalResult.Winner?.StrategyId,
             TieBreakReason = evalResult.TieBreakReason,

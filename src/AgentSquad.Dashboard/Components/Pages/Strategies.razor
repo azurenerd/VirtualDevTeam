@@ -61,14 +61,24 @@
                 <div class="candidate-grid">
                     @foreach (var candidate in task.Candidates.Values.OrderBy(c => c.StrategyId))
                     {
-                        <div class="candidate-card state-@(candidate.State.ToString().ToLowerInvariant())" data-testid="strategies-candidate-card" data-strategy-id="@candidate.StrategyId">
+                        <div class="candidate-card state-@(candidate.State.ToString().ToLowerInvariant()) @(IsExternalFramework(candidate.StrategyId) ? "external-framework" : "")" data-testid="strategies-candidate-card" data-strategy-id="@candidate.StrategyId">
                             <div class="candidate-head">
-                                <span class="candidate-id">@candidate.StrategyId</span>
+                                <span class="candidate-id">
+                                    @candidate.StrategyId
+                                    @if (IsExternalFramework(candidate.StrategyId))
+                                    {
+                                        <span class="framework-badge external" title="External agentic framework">🔌</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="framework-badge builtin" title="Built-in strategy">⚡</span>
+                                    }
+                                </span>
                                 <span class="candidate-state">@candidate.State</span>
                             </div>
                             @if (candidate.ElapsedSec is double e)
                             {
-                                <div class="candidate-timing">@e.ToString("0.0")s @(candidate.TokensUsed.HasValue ? $"· {candidate.TokensUsed} tok" : "")</div>
+                                <div class="candidate-timing">@e.ToString("0.0")s @(candidate.TokensUsed.HasValue ? $"· {candidate.TokensUsed} tok" : "· tokens n/a")</div>
                             }
                             @if (candidate.State == CandidateState.Scored || candidate.State == CandidateState.Winner)
                             {
@@ -117,14 +127,14 @@
                         <td>
                             @if (task.WinnerStrategyId is string w)
                             {
-                                <span class="winner-badge">@w</span>
+                                <span class="winner-badge">@(IsExternalFramework(w) ? "🔌 " : "")@w</span>
                             }
                             else
                             {
                                 <span class="muted">— none —</span>
                             }
                         </td>
-                        <td>@string.Join(", ", task.Candidates.Keys)</td>
+                        <td>@string.Join(", ", task.Candidates.Keys.Select(k => IsExternalFramework(k) ? $"🔌{k}" : k))</td>
                         <td class="muted">@task.TieBreakReason</td>
                         <td>@(task.EvaluationElapsedSec?.ToString("0.0") ?? "-")s</td>
                         <td>@(task.CompletedAt?.ToLocalTime().ToString("HH:mm:ss") ?? "-")</td>
@@ -149,6 +159,10 @@
     .candidate-card.state-completed { border-left: 3px solid #51cf66; }
     .candidate-card.state-scored { border-left: 3px solid #ffd43b; }
     .candidate-card.state-winner { border-left: 3px solid gold; background: rgba(255, 215, 0, .08); }
+    .candidate-card.external-framework { border-right: 2px solid #a78bfa; }
+    .framework-badge { font-size: .7em; margin-left: .3rem; vertical-align: middle; }
+    .framework-badge.external { color: #a78bfa; }
+    .framework-badge.builtin { color: #64748b; }
     .candidate-head { display: flex; justify-content: space-between; margin-bottom: .25rem; font-weight: 500; }
     .candidate-state { font-size: .75em; opacity: .7; text-transform: uppercase; letter-spacing: .05em; }
     .candidate-timing { font-family: monospace; font-size: .85em; opacity: .8; }
@@ -171,6 +185,15 @@
     private EnabledStrategiesInfo? _enabled;
     private HubConnection? _hub;
     private bool _refreshing;
+
+    /// <summary>Known built-in strategy IDs that are NOT external frameworks.</summary>
+    private static readonly HashSet<string> BuiltInStrategyIds = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "baseline", "mcp-enhanced", "agentic-delegation"
+    };
+
+    private static bool IsExternalFramework(string strategyId) =>
+        !BuiltInStrategyIds.Contains(strategyId);
 
     protected override async Task OnInitializedAsync()
     {

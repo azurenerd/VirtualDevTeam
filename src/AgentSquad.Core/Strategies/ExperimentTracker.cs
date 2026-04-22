@@ -85,4 +85,21 @@ public record CandidateRecord
     public int? AcceptanceCriteriaScore { get; init; }
     public int? DesignScore { get; init; }
     public int? ReadabilityScore { get; init; }
+
+    // ── Framework metadata (populated for external adapters) ──
+
+    /// <summary>Framework adapter ID — same as StrategyId for built-in, distinct for external.</summary>
+    public string? FrameworkId { get; init; }
+
+    /// <summary>Number of sub-agents spawned (e.g., Squad team members).</summary>
+    public int? SubAgentsSpawned { get; init; }
+
+    /// <summary>Number of LLM calls made by the framework.</summary>
+    public int? LlmCallsMade { get; init; }
+
+    /// <summary>Number of decisions captured from framework output.</summary>
+    public int? DecisionsMade { get; init; }
+
+    /// <summary>Whether this candidate came from an external framework vs built-in strategy.</summary>
+    public bool IsExternalFramework { get; init; }
 }
