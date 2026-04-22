@@ -267,23 +267,23 @@ else if (_config is not null)
             }
         </div>
 
-        @* ── Code Generation Strategies ── *@
+        @* ── Agentic Frameworks ── *@
         <div class="config-card">
             <div class="config-card-header" @onclick="() => _strategiesExpanded = !_strategiesExpanded" data-testid="config-card-strategies">
                 <span class="config-card-icon">🧠</span>
-                <span class="config-card-title">Code Generation Strategies</span>
+                <span class="config-card-title">Agentic Frameworks</span>
                 <span class="config-card-chevron @(_strategiesExpanded ? "expanded" : "")">▶</span>
             </div>
             @if (_strategiesExpanded)
             {
                 <div class="config-card-body">
                     <p class="config-hint" style="margin-bottom: 12px;">
-                        Controls which AI code-generation scenarios run when Software Engineers implement a task. When the Strategy Framework is <strong>disabled</strong>, engineers use the legacy single-shot generator (fastest, least autonomous). When <strong>enabled</strong>, every listed strategy runs in parallel for each task and the winning patch is applied. Turn off the first two and leave only <em>Agentic Delegation</em> to route all code-gen through the interactive <code>copilot --allow-all</code> CLI session.
+                        Choose which AI code-generation frameworks run under the hood when Software Engineers implement a task. AgentSquad orchestrates visibility, approvals, and metrics regardless of which framework generates code. When <strong>disabled</strong>, engineers use the legacy single-shot generator (fastest, least autonomous). When <strong>enabled</strong>, every listed framework runs in parallel for each task and the winning patch is applied.
                     </p>
 
                     <div class="config-field-row">
-                        <div class="config-field" title="Master switch for the multi-strategy framework. When OFF, all Software Engineer tasks use the legacy single-pass code generator regardless of the per-strategy toggles below. Turn this ON to route code generation through the selected strategies.">
-                            <label>Strategy Framework Enabled</label>
+                        <div class="config-field" title="Master switch for the multi-framework pipeline. When OFF, all Software Engineer tasks use the legacy single-pass code generator regardless of the per-framework toggles below. Turn this ON to route code generation through the selected frameworks.">
+                            <label>Agentic Frameworks Enabled</label>
                             <label class="config-toggle">
                                 <input type="checkbox" @bind="_config.StrategyFramework.Enabled" />
                                 <span class="config-toggle-slider"></span>
@@ -291,9 +291,9 @@ else if (_config is not null)
                         </div>
                     </div>
 
-                    <div class="config-subsection-header" style="margin-top: 12px; font-weight: 600; font-size: 0.9rem;">Active Strategies</div>
+                    <div class="config-subsection-header" style="margin-top: 12px; font-weight: 600; font-size: 0.9rem;">Active Frameworks</div>
                     <p class="config-hint" style="font-size: 0.8rem; margin-bottom: 8px;">
-                        Check the strategies you want to run. Unchecked strategies are skipped. At least one must be enabled when the framework is on, otherwise all tasks will fall back to the legacy generator.
+                        Check the frameworks you want to run. Unchecked frameworks are skipped. At least one must be enabled when the pipeline is on, otherwise all tasks will fall back to the legacy generator.
                     </p>
 
                     <div class="config-field-row">
@@ -321,12 +321,20 @@ else if (_config is not null)
                                 <span class="config-toggle-slider"></span>
                             </label>
                         </div>
+                        <div class="config-field" title="External framework — delegates the task to Squad (Brady Gaster's multi-agent team). Squad coordinates multiple AI sub-agents (lead developer, frontend, backend, tester) working in parallel inside the worktree. Requires Squad CLI installed. Slowest but most thorough for complex tasks.">
+                            <label>Squad (multi-agent team) 🆕</label>
+                            <label class="config-toggle">
+                                <input type="checkbox" checked="@IsStrategyEnabled(StrategySquad)"
+                                    @onchange="e => SetStrategyEnabled(StrategySquad, (bool)(e.Value ?? false))" />
+                                <span class="config-toggle-slider"></span>
+                            </label>
+                        </div>
                     </div>
 
                     @if (_config.StrategyFramework.Enabled && GetEnabledStrategyCount() == 0)
                     {
                         <div class="config-warning" style="margin-top: 10px; padding: 8px 12px; background: #fef3cd; border: 1px solid #fbbf24; border-radius: 4px; color: #92400e;">
-                            ⚠️ Framework is enabled but no strategies are checked. With nothing to run, every task will silently fall back to the legacy generator.
+                            ⚠️ Frameworks are enabled but none are checked. With nothing to run, every task will silently fall back to the legacy generator.
                         </div>
                     }
 
@@ -1644,11 +1652,12 @@ else if (_config is not null)
     private bool _agenticLoopExpanded;
     private bool _strategiesExpanded = true;
 
-    // Strategy IDs — keep in sync with ICodeGenerationStrategy.Id values
-    // (BaselineStrategy, McpEnhancedStrategy, AgenticDelegationStrategy).
+    // Strategy/Framework IDs — keep in sync with ICodeGenerationStrategy.Id and
+    // IAgenticFrameworkAdapter.Id values.
     private const string StrategyBaseline = "baseline";
     private const string StrategyMcp = "mcp-enhanced";
     private const string StrategyAgentic = "agentic-delegation";
+    private const string StrategySquad = "squad";
 
     private bool IsStrategyEnabled(string id)
         => _config?.StrategyFramework.EnabledStrategies

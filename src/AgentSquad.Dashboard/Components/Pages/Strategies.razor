@@ -9,10 +9,10 @@
 @inject NavigationManager Navigation
 @inject ILogger<Strategies> Logger
 
-<PageTitle>AgentSquad — Strategies</PageTitle>
+<PageTitle>AgentSquad — Agentic Frameworks</PageTitle>
 
 <div class="dashboard-header" data-testid="page-strategies">
-    <h1>Code-Generation Strategies</h1>
+    <h1>Agentic Frameworks</h1>
     <div class="header-badges">
         <span class="header-badge @(_enabled?.MasterEnabled == true ? "" : "muted")" data-testid="strategies-enabled-badge">
             @(_enabled?.MasterEnabled == true ? "● Framework ON" : "○ Framework OFF")
@@ -34,9 +34,9 @@
 @if (_enabled?.MasterEnabled != true)
 {
     <div class="alert-banner info" data-testid="strategies-disabled-banner">
-        <strong>Strategy framework is disabled.</strong> Baseline code generation is the
+        <strong>Agentic frameworks are disabled.</strong> Baseline code generation is the
         only active path. Set <code>AgentSquad:StrategyFramework:Enabled = true</code>
-        to enable multi-strategy candidate runs.
+        to enable multi-framework candidate runs.
     </div>
 }
 
@@ -44,7 +44,7 @@
     <h2>Active Tasks</h2>
     @if (_activeTasks.Count == 0)
     {
-        <div class="empty-state">No active strategy candidates. Waiting for the next task&hellip;</div>
+        <div class="empty-state">No active framework candidates. Waiting for the next task&hellip;</div>
     }
     else
     {

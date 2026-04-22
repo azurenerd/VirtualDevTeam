@@ -95,7 +95,7 @@ public sealed class StrategiesPageTests : TestContext
         var cut = RenderComponent<Strategies>();
 
         cut.WaitForAssertion(() =>
-            Assert.Contains("Strategy framework is disabled", cut.Markup));
+            Assert.Contains("Agentic frameworks are disabled", cut.Markup));
         Assert.Contains("Framework OFF", cut.Markup);
     }
 
@@ -108,7 +108,7 @@ public sealed class StrategiesPageTests : TestContext
 
         cut.WaitForAssertion(() =>
             Assert.Contains("Framework ON", cut.Markup));
-        Assert.DoesNotContain("Strategy framework is disabled", cut.Markup);
+        Assert.DoesNotContain("Agentic frameworks are disabled", cut.Markup);
     }
 
     [Fact]
@@ -120,7 +120,7 @@ public sealed class StrategiesPageTests : TestContext
 
         cut.WaitForAssertion(() =>
         {
-            Assert.Contains("No active strategy candidates", cut.Markup);
+            Assert.Contains("No active framework candidates", cut.Markup);
             Assert.Contains("No completed tasks yet", cut.Markup);
         });
     }
@@ -257,6 +257,6 @@ public sealed class StrategiesPageTests : TestContext
         var cut = RenderComponent<Strategies>();
 
         // The page catches the exception in its refresh try/catch and keeps rendering.
-        cut.WaitForAssertion(() => Assert.Contains("Code-Generation Strategies", cut.Markup));
+        cut.WaitForAssertion(() => Assert.Contains("Agentic Frameworks", cut.Markup));
     }
 }
