@@ -176,10 +176,14 @@ public sealed class SquadReadinessChecker : IFrameworkLifecycle
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(timeout);
 
+        // On Windows, many tools (npm, npx, gh) are .cmd/.bat shims that
+        // ProcessStartInfo cannot find when UseShellExecute=false.
+        // Route through cmd.exe to resolve them from PATH correctly.
+        var isWindows = OperatingSystem.IsWindows();
         var psi = new ProcessStartInfo
         {
-            FileName = command,
-            Arguments = args,
+            FileName = isWindows ? "cmd.exe" : command,
+            Arguments = isWindows ? $"/c {command} {args}" : args,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
