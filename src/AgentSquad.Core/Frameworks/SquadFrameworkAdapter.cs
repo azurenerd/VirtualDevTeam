@@ -51,17 +51,20 @@ public sealed class SquadFrameworkAdapter
     {
         var sw = Stopwatch.StartNew();
         var events = new List<FrameworkEvent>();
+        var sink = invocation.ActivitySink;
 
         try
         {
             // 1. Initialize Squad in the worktree
             events.Add(Evt(FrameworkEventType.Decision, "squad", "Initializing Squad workspace"));
+            sink?.Report(new FrameworkActivityEvent("init", "Initializing Squad workspace"));
             var initOk = await InitializeSquadWorkspaceAsync(invocation.WorktreePath, ct);
             if (!initOk.Succeeded)
                 return FailResult(sw, $"squad-init-failed: {initOk.Message}", events);
 
             // 2. Pre-populate team configuration
             events.Add(Evt(FrameworkEventType.Decision, "squad", "Configuring team from task context"));
+            sink?.Report(new FrameworkActivityEvent("config", "Configuring team from task context"));
             await WriteTeamConfigAsync(invocation.WorktreePath, invocation.Task);
 
             // 3. Build the task prompt
@@ -70,8 +73,9 @@ public sealed class SquadFrameworkAdapter
             // 4. Execute Squad headlessly
             events.Add(Evt(FrameworkEventType.SubAgentSpawn, "squad.coordinator",
                 "Launching Squad via copilot --agent squad --yolo"));
+            sink?.Report(new FrameworkActivityEvent("spawn", "Launching Squad via copilot --agent squad --yolo"));
             var execResult = await RunSquadProcessAsync(
-                invocation.WorktreePath, prompt, invocation.Timeout, events, ct);
+                invocation.WorktreePath, prompt, invocation.Timeout, events, sink, ct);
 
             // 5. Post-execution: scrape .squad/ for decisions
             var decisions = await ScrapeDecisionsAsync(invocation.WorktreePath);
@@ -251,7 +255,7 @@ public sealed class SquadFrameworkAdapter
 
     private async Task<SquadProcessResult> RunSquadProcessAsync(
         string worktreePath, string prompt, TimeSpan timeout,
-        List<FrameworkEvent> events, CancellationToken ct)
+        List<FrameworkEvent> events, IProgress<FrameworkActivityEvent>? sink, CancellationToken ct)
     {
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(timeout);
@@ -323,8 +327,10 @@ public sealed class SquadFrameworkAdapter
                 lastOutputTime = DateTimeOffset.UtcNow;
                 logLines.Add(line);
 
-                // Parse real-time events from stdout
+                // Parse real-time events from stdout and report to activity sink
                 ParseStdoutLine(line, events);
+                if (!string.IsNullOrWhiteSpace(line))
+                    sink?.Report(new FrameworkActivityEvent("stdout", line.Trim()));
             }
         }, cts.Token);
 

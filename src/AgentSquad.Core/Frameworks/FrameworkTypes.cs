@@ -13,7 +13,15 @@ public record FrameworkInvocation
     public required string FrameworkId { get; init; }
     /// <summary>Hard wall-clock timeout for this execution.</summary>
     public required TimeSpan Timeout { get; init; }
+    /// <summary>
+    /// Optional progress callback for real-time activity streaming to the dashboard.
+    /// Adapters report significant events (tool calls, decisions, sub-agent spawns) via this sink.
+    /// </summary>
+    public IProgress<FrameworkActivityEvent>? ActivitySink { get; init; }
 }
+
+/// <summary>Activity event reported by framework adapters during execution.</summary>
+public record FrameworkActivityEvent(string Category, string Message, Dictionary<string, object>? Metadata = null);
 
 /// <summary>Task metadata supplied to every framework adapter (shared, immutable).</summary>
 public record FrameworkTaskContext

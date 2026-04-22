@@ -71,9 +71,9 @@ real single-pass code matching the SE's existing prompt/parser; the orchestrator
 build-gates it, the SE applies the winning patch, build-verifies again, then
 pushes a commit with `Strategy: baseline` trailers.
 
-### To opt in to agentic (trusted dev machines only)
+### To opt in to GitHub Copilot CLI (trusted dev machines only)
 
-Agentic delegation (`agentic-delegation`) runs `copilot --allow-all` against a
+GitHub Copilot CLI (`copilot-cli`, formerly `agentic-delegation`) runs `copilot --allow-all` against a
 per-candidate git worktree. Phase 3 shipped **process-level containment** only:
 
 - Windows Job Object reaps the process tree on any watchdog/timeout/cancel.
@@ -109,13 +109,13 @@ per-candidate git worktree. Phase 3 shipped **process-level containment** only:
    agent into producing benign-looking but malicious code).
 
 **Real OS-level containment** (AppContainer, Docker, Hyper-V isolation) is an
-explicit follow-up phase. Until then, treat `agentic-delegation` as a
+explicit follow-up phase. Until then, treat `copilot-cli` as a
 **trusted dev-machine** feature: only enable it on runners you're willing to
 accept as fully compromised by the agent if the model or prompt misbehaves.
 
 To enable:
 1. Set `AgentSquad:StrategyFramework:Enabled = true` (master flag).
-2. Add `"agentic-delegation"` to `EnabledStrategies`.
+2. Add `"copilot-cli"` to `EnabledStrategies` (legacy `"agentic-delegation"` also accepted).
 3. Review `StrategyFramework:Agentic.{StuckSeconds, ToolCallCap}` for your
    budget and timeout tolerances.
 

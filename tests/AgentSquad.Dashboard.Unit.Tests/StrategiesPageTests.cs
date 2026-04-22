@@ -95,7 +95,7 @@ public sealed class StrategiesPageTests : TestContext
         var cut = RenderComponent<Strategies>();
 
         cut.WaitForAssertion(() =>
-            Assert.Contains("Agentic frameworks are disabled", cut.Markup));
+            Assert.Contains("Frameworks are disabled", cut.Markup));
         Assert.Contains("Framework OFF", cut.Markup);
     }
 
@@ -108,7 +108,7 @@ public sealed class StrategiesPageTests : TestContext
 
         cut.WaitForAssertion(() =>
             Assert.Contains("Framework ON", cut.Markup));
-        Assert.DoesNotContain("Agentic frameworks are disabled", cut.Markup);
+        Assert.DoesNotContain("Frameworks are disabled", cut.Markup);
     }
 
     [Fact]
@@ -257,6 +257,6 @@ public sealed class StrategiesPageTests : TestContext
         var cut = RenderComponent<Strategies>();
 
         // The page catches the exception in its refresh try/catch and keeps rendering.
-        cut.WaitForAssertion(() => Assert.Contains("Agentic Frameworks", cut.Markup));
+        cut.WaitForAssertion(() => Assert.Contains("Frameworks", cut.Markup));
     }
 }

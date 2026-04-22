@@ -14,6 +14,7 @@ public static class StrategyEvents
     public const string GateStarted          = "gate:started";
     public const string GateCompleted        = "gate:completed";
     public const string CandidateDetail      = "candidate:detail";
+    public const string CandidateActivity    = "candidate:activity";
 }
 
 public record CandidateStartedEvent(string RunId, string TaskId, string StrategyId, DateTimeOffset At);
@@ -45,3 +46,20 @@ public record CandidateDetailEvent(
     string TaskId,
     string StrategyId,
     CandidateExecutionSummary Summary);
+
+/// <summary>
+/// Emitted during execution with real-time activity updates from framework adapters.
+/// High-frequency — dashboard should handle granularly (append, not full refresh).
+/// </summary>
+public record CandidateActivityEvent(
+    string RunId,
+    string TaskId,
+    string StrategyId,
+    ActivityEntry Activity);
+
+/// <summary>A single activity log entry from a running framework.</summary>
+public record ActivityEntry(
+    DateTimeOffset Timestamp,
+    string Category,
+    string Message,
+    Dictionary<string, object>? Metadata = null);

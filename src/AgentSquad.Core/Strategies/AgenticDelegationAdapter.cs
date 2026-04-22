@@ -14,8 +14,8 @@ public sealed class AgenticDelegationAdapter : IAgenticFrameworkAdapter
     public AgenticDelegationAdapter(AgenticDelegationStrategy inner) => _inner = inner;
 
     public string Id => _inner.Id;
-    public string DisplayName => "Agentic Delegation";
-    public string Description => "Full autonomous Copilot CLI session with tool access (--allow-all)";
+    public string DisplayName => "GitHub Copilot CLI";
+    public string Description => "Full autonomous GitHub Copilot CLI session with tool access (--allow-all)";
     public TimeSpan DefaultTimeout => TimeSpan.FromSeconds(600);
 
     public async Task<FrameworkExecutionResult> ExecuteAsync(

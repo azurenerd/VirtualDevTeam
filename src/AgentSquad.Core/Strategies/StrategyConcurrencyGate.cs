@@ -6,11 +6,11 @@ namespace AgentSquad.Core.Strategies;
 /// <summary>
 /// Global concurrency gate above the three <see cref="AgentSquad.Core.AI.CopilotCliProcessManager"/>
 /// pools. A single uniform <see cref="SemaphoreSlim"/> caps total concurrent copilot
-/// processes across strategies so single-shot + candidate + agentic traffic cannot
+/// processes across strategies so single-shot + candidate + copilot-cli traffic cannot
 /// collectively exceed a safe limit (defaults to 6, see
 /// <see cref="ConcurrencyConfig.GlobalMaxConcurrentProcesses"/>). Acquired by the
 /// process manager AFTER the per-pool semaphore — this ordering matters: pool-first
-/// ordering prevents agentic slots from starving baseline slots under contention.
+/// ordering prevents copilot-cli slots from starving baseline slots under contention.
 /// Also offers a cooperative "degrade mode" hook for 429/backoff responses.
 /// </summary>
 public class StrategyConcurrencyGate

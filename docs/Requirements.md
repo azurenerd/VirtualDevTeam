@@ -2438,7 +2438,7 @@ These bugs were discovered during scenario analysis and fixed. Listed here as re
 
 **REQ-STRAT-003b**: **mcp-enhanced** — same prompts as baseline plus a scoped `WorkspaceReaderMcpServer` MCP server that exposes read-only workspace inspection tools.
 
-**REQ-STRAT-003c**: **agentic-delegation** — feature-flagged OFF by default (not in `EnabledStrategies` default). Uses process-level containment via `Win32JobObject`, `AgenticOutputMonitor`, and `SandboxPostRunValidator`. Opt-in only on trusted dev machines.
+**REQ-STRAT-003c**: **copilot-cli** (formerly agentic-delegation) — feature-flagged OFF by default (not in `EnabledStrategies` default). Uses process-level containment via `Win32JobObject`, `AgenticOutputMonitor`, and `SandboxPostRunValidator`. Opt-in only on trusted dev machines. Legacy ID `"agentic-delegation"` accepted as alias.
 
 ### REQ-STRAT-004: Evaluation & Winner Selection
 
@@ -2525,7 +2525,7 @@ These bugs were discovered during scenario analysis and fixed. Listed here as re
 
 ### REQ-STRAT-012: Canonical Strategy IDs
 
-**REQ-STRAT-012a**: Strategy identifiers MUST be one of the canonical values: `baseline`, `mcp-enhanced`, `agentic-delegation`. These IDs MUST match exactly (case-sensitive) across all components: `StrategyOrchestrator`, `CandidateEvaluator`, dashboard `/strategies` page, experiment-data ndjson records, `.screenshots/` file names, and the `<!-- winner-strategy: -->` PR body marker.
+**REQ-STRAT-012a**: Strategy identifiers MUST be one of the canonical values: `baseline`, `mcp-enhanced`, `copilot-cli`, `squad`. Legacy ID `agentic-delegation` is accepted as alias for `copilot-cli` via `StrategyIdNormalizer`. These IDs MUST match (case-insensitive) across all components: `StrategyOrchestrator`, `CandidateEvaluator`, dashboard `/strategies` page, experiment-data ndjson records, `.screenshots/` file names, and the `<!-- winner-strategy: -->` PR body marker.
 
 **REQ-STRAT-012b**: Adding a new strategy ID requires updating the canonical set in configuration and ensuring all components recognize the new value. Unknown strategy IDs encountered at runtime MUST be logged at Warning level but MUST NOT crash the pipeline.
 

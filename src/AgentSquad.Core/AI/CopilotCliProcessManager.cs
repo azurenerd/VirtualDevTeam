@@ -522,11 +522,11 @@ public sealed class CopilotCliProcessManager : IHostedService, IDisposable
                         var stderrTail = string.IsNullOrEmpty(stderr)
                             ? "(no stderr)"
                             : stderr.Length > 800 ? stderr[..800] : stderr;
-                        errorMessage = $"Agentic session stuck: no stdout for {_frameworkConfig.Agentic.StuckSeconds}s. stderr: {stderrTail}";
+                        errorMessage = $"Copilot CLI session stuck: no stdout for {_frameworkConfig.Agentic.StuckSeconds}s. stderr: {stderrTail}";
                     }
                     else
                     {
-                        errorMessage = $"Agentic session exceeded tool-call cap of {_frameworkConfig.Agentic.ToolCallCap}";
+                        errorMessage = $"Copilot CLI session exceeded tool-call cap of {_frameworkConfig.Agentic.ToolCallCap}";
                     }
                     return new AgenticSessionResult
                     {
@@ -543,7 +543,7 @@ public sealed class CopilotCliProcessManager : IHostedService, IDisposable
                 if (process.ExitCode != 0)
                 {
                     _logger.LogWarning(
-                        "Agentic copilot process exited with code {Code}. stderr: {Stderr}",
+                        "Copilot CLI process exited with code {Code}. stderr: {Stderr}",
                         process.ExitCode,
                         stderr.Length > 500 ? stderr[..500] : stderr);
                     return new AgenticSessionResult
@@ -580,7 +580,7 @@ public sealed class CopilotCliProcessManager : IHostedService, IDisposable
                     WallClock = sw.Elapsed,
                     ToolCallCount = monitor?.ToolCallCount ?? 0,
                     LogBuffer = logBuffer.ToString(),
-                    ErrorMessage = $"Agentic session timed out after {wallClock.TotalSeconds:F0}s",
+                    ErrorMessage = $"Copilot CLI session timed out after {wallClock.TotalSeconds:F0}s",
                 };
             }
             catch (OperationCanceledException)

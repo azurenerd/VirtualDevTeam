@@ -82,7 +82,7 @@ public class StrategyOrchestrator
         // worktree directory (same candidate dir name, unique-suffix fix still
         // can't fully recover from cleanup file locks). Distinct() here is the
         // surgical fix; root cause is in StrategyFrameworkConfig's default init.
-        var enabled = cfg.EnabledStrategies
+        var enabled = StrategyIdNormalizer.NormalizeAll(cfg.EnabledStrategies)
             .Where(id => _strategies.ContainsKey(id) || _externalAdapters.ContainsKey(id))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -335,18 +335,29 @@ public class StrategyOrchestrator
                 Timeout = timeout,
             };
 
+            // Activity sink shared by both built-in strategies and external adapters.
+            var activitySink = new Progress<FrameworkActivityEvent>(activity =>
+            {
+                var activityEntry = new ActivityEntry(
+                    DateTimeOffset.UtcNow, activity.Category, activity.Message, activity.Metadata);
+                _ = _events.EmitAsync(StrategyEvents.CandidateActivity,
+                    new CandidateActivityEvent(task.RunId, task.TaskId, strategyId, activityEntry),
+                    CancellationToken.None);
+            });
+
             StrategyExecutionResult exec;
             string patch = "";
             try
             {
                 if (strategy is not null)
                 {
-                    exec = await strategy.ExecuteAsync(invocation, timeoutCts.Token);
+                    exec = await strategy.ExecuteAsync(
+                        invocation with { ActivitySink = activitySink }, timeoutCts.Token);
                 }
                 else
                 {
                     // External adapter path: pre-execution gate → execute → post-execution gate.
-                    var fwInvocation = ToFrameworkInvocation(invocation);
+                    var fwInvocation = ToFrameworkInvocation(invocation, activitySink);
 
                     if (FrameworkExecutionGate.RequiresPreExecutionGate(strategyId))
                     {
@@ -423,7 +434,7 @@ public class StrategyOrchestrator
 
     // ── Framework ↔ Strategy type converters ──
 
-    private static FrameworkInvocation ToFrameworkInvocation(StrategyInvocation si) => new()
+    private static FrameworkInvocation ToFrameworkInvocation(StrategyInvocation si, IProgress<FrameworkActivityEvent>? activitySink = null) => new()
     {
         Task = new FrameworkTaskContext
         {
@@ -445,6 +456,7 @@ public class StrategyOrchestrator
         WorktreePath = si.WorktreePath,
         FrameworkId = si.StrategyId,
         Timeout = si.Timeout,
+        ActivitySink = activitySink,
     };
 
     private static StrategyExecutionResult FromFrameworkResult(FrameworkExecutionResult fr) => new()

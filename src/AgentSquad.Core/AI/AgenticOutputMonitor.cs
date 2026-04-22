@@ -86,7 +86,7 @@ public sealed class AgenticOutputMonitor
                 {
                     FailureReason = AgenticFailureReason.StuckNoOutput;
                     _logger.LogWarning(
-                        "Agentic session stuck: no stdout for {Seconds}s (stuck window)",
+                        "Copilot CLI session stuck: no stdout for {Seconds}s (stuck window)",
                         stuckWindow.TotalSeconds);
                     SafeCancel(killSource);
                     return;
@@ -118,7 +118,7 @@ public sealed class AgenticOutputMonitor
                 {
                     FailureReason = AgenticFailureReason.ToolCallCap;
                     _logger.LogWarning(
-                        "Agentic session exceeded tool-call cap: {Count} > {Cap}",
+                        "Copilot CLI session exceeded tool-call cap: {Count} > {Cap}",
                         newCount, _config.ToolCallCap);
                     SafeCancel(killSource);
                     return;

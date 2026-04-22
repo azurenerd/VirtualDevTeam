@@ -10,10 +10,10 @@
 @inject NavigationManager Navigation
 @inject ILogger<Strategies> Logger
 
-<PageTitle>AgentSquad — Agentic Frameworks</PageTitle>
+<PageTitle>AgentSquad — Frameworks</PageTitle>
 
 <div class="dashboard-header" data-testid="page-strategies">
-    <h1>Agentic Frameworks</h1>
+    <h1>Frameworks</h1>
     <div class="header-badges">
         <span class="header-badge @(_enabled?.MasterEnabled == true ? "" : "muted")" data-testid="strategies-enabled-badge">
             @(_enabled?.MasterEnabled == true ? "● Framework ON" : "○ Framework OFF")
@@ -35,7 +35,7 @@
 @if (_enabled?.MasterEnabled != true)
 {
     <div class="alert-banner info" data-testid="strategies-disabled-banner">
-        <strong>Agentic frameworks are disabled.</strong> Baseline code generation is the
+        <strong>Frameworks are disabled.</strong> Baseline code generation is the
         only active path. Set <code>AgentSquad:StrategyFramework:Enabled = true</code>
         to enable multi-framework candidate runs.
     </div>
@@ -72,6 +72,14 @@
                             @if (candidate.ElapsedSec is double e)
                             {
                                 <div class="candidate-timing">@e.ToString("0.0")s @(candidate.TokensUsed.HasValue ? $"· {candidate.TokensUsed} tok" : "· tokens n/a")</div>
+                            }
+                            @if (candidate.State == CandidateState.Running && candidate.ActivityLog.Count > 0)
+                            {
+                                <div class="candidate-activity-live">
+                                    <span class="activity-pulse">●</span>
+                                    <span class="activity-last">@candidate.ActivityLog[^1].Message</span>
+                                    <span class="activity-count" title="Activity entries">(@candidate.ActivityLog.Count)</span>
+                                </div>
                             }
                             @if (candidate.State == CandidateState.Scored || candidate.State == CandidateState.Winner)
                             {
@@ -197,6 +205,9 @@
                                             }
                                             <div class="cd-tabs">
                                                 <button class="cd-tab @(activeTab == "overview" ? "active" : "")" @onclick="@(() => SetTab(tabKey, "overview"))" @onclick:stopPropagation="true">Overview</button>
+                                                <button class="cd-tab @(activeTab == "activity" ? "active" : "")" @onclick="@(() => SetTab(tabKey, "activity"))" @onclick:stopPropagation="true">
+                                                    Activity @if (candidate.ActivityLog.Count > 0) { <span class="cd-tab-badge">@candidate.ActivityLog.Count</span> }
+                                                </button>
                                                 <button class="cd-tab @(activeTab == "files" ? "active" : "")" @onclick="@(() => SetTab(tabKey, "files"))" @onclick:stopPropagation="true">
                                                     Files @if (candidate.ExecutionSummary?.FilesChanged.Count > 0) { <span class="cd-tab-badge">@candidate.ExecutionSummary.FilesChanged.Count</span> }
                                                 </button>
@@ -293,6 +304,26 @@
                                                             <div class="cd-screenshot-label">Preview Screenshot</div>
                                                             <img src="data:image/png;base64,@candidate.ScreenshotBase64" alt="@candidate.StrategyId preview" class="cd-screenshot-img" />
                                                         </div>
+                                                    }
+                                                }
+                                                else if (activeTab == "activity")
+                                                {
+                                                    @if (candidate.ActivityLog.Count > 0)
+                                                    {
+                                                        <div class="cd-activity-timeline">
+                                                            @foreach (var entry in candidate.ActivityLog.Reverse())
+                                                            {
+                                                                <div class="cd-activity-entry">
+                                                                    <span class="cd-activity-time">@entry.Timestamp.ToLocalTime().ToString("HH:mm:ss")</span>
+                                                                    <span class="cd-activity-cat cd-activity-cat-@entry.Category">@entry.Category</span>
+                                                                    <span class="cd-activity-msg">@entry.Message</span>
+                                                                </div>
+                                                            }
+                                                        </div>
+                                                    }
+                                                    else
+                                                    {
+                                                        <div class="cd-empty-tab">No activity recorded yet</div>
                                                     }
                                                 }
                                                 else if (activeTab == "files")
@@ -522,6 +553,25 @@
     .cd-log-viewer { font-family: 'Cascadia Code', 'Fira Code', monospace; font-size: .72em; max-height: 300px; overflow-y: auto; background: rgba(0,0,0,.2); border-radius: 4px; padding: .5rem; }
     .cd-log-line { padding: .1rem 0; line-height: 1.4; white-space: pre-wrap; word-break: break-all; border-bottom: 1px solid rgba(255,255,255,.02); }
 
+    /* Live activity indicator on running candidates */
+    .candidate-activity-live { display: flex; align-items: center; gap: .35rem; font-size: .75em; margin-top: .3rem; padding: .25rem .4rem; background: rgba(64, 192, 87, .08); border-radius: 4px; overflow: hidden; }
+    .activity-pulse { color: #40c057; animation: pulse-blink 1.2s infinite; font-size: .6em; }
+    .activity-last { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: .85; }
+    .activity-count { opacity: .5; font-size: .9em; }
+    @@keyframes pulse-blink { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+
+    /* Activity timeline in detail tab */
+    .cd-activity-timeline { max-height: 300px; overflow-y: auto; }
+    .cd-activity-entry { display: flex; align-items: baseline; gap: .5rem; padding: .2rem 0; border-bottom: 1px solid rgba(255,255,255,.03); font-size: .8em; }
+    .cd-activity-time { font-family: monospace; opacity: .5; white-space: nowrap; font-size: .85em; }
+    .cd-activity-cat { padding: .1rem .35rem; border-radius: 3px; font-size: .75em; font-weight: 600; text-transform: uppercase; white-space: nowrap; background: rgba(255,255,255,.06); }
+    .cd-activity-cat-init { color: #4dabf7; }
+    .cd-activity-cat-spawn { color: #da77f2; }
+    .cd-activity-cat-stdout { color: #69db7c; }
+    .cd-activity-cat-config { color: #ffd43b; }
+    .cd-activity-cat-complete { color: #ff922b; }
+    .cd-activity-msg { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
     /* Empty tab */
     .cd-empty-tab { opacity: .4; font-style: italic; font-size: .85em; padding: .5rem 0; }
 </style>
@@ -558,7 +608,18 @@
                 .WithUrl(Navigation.ToAbsoluteUri("/agenthub"))
                 .WithAutomaticReconnect()
                 .Build();
-            _hub.On<string, object>("StrategyEvent", async (_, _) => await InvokeAsync(RefreshAsync));
+            _hub.On<string, object>("StrategyEvent", async (eventName, _) =>
+            {
+                // Activity events are high-frequency — just re-render from store, no full HTTP refresh.
+                if (eventName == StrategyEvents.CandidateActivity)
+                {
+                    await InvokeAsync(StateHasChanged);
+                }
+                else
+                {
+                    await InvokeAsync(RefreshAsync);
+                }
+            });
             await _hub.StartAsync();
         }
         catch (Exception ex)

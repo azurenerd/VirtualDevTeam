@@ -24,7 +24,7 @@ namespace AgentSquad.Core.Strategies;
 /// </summary>
 public class AgenticDelegationStrategy : ICodeGenerationStrategy
 {
-    public string Id => "agentic-delegation";
+    public string Id => "copilot-cli";
 
     private readonly ILogger<AgenticDelegationStrategy> _logger;
     private readonly CopilotCliProcessManager _processManager;
@@ -46,6 +46,7 @@ public class AgenticDelegationStrategy : ICodeGenerationStrategy
     public async Task<StrategyExecutionResult> ExecuteAsync(StrategyInvocation invocation, CancellationToken ct)
     {
         var sw = Stopwatch.StartNew();
+        var sink = invocation.ActivitySink;
 
         // Build sandbox scope. Worktree must already exist — strategy orchestrator
         // owns worktree creation; we just materialize the sandbox dirs inside it.
@@ -53,6 +54,7 @@ public class AgenticDelegationStrategy : ICodeGenerationStrategy
         try
         {
             scope = CopilotCliAgenticScope.Prepare(invocation.WorktreePath);
+            sink?.Report(new Frameworks.FrameworkActivityEvent("init", "Sandbox scope prepared"));
         }
         catch (Exception ex)
         {
@@ -61,6 +63,7 @@ public class AgenticDelegationStrategy : ICodeGenerationStrategy
         }
 
         var prompt = _promptBuilder.Build(invocation);
+        sink?.Report(new Frameworks.FrameworkActivityEvent("init", "Prompt built, launching agentic session"));
 
         var options = new CopilotCliRequestOptions
         {
@@ -89,6 +92,10 @@ public class AgenticDelegationStrategy : ICodeGenerationStrategy
         try
         {
             var result = await _processManager.ExecuteAgenticSessionAsync(prompt, options, ct);
+
+            sink?.Report(new Frameworks.FrameworkActivityEvent("complete",
+                $"Session finished: {(result.Succeeded ? "succeeded" : "failed")} " +
+                $"(tool-calls: {result.ToolCallCount}, wall: {result.WallClock.TotalSeconds:F1}s)"));
 
             if (!result.Succeeded)
             {

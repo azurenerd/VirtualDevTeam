@@ -32,7 +32,7 @@ public class AgenticDelegationStrategyTests : IDisposable
     public void StrategyId_is_stable()
     {
         var strat = NewStrategy();
-        Assert.Equal("agentic-delegation", strat.Id);
+        Assert.Equal("copilot-cli", strat.Id);
     }
 
     [Fact]
@@ -110,7 +110,7 @@ public class AgenticDelegationStrategyTests : IDisposable
         {
             Task = task,
             WorktreePath = _worktree,
-            StrategyId = "agentic-delegation",
+            StrategyId = "copilot-cli",
             Timeout = TimeSpan.FromMinutes(5),
         };
     }

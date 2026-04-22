@@ -268,11 +268,11 @@ else if (_config is not null)
             }
         </div>
 
-        @* ── Agentic Frameworks ── *@
+        @* ── Frameworks ── *@
         <div class="config-card">
             <div class="config-card-header" @onclick="() => _strategiesExpanded = !_strategiesExpanded" data-testid="config-card-strategies">
                 <span class="config-card-icon">🧠</span>
-                <span class="config-card-title">Agentic Frameworks</span>
+                <span class="config-card-title">Frameworks</span>
                 <span class="config-card-chevron @(_strategiesExpanded ? "expanded" : "")">▶</span>
             </div>
             @if (_strategiesExpanded)
@@ -284,7 +284,7 @@ else if (_config is not null)
 
                     <div class="config-field-row">
                         <div class="config-field" title="Master switch for the multi-framework pipeline. When OFF, all Software Engineer tasks use the legacy single-pass code generator regardless of the per-framework toggles below. Turn this ON to route code generation through the selected frameworks.">
-                            <label>Agentic Frameworks Enabled</label>
+                            <label>Frameworks Enabled</label>
                             <label class="config-toggle">
                                 <input type="checkbox" @bind="_config.StrategyFramework.Enabled" />
                                 <span class="config-toggle-slider"></span>
@@ -315,7 +315,7 @@ else if (_config is not null)
                             </label>
                         </div>
                         <div class="config-field" title="Interactive CLI session (third option) — the engineer delegates the entire task to 'copilot --allow-all' running autonomously in the worktree. The CLI can read/write files, run builds, and iterate until the task works. Most robust but slowest and most expensive. This is the Method-3 path the user wants to keep.">
-                            <label>Agentic Delegation (interactive CLI)</label>
+                            <label>GitHub Copilot CLI (interactive autonomous session)</label>
                             <label class="config-toggle">
                                 <input type="checkbox" checked="@IsStrategyEnabled(StrategyAgentic)"
                                     @onchange="e => SetStrategyEnabled(StrategyAgentic, (bool)(e.Value ?? false))" />
@@ -1701,7 +1701,7 @@ else if (_config is not null)
     // IAgenticFrameworkAdapter.Id values.
     private const string StrategyBaseline = "baseline";
     private const string StrategyMcp = "mcp-enhanced";
-    private const string StrategyAgentic = "agentic-delegation";
+    private const string StrategyAgentic = "copilot-cli";
     private const string StrategySquad = "squad";
 
     // Squad readiness state

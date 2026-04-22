@@ -196,7 +196,8 @@ public sealed class StrategyTaskStepBridge : IStrategyEventSink
     {
         ["baseline"] = "Baseline",
         ["mcp-enhanced"] = "MCP-Enhanced",
-        ["agentic-delegation"] = "Agentic Delegation",
+        ["copilot-cli"] = "GitHub Copilot CLI",
+        ["agentic-delegation"] = "GitHub Copilot CLI",  // backward compat alias
         ["squad"] = "Squad",
     };
 

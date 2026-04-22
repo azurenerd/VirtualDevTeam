@@ -124,13 +124,17 @@ public sealed class AdaptiveStrategySelector
         {
             foreach (var cand in rec.Candidates)
             {
-                if (!per.TryGetValue(cand.StrategyId, out var b))
+                var normalizedId = StrategyIdNormalizer.Normalize(cand.StrategyId);
+                if (!per.TryGetValue(normalizedId, out var b))
                 {
                     b = new StrategyStatsBuilder();
-                    per[cand.StrategyId] = b;
+                    per[normalizedId] = b;
                 }
                 if (b.Count >= windowSize) continue;
-                b.Add(cand, won: string.Equals(rec.WinnerStrategyId, cand.StrategyId, StringComparison.OrdinalIgnoreCase));
+                var normalizedWinner = rec.WinnerStrategyId is not null
+                    ? StrategyIdNormalizer.Normalize(rec.WinnerStrategyId)
+                    : null;
+                b.Add(cand, won: string.Equals(normalizedWinner, normalizedId, StringComparison.OrdinalIgnoreCase));
             }
         }
 

@@ -16,7 +16,7 @@ public sealed class FrameworkExecutionGate
     {
         return frameworkId switch
         {
-            "baseline" or "mcp-enhanced" or "agentic-delegation" => false,
+            "baseline" or "mcp-enhanced" or "copilot-cli" or "agentic-delegation" => false,
             _ => true, // External frameworks get pre-execution gate by default
         };
     }

@@ -61,7 +61,7 @@ public sealed class AgentUsageTracker
 
     /// <summary>
     /// Phase 6: attribute a completed strategy candidate's token cost to a
-    /// specific strategy id (e.g. "baseline", "mcp-enhanced", "agentic-delegation").
+    /// specific strategy id (e.g. "baseline", "mcp-enhanced", "copilot-cli").
     /// Called by <c>StrategyOrchestrator</c> after each candidate completes.
     /// Uses the same estimation model as <see cref="RecordCall"/> but keys by
     /// strategy id instead of agent id, so the dashboard can show

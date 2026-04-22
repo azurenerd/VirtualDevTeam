@@ -55,6 +55,11 @@ public record StrategyInvocation
     public required string StrategyId { get; init; }
     /// <summary>Hard wall-clock timeout for this strategy.</summary>
     public required TimeSpan Timeout { get; init; }
+    /// <summary>
+    /// Optional progress callback for real-time activity streaming to the dashboard.
+    /// Strategies report significant events (tool calls, decisions, file writes) via this sink.
+    /// </summary>
+    public IProgress<Frameworks.FrameworkActivityEvent>? ActivitySink { get; init; }
 }
 
 /// <summary>What a strategy returns after executing inside its worktree.</summary>

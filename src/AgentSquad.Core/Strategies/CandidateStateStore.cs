@@ -162,6 +162,29 @@ public sealed class CandidateStateStore
         OnChange?.Invoke(snapshot);
     }
 
+    private const int MaxActiveActivityEntries = 200;
+    private const int MaxArchivedActivityEntries = 50;
+
+    public void RecordActivity(CandidateActivityEvent e)
+    {
+        var key = (e.RunId, e.TaskId);
+        if (!_active.TryGetValue(key, out var task)) return;
+
+        if (!task.Candidates.TryGetValue(e.StrategyId, out var existing)) return;
+
+        var log = existing.ActivityLog.Count >= MaxActiveActivityEntries
+            ? existing.ActivityLog.RemoveRange(0, existing.ActivityLog.Count - MaxActiveActivityEntries + 1).Add(e.Activity)
+            : existing.ActivityLog.Add(e.Activity);
+
+        var updated = existing with { ActivityLog = log };
+
+        var snapshot = _active.AddOrUpdate(
+            key,
+            _ => task with { Candidates = task.Candidates.SetItem(e.StrategyId, updated) },
+            (_, ex) => ex with { Candidates = ex.Candidates.SetItem(e.StrategyId, updated) });
+        OnChange?.Invoke(snapshot);
+    }
+
     public void RecordWinner(WinnerSelectedEvent e)
     {
         var key = (e.RunId, e.TaskId);
@@ -205,9 +228,18 @@ public sealed class CandidateStateStore
 
     private void PushRecent(TaskSnapshot snapshot)
     {
+        // Trim activity logs when archiving to bound memory in the recent buffer.
+        var trimmed = snapshot with
+        {
+            Candidates = snapshot.Candidates.ToImmutableDictionary(
+                kvp => kvp.Key,
+                kvp => kvp.Value.ActivityLog.Count > MaxArchivedActivityEntries
+                    ? kvp.Value with { ActivityLog = kvp.Value.ActivityLog.RemoveRange(0, kvp.Value.ActivityLog.Count - MaxArchivedActivityEntries) }
+                    : kvp.Value),
+        };
         lock (_recentLock)
         {
-            _recent.AddFirst(snapshot);
+            _recent.AddFirst(trimmed);
             while (_recent.Count > _recentCapacity)
                 _recent.RemoveLast();
         }
@@ -246,6 +278,8 @@ public sealed record CandidateSnapshot
     public string? JudgeSkippedReason { get; init; }
     /// <summary>Post-execution summary with file changes, metrics, logs, and judge reasoning. Null until detail event received.</summary>
     public CandidateExecutionSummary? ExecutionSummary { get; init; }
+    /// <summary>Real-time activity log entries from framework execution. Immutable; bounded to 200 active, trimmed to 50 on archive.</summary>
+    public ImmutableList<ActivityEntry> ActivityLog { get; init; } = ImmutableList<ActivityEntry>.Empty;
 }
 
 public sealed record TaskSnapshot

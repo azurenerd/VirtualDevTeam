@@ -17,7 +17,7 @@ public class StrategyFrameworkConfig
 
     /// <summary>
     /// Which strategies are active. Defaults to baseline + mcp-enhanced.
-    /// agentic-delegation is opt-in because --allow-all requires the Phase 3
+    /// copilot-cli is opt-in because --allow-all requires the Phase 3
     /// sandbox hardening (GIT_CONFIG_NOSYSTEM, scrubbed HOME/XDG, realpath allowlist,
     /// symlink/junction rejection) to be safe. Order is ignored; the orchestrator
     /// runs enabled strategies in parallel.
@@ -26,7 +26,7 @@ public class StrategyFrameworkConfig
 
     /// <summary>
     /// Per-strategy display names keyed by strategy ID. Falls back to built-in names
-    /// for baseline/mcp-enhanced/agentic-delegation, or the raw ID for unknown strategies.
+    /// for baseline/mcp-enhanced/copilot-cli, or the raw ID for unknown strategies.
     /// External frameworks (Squad, Claude Code, etc.) register their display name here.
     /// </summary>
     public Dictionary<string, string> DisplayNames { get; set; } = new();
@@ -116,7 +116,7 @@ public class TimeoutsConfig
         // Fallback to named properties for backward compatibility
         return strategyId switch
         {
-            "agentic-delegation" => TimeSpan.FromSeconds(AgenticSeconds),
+            "copilot-cli" or "agentic-delegation" => TimeSpan.FromSeconds(AgenticSeconds),
             "mcp-enhanced" => TimeSpan.FromSeconds(McpSeconds),
             "squad" => TimeSpan.FromSeconds(SquadSeconds),
             _ => TimeSpan.FromSeconds(BaselineSeconds),

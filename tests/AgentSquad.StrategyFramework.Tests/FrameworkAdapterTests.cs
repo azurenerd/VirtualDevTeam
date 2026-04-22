@@ -151,7 +151,7 @@ public class FrameworkAdapterTests : IDisposable
     {
         // Can't easily construct AgenticDelegationStrategy without full DI,
         // but we can verify the adapter's own properties via mock.
-        Assert.Equal("agentic-delegation", new StubAgenticStrategy().Id);
+        Assert.Equal("copilot-cli", new StubAgenticStrategy().Id);
     }
 
     // ── SquadStdoutParser ──
@@ -256,7 +256,7 @@ public class FrameworkAdapterTests : IDisposable
 
     private sealed class StubAgenticStrategy : ICodeGenerationStrategy
     {
-        public string Id => "agentic-delegation";
+        public string Id => "copilot-cli";
         public Task<StrategyExecutionResult> ExecuteAsync(StrategyInvocation invocation, CancellationToken ct)
             => Task.FromResult(new StrategyExecutionResult
             {

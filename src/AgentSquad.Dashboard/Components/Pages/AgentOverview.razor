@@ -106,7 +106,8 @@
         <div class="project-control-actions">
             @if (_runState is "Idle" or "" or "Completed" or "Failed" or "Cancelled")
             {
-                <button class="btn-primary" @onclick="StartProjectAsync" disabled="@_runActionPending">
+                <button class="btn-primary" @onclick="StartProjectAsync" disabled="@_runActionPending"
+                        title="Starts a new project run using the project description and settings from the Configuration page. Agents will be spawned according to the selected framework strategy.">
                     @(_runActionPending ? "Starting..." : "▶ Start Project")
                 </button>
             }
