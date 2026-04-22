@@ -25,6 +25,7 @@ public sealed class SquadReadinessChecker : IFrameworkLifecycle
 
     public async Task<FrameworkReadinessResult> CheckReadinessAsync(CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         var missing = new List<string>();
 
         // 1. Node.js ≥22.5
