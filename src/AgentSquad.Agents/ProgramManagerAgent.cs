@@ -170,7 +170,7 @@ public class ProgramManagerAgent : AgentBase
                             !specContent.Contains("No PM specification has been created yet"))
                         {
                             Logger.LogInformation("Retry: PMSpec exists but no open enhancement issues — retrying User Story creation");
-                            await CreateUserStoryIssuesAsync(ct);
+                            await CreateUserStoryIssuesAsync(ct, skipClosedIssueGuard: true);
                         }
                     }
                 }
@@ -2411,7 +2411,7 @@ public class ProgramManagerAgent : AgentBase
     /// agent via PlanningCompleteMessage so it can begin building the engineering plan.
     /// Idempotent: skips if enhancement issues already exist.
     /// </summary>
-    private async Task CreateUserStoryIssuesAsync(CancellationToken ct)
+    private async Task CreateUserStoryIssuesAsync(CancellationToken ct, bool skipClosedIssueGuard = false)
     {
         if (_userStoryIssuesCreated) return;
 
@@ -2440,15 +2440,19 @@ public class ProgramManagerAgent : AgentBase
 
             // Prior-run detection: if closed enhancement issues exist, a previous run
             // already completed this project. Don't re-create duplicates.
-            var closedEnhancements = await _github.GetIssuesByLabelAsync(
-                IssueWorkflow.Labels.Enhancement, "closed", ct);
-            if (closedEnhancements.Count > 0)
+            // Skip this guard on retry after mini-reset (caller already verified 0 open).
+            if (!skipClosedIssueGuard)
             {
-                Logger.LogInformation(
-                    "Prior run detected: {Count} closed enhancement issues exist — skipping re-creation to avoid duplicates",
-                    closedEnhancements.Count);
-                _userStoryIssuesCreated = true;
-                return;
+                var closedEnhancements = await _github.GetIssuesByLabelAsync(
+                    IssueWorkflow.Labels.Enhancement, "closed", ct);
+                if (closedEnhancements.Count > 0)
+                {
+                    Logger.LogInformation(
+                        "Prior run detected: {Count} closed enhancement issues exist — skipping re-creation to avoid duplicates",
+                        closedEnhancements.Count);
+                    _userStoryIssuesCreated = true;
+                    return;
+                }
             }
 
             UpdateStatus(AgentStatus.Working, "Creating User Story Issues from PMSpec");
