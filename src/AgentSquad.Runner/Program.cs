@@ -16,6 +16,9 @@ using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Always load user-secrets so PAT is never stored in tracked appsettings.json
+builder.Configuration.AddUserSecrets<Program>(optional: true);
+
 // Bind configuration
 builder.Services.Configure<AgentSquadConfig>(
     builder.Configuration.GetSection("AgentSquad"));

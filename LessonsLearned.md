@@ -69,6 +69,7 @@
 59. [First Successful End-to-End Run — What Made It Work](#60-first-successful-end-to-end-run--what-made-it-work)
 60. [External Agentic Framework Integration — Spike Before You Abstract](#61-external-agentic-framework-integration--spike-before-you-abstract)
 61. [Standalone Dashboard DI Must Mirror Runner Registrations](#62-standalone-dashboard-di-must-mirror-runner-registrations)
+62. [NEVER Put Secrets in Tracked Config Files](#63-never-put-secrets-in-tracked-config-files)
 
 ---
 
@@ -1370,3 +1371,32 @@ if (_gateCheck.RequiresHuman("pm_spec_review"))
 **Fix:** When adding ANY new service that a Dashboard page or component might resolve — either directly via `GetService<T>()` or through constructor injection — you MUST also register it (or a stub/mock) in `StandaloneServiceRegistration.AddStandaloneStubs()` (`src/AgentSquad.Dashboard.Host/StandaloneServiceRegistration.cs`).
 
 **Rule:** Treat the standalone Dashboard DI container as a first-class deployment target. Every new feature that adds a service registration consumed by Blazor components requires a corresponding entry in `StandaloneServiceRegistration.cs`. Add this as a mandatory step in the implementation checklist for any feature that touches DI.
+
+---
+
+## 62. NEVER Put Secrets in Tracked Config Files
+
+**Severity: CRITICAL — Security**
+
+**The near-miss:** During a debugging session, a Copilot CLI agent wrote the GitHub PAT directly into `src/AgentSquad.Runner/appsettings.json` to fix a runner startup failure. The file is **tracked by git** (it is NOT in `.gitignore`). Had the next commit included this file, the PAT would have been pushed to the remote repository and exposed to anyone with read access.
+
+**Why it happened:**
+1. The runner crashed because `GitHubToken` was empty in appsettings.json (cleared during a mini reset).
+2. The token existed in `dotnet user-secrets`, but user-secrets only load when `ASPNETCORE_ENVIRONMENT=Development`.
+3. Starting the runner with `--no-launch-profile` skipped the launch profile that sets the environment variable.
+4. Detached processes (via `setsid` or background shells) lose `$env:` variables set in the parent shell.
+5. The "quick fix" was to write the token directly into appsettings.json — this is **always wrong**.
+
+**The correct fix:**
+- Add explicit user-secrets loading in `Program.cs` that works in ALL environments:
+  ```csharp
+  builder.Configuration.AddUserSecrets<Program>(optional: true);
+  ```
+- This single line ensures secrets are loaded regardless of `ASPNETCORE_ENVIRONMENT`, making detached/production-mode processes work correctly.
+
+**Rules:**
+1. **NEVER** write secrets, tokens, API keys, or credentials to any file tracked by git.
+2. **ALWAYS** use `dotnet user-secrets` for sensitive configuration values.
+3. If the runner can't find a secret at startup, fix the secret-loading code — do not put the secret in a tracked file.
+4. Only `appsettings.Development.json` and `appsettings.Production.json` are gitignored. The base `appsettings.json` is **tracked and committed**.
+5. Before writing any value to a config file, verify whether that file is tracked: `git ls-files <path>`. If it's tracked, the value must not be sensitive.

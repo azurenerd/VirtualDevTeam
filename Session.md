@@ -23,6 +23,10 @@ Also read the `.github/copilot-instructions.md` (auto-loaded) for architecture, 
 
 Before starting a new agent workflow run, fully reset the target GitHub repo.
 
+> 🚨 **CRITICAL: NEVER PUT SECRETS/TOKENS IN `appsettings.json` — IT IS TRACKED BY GIT.**
+>
+> `src/AgentSquad.Runner/appsettings.json` is **NOT gitignored** — it is committed to the repository. **NEVER** write PAT tokens, API keys, or any secrets to this file. Always use `dotnet user-secrets` for sensitive values. If the runner can't find a token at startup, the fix is to add explicit user-secrets loading in `Program.cs` (`builder.Configuration.AddUserSecrets<Program>(optional: true)`), **not** to write the secret into appsettings.json. This applies to ALL tracked config files in the repo.
+
 > 🚨 **CRITICAL: NEVER DO A MANUAL RESET. ALWAYS USE THE SCRIPTS.**
 >
 > This is a **hard rule with no exceptions.** Manual resets (ad-hoc process kills, manual DB deletes, manual GitHub API calls) **always miss steps** and leave the environment in an inconsistent state. Known failures from manual resets:
