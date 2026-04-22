@@ -338,7 +338,7 @@ flowchart TB
 
     subgraph S2G["2️⃣ LLM Rank"]
         direction LR
-        AC["Acceptance Criteria ↓"] --> DS["Design ↓"] --> RD["Readability ↓"]
+        AC["Acceptance Criteria"] --> DS["Design"] --> RD["Readability"]
     end
 
     S3(["3️⃣ Token Efficiency"])
