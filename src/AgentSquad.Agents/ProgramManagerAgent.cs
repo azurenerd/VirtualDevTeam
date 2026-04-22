@@ -157,9 +157,9 @@ public class ProgramManagerAgent : AgentBase
                 await ProcessClarificationRequestsAsync(ct);
                 Logger.LogInformation("PM loop: ReviewPullRequests (entering)");
                 await ReviewPullRequestsAsync(ct);
-                // Retry guard: if PMSpec exists but enhancement issues were never created
-                // (e.g., due to a transient Copilot CLI failure), retry creation
-                if (!_userStoryIssuesCreated)
+                // Retry guard: if PMSpec exists but no open enhancement issues,
+                // re-create them. This handles mini-reset (closed issues from prior runs
+                // incorrectly set _userStoryIssuesCreated) and transient CLI failures.
                 {
                     var openEnhancements = await _github.GetIssuesByLabelAsync(
                         IssueWorkflow.Labels.Enhancement, "open", ct);
@@ -170,8 +170,14 @@ public class ProgramManagerAgent : AgentBase
                             !specContent.Contains("No PM specification has been created yet"))
                         {
                             Logger.LogInformation("Retry: PMSpec exists but no open enhancement issues — retrying User Story creation");
+                            _userStoryIssuesCreated = false;
                             await CreateUserStoryIssuesAsync(ct, skipClosedIssueGuard: true);
                         }
+                    }
+                    else if (!_userStoryIssuesCreated)
+                    {
+                        // Open enhancements exist but flag wasn't set (e.g., created externally)
+                        _userStoryIssuesCreated = true;
                     }
                 }
 
