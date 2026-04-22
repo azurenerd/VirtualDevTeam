@@ -359,8 +359,9 @@ else if (_config is not null)
                         </div>
                         @if (_squadReadiness is not null && _squadReadiness.MissingDependencies.Count > 0)
                         {
-                            <div style="margin-top: 4px; margin-bottom: 8px; padding: 6px 10px; background: #fef3cd; border: 1px solid #fbbf24; border-radius: 4px; font-size: 0.78rem; color: #92400e;">
-                                <strong>Missing dependencies:</strong> @string.Join(", ", _squadReadiness.MissingDependencies)
+                            <div style="margin-top: 4px; margin-bottom: 8px; padding: 6px 10px; background: #fef3cd; border: 1px solid #fbbf24; border-radius: 4px; font-size: 0.78rem; color: #92400e; display: flex; align-items: flex-start; gap: 6px;">
+                                <span style="flex: 1;"><strong>Missing dependencies:</strong> @string.Join(", ", _squadReadiness.MissingDependencies)</span>
+                                <button style="background: none; border: none; cursor: pointer; color: #92400e; font-size: 0.9rem; padding: 0; line-height: 1;" @onclick="() => _squadReadiness = null" title="Dismiss">✕</button>
                             </div>
                         }
                         @if (_squadInstallMessage is not null)
