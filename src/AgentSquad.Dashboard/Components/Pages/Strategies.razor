@@ -824,6 +824,7 @@
     private IReadOnlyList<TaskSnapshot> _recentTasks = [];
     private EnabledStrategiesInfo? _enabled;
     private HubConnection? _hub;
+    private PeriodicTimer? _pollTimer;
     private bool _refreshing;
     private readonly HashSet<string> _expandedTasks = new();
     private readonly HashSet<string> _expandedActiveCandidates = new();
@@ -890,6 +891,23 @@
         {
             Logger.LogDebug(ex, "SignalR connection for /strategies failed; falling back to manual refresh");
         }
+
+        // Polling fallback: ensures the page always refreshes even when SignalR events
+        // don't reach this host (e.g. standalone dashboard at :5051 vs Runner at :5050).
+        _pollTimer = new PeriodicTimer(TimeSpan.FromSeconds(3));
+        _ = PollLoopAsync();
+    }
+
+    private async Task PollLoopAsync()
+    {
+        try
+        {
+            while (_pollTimer is not null && await _pollTimer.WaitForNextTickAsync())
+            {
+                await InvokeAsync(RefreshAsync);
+            }
+        }
+        catch (OperationCanceledException) { }
     }
 
     private async Task RefreshAsync()
@@ -992,6 +1010,8 @@
 
     public async ValueTask DisposeAsync()
     {
+        _pollTimer?.Dispose();
+        _pollTimer = null;
         if (_hub is not null)
         {
             await _hub.DisposeAsync();
