@@ -1125,6 +1125,9 @@ public class SoftwareEngineerAgent : EngineerAgentBase
         // Add a final integration & validation task that depends on ALL other tasks.
         // The PE leader will self-assign this after all other tasks are done.
         var allTaskIds = parsedTasks.Select(t => t.Id).ToList();
+        // T-FINAL needs a ParentIssueNumber so the enhancement scope filter in LoadTasksAsync
+        // doesn't exclude it — without this, dependency links to T1 won't be created on GitHub.
+        var integrationParentIssue = enhancementIssues.FirstOrDefault()?.Number;
         parsedTasks.Add(new EngineeringTask
         {
             Id = IntegrationTaskId,
@@ -1138,7 +1141,8 @@ public class SoftwareEngineerAgent : EngineerAgentBase
                 "5. If no fixes are needed, close this issue directly\n\n" +
                 "This task is automatically assigned to the PE leader when all other tasks are complete.",
             Complexity = "High",
-            Dependencies = allTaskIds
+            Dependencies = allTaskIds,
+            ParentIssueNumber = integrationParentIssue
         });
 
         // Classify task decomposition decision impact
