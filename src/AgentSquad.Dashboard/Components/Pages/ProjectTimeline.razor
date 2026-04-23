@@ -1154,10 +1154,13 @@ else
             ("squad", "Squad"),
         };
 
-        // Filter to only enabled strategies (if info available)
+        // Filter to only enabled strategies (normalize IDs for comparison)
         var enabled = _enabledInfo?.EnabledStrategies;
-        var filtered = enabled is { Count: > 0 }
-            ? strategies.Where(s => enabled.Contains(s.Key)).ToArray()
+        var normalizedEnabled = enabled is { Count: > 0 }
+            ? enabled.Select(StrategyIdNormalizer.Normalize).ToHashSet(StringComparer.OrdinalIgnoreCase)
+            : null;
+        var filtered = normalizedEnabled is not null
+            ? strategies.Where(s => normalizedEnabled.Contains(s.Key)).ToArray()
             : strategies;
 
         foreach (var (key, label) in filtered)
