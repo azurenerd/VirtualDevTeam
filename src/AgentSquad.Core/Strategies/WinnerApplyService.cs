@@ -61,11 +61,11 @@ public class WinnerApplyService
         try
         {
             await File.WriteAllTextAsync(tmp, patch, ct);
-            var check = await TryRunGitAsync(agentRepoPath, new[] { "apply", "--check", "--3way", tmp }, ct);
+            var check = await TryRunGitAsync(agentRepoPath, new[] { "apply", "--check", "--3way", "--whitespace=fix", tmp }, ct);
             if (!check.ok)
                 return new ApplyOutcome(false, $"apply-check-failed: {check.stderr}", currentHead);
 
-            var apply = await TryRunGitAsync(agentRepoPath, new[] { "apply", "--3way", tmp }, ct);
+            var apply = await TryRunGitAsync(agentRepoPath, new[] { "apply", "--3way", "--whitespace=fix", tmp }, ct);
             if (!apply.ok)
             {
                 // Roll back any partial 3-way state so the caller sees a clean tree.
