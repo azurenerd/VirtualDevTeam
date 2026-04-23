@@ -227,7 +227,7 @@
                                                 <div class="cd-activity-timeline">
                                                     @foreach (var entry in candidate.ActivityLog.Reverse())
                                                     {
-                                                        <div class="cd-activity-entry">
+                                                        <div class="cd-activity-entry" @onclick="() => _selectedActivity = entry" @onclick:stopPropagation="true" title="Click for full detail">
                                                             <span class="cd-activity-time">@entry.Timestamp.ToLocalTime().ToString("h:mm:ss tt")</span>
                                                             <span class="cd-activity-cat cd-activity-cat-@entry.Category">@entry.Category</span>
                                                             <span class="cd-activity-msg">@entry.Message</span>
@@ -639,6 +639,20 @@
     </div>
 }
 
+@if (_selectedActivity is not null)
+{
+    <div class="activity-modal-overlay" @onclick="() => _selectedActivity = null">
+        <div class="activity-modal" @onclick:stopPropagation="true">
+            <div class="activity-modal-header">
+                <span class="activity-modal-cat cd-activity-cat-@_selectedActivity.Category">@_selectedActivity.Category</span>
+                <span class="activity-modal-time">@_selectedActivity.Timestamp.ToLocalTime().ToString("h:mm:ss.fff tt — MMM d")</span>
+                <button class="activity-modal-close" @onclick="() => _selectedActivity = null">✕</button>
+            </div>
+            <div class="activity-modal-body">@_selectedActivity.Message</div>
+        </div>
+    </div>
+}
+
 <style>
     .strategies-section { margin: 1.5rem 0; }
     .strategies-section h2 { font-size: 1.1rem; margin: 0 0 .75rem; }
@@ -647,7 +661,7 @@
     .task-id { font-weight: 600; }
     .task-run { opacity: .55; font-size: .85em; margin-left: .5rem; font-family: monospace; }
     .task-elapsed { font-family: monospace; opacity: .7; }
-    .candidate-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: .75rem; }
+    .candidate-grid { display: flex; flex-direction: column; gap: .75rem; }
     .candidate-card { border: 1px solid var(--border, #2d3240); border-radius: 5px; padding: .75rem; }
     .candidate-card.state-running { border-left: 3px solid #4dabf7; }
     .candidate-card.state-completed { border-left: 3px solid #51cf66; }
@@ -789,8 +803,9 @@
     .candidate-detail-expanded { margin-top: .65rem; padding-top: .65rem; border-top: 1px solid var(--border, #2d3240); }
 
     /* Activity timeline in detail tab */
-    .cd-activity-timeline { max-height: 300px; overflow-y: auto; }
-    .cd-activity-entry { display: flex; align-items: baseline; gap: .5rem; padding: .2rem 0; border-bottom: 1px solid rgba(255,255,255,.03); font-size: .8em; }
+    .cd-activity-timeline { max-height: 500px; overflow-y: auto; }
+    .cd-activity-entry { display: flex; align-items: baseline; gap: .5rem; padding: .3rem .4rem; border-bottom: 1px solid rgba(255,255,255,.03); font-size: .8em; cursor: pointer; border-radius: 3px; transition: background .1s; }
+    .cd-activity-entry:hover { background: rgba(255,255,255,.06); }
     .cd-activity-time { font-family: monospace; opacity: .5; white-space: nowrap; font-size: .85em; }
     .cd-activity-cat { padding: .1rem .35rem; border-radius: 3px; font-size: .75em; font-weight: 600; text-transform: uppercase; white-space: nowrap; background: rgba(255,255,255,.06); }
     .cd-activity-cat-init { color: #4dabf7; }
@@ -817,6 +832,16 @@
     .lightbox-close { background: none; border: none; color: #fff; font-size: 1.2rem; cursor: pointer; opacity: .7; padding: .2rem .5rem; }
     .lightbox-close:hover { opacity: 1; }
     .lightbox-img { max-width: 90vw; max-height: calc(90vh - 3rem); object-fit: contain; border-radius: 0 0 6px 6px; border: 1px solid var(--border, #2d3240); }
+
+    /* Activity detail popup modal */
+    .activity-modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,.8); z-index: 10000; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+    .activity-modal { background: var(--card-bg, #1a1e26); border: 1px solid var(--border, #2d3240); border-radius: 8px; max-width: 700px; width: 90vw; max-height: 80vh; overflow-y: auto; cursor: default; box-shadow: 0 8px 32px rgba(0,0,0,.5); }
+    .activity-modal-header { display: flex; justify-content: space-between; align-items: center; padding: .75rem 1rem; border-bottom: 1px solid var(--border, #2d3240); }
+    .activity-modal-cat { font-size: .75em; font-weight: 600; text-transform: uppercase; padding: .15rem .4rem; border-radius: 3px; background: rgba(255,255,255,.06); }
+    .activity-modal-time { font-family: monospace; font-size: .8em; opacity: .6; }
+    .activity-modal-close { background: none; border: none; color: #fff; font-size: 1.2rem; cursor: pointer; opacity: .7; padding: .2rem .5rem; }
+    .activity-modal-close:hover { opacity: 1; }
+    .activity-modal-body { padding: 1rem; font-size: .9em; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
 </style>
 
 @code {
@@ -831,6 +856,7 @@
     private readonly Dictionary<string, string> _activeTabs = new();
     private string? _lightboxImage;
     private string? _lightboxTitle;
+    private ActivityEntry? _selectedActivity;
 
     private void OpenLightbox(string base64, string title)
     {
