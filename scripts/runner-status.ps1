@@ -9,8 +9,8 @@
     .\scripts\runner-status.ps1 -TailLines 20
 #>
 param(
-    [string]$PidFile = (Join-Path $PSScriptRoot ".." "runner.pid"),
-    [string]$LogDir = (Join-Path $PSScriptRoot ".." "logs"),
+    [string]$PidFile = (Join-Path $PSScriptRoot ".." "Logs" "runner.pid"),
+    [string]$LogDir = (Join-Path $PSScriptRoot ".." "Logs"),
     [int]$TailLines = 10
 )
 

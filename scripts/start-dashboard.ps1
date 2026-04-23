@@ -10,9 +10,9 @@
     .\scripts\start-dashboard.ps1 -LogDir "C:\logs"
 #>
 param(
-    [string]$LogDir = (Join-Path $PSScriptRoot ".." "logs"),
+    [string]$LogDir = (Join-Path $PSScriptRoot ".." "Logs"),
     [string]$ProjectDir = (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "src") "AgentSquad.Dashboard.Host"),
-    [string]$PidFile = (Join-Path $PSScriptRoot ".." "dashboard.pid")
+    [string]$PidFile = (Join-Path $PSScriptRoot ".." "Logs" "dashboard.pid")
 )
 
 $ErrorActionPreference = "Stop"

@@ -9,7 +9,7 @@
     .\scripts\stop-runner.ps1 -Force
 #>
 param(
-    [string]$PidFile = (Join-Path $PSScriptRoot ".." "runner.pid"),
+    [string]$PidFile = (Join-Path $PSScriptRoot ".." "Logs" "runner.pid"),
     [switch]$Force
 )
 

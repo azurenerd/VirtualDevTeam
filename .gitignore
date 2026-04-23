@@ -47,9 +47,11 @@ ehthumbs.db
 Desktop.ini
 .DS_Store
 
-## Logs
+## Logs and runtime artifacts
+Logs/
 *.log
-logs/
+*.pid
+*.tmp
 
 ## .NET tool artifacts
 .dotnet/
@@ -85,8 +87,4 @@ experiment-data/
 tests/Captures/
 
 # Runtime artifacts
-dashboard.pid
-runner.pid
-stderr.tmp
-stdout.tmp
 fake-cli-marker.txt

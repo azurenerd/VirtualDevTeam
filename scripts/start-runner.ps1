@@ -10,9 +10,9 @@
     .\scripts\start-runner.ps1 -LogDir "C:\logs"
 #>
 param(
-    [string]$LogDir = (Join-Path $PSScriptRoot ".." "logs"),
+    [string]$LogDir = (Join-Path $PSScriptRoot ".." "Logs"),
     [string]$ProjectDir = (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "src") "AgentSquad.Runner"),
-    [string]$PidFile = (Join-Path $PSScriptRoot ".." "runner.pid")
+    [string]$PidFile = (Join-Path $PSScriptRoot ".." "Logs" "runner.pid")
 )
 
 $ErrorActionPreference = "Stop"
