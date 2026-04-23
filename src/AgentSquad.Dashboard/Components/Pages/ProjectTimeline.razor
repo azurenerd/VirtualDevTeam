@@ -6,6 +6,7 @@
 @using AgentSquad.Dashboard.Services
 @implements IAsyncDisposable
 @inject IDashboardDataService DataService
+@inject IStrategiesDataService StrategiesService
 @inject CandidateStateStore CandidateStore
 @inject NavigationManager Navigation
 @inject IJSRuntime JS
@@ -401,6 +402,7 @@ else
     private bool _isRateLimited;
     private int _closedCount;
     private int _openCount;
+    private EnabledStrategiesInfo? _enabledInfo;
 
     private string _statusFilter = "all";
     private string _devViewMode = "engineering"; // "pm" = enhancement issues, "engineering" = engineering-task issues with PR children
@@ -418,6 +420,7 @@ else
     protected override async Task OnInitializedAsync()
     {
         DataService.OnChange += OnDataChanged;
+        try { _enabledInfo = await StrategiesService.GetEnabledAsync(); } catch { /* standalone fallback */ }
         await LoadDataAsync(showOverlay: true);
         _ = PollForUpdatesAsync(_refreshCts.Token);
     }
@@ -1151,7 +1154,13 @@ else
             ("squad", "Squad"),
         };
 
-        foreach (var (key, label) in strategies)
+        // Filter to only enabled strategies (if info available)
+        var enabled = _enabledInfo?.EnabledStrategies;
+        var filtered = enabled is { Count: > 0 }
+            ? strategies.Where(s => enabled.Contains(s.Key)).ToArray()
+            : strategies;
+
+        foreach (var (key, label) in filtered)
         {
             // Prefer in-memory screenshot from evaluation; fall back to GitHub raw URL.
             if (storeScreenshots.TryGetValue(key, out var dataUrl))

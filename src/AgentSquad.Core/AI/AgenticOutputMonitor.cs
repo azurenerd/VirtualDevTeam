@@ -161,11 +161,19 @@ public sealed class AgenticOutputMonitor
                 {
                     var type = typeProp.GetString() ?? "";
 
-                    // Tool-call events: extract tool name for readable display
+                    // Tool-call events: extract tool name, args, and result for readable display
                     if (type.Contains("tool", StringComparison.OrdinalIgnoreCase))
                     {
                         var toolName = TryGetToolName(root);
-                        var msg = !string.IsNullOrEmpty(toolName) ? $"Tool call: {toolName}" : $"Tool event: {type}";
+                        var toolArgs = TryGetToolArgs(root);
+                        var toolResult = TryGetToolResult(root);
+
+                        var msg = !string.IsNullOrEmpty(toolName) ? $"Tool: {toolName}" : $"Tool event: {type}";
+                        if (!string.IsNullOrEmpty(toolArgs))
+                            msg += $" ({toolArgs})";
+                        if (!string.IsNullOrEmpty(toolResult))
+                            msg += $" → {toolResult}";
+
                         sink.Report(new FrameworkActivityEvent("tool-call", msg));
                         return;
                     }
@@ -208,6 +216,111 @@ public sealed class AgenticOutputMonitor
         if (root.TryGetProperty("function", out var f) && f.ValueKind == JsonValueKind.Object &&
             f.TryGetProperty("name", out var fn) && fn.ValueKind == JsonValueKind.String)
             return fn.GetString();
+        return null;
+    }
+
+    /// <summary>Extract a short human-readable summary of tool arguments.</summary>
+    private static string? TryGetToolArgs(JsonElement root)
+    {
+        // Check common argument locations
+        JsonElement args = default;
+        if (root.TryGetProperty("arguments", out var a))
+            args = a;
+        else if (root.TryGetProperty("input", out var inp))
+            args = inp;
+        else if (root.TryGetProperty("tool_input", out var ti))
+            args = ti;
+        else if (root.TryGetProperty("function", out var fn) && fn.ValueKind == JsonValueKind.Object &&
+                 fn.TryGetProperty("arguments", out var fa))
+            args = fa;
+        else if (root.TryGetProperty("tool", out var t) && t.ValueKind == JsonValueKind.Object &&
+                 t.TryGetProperty("input", out var tInp))
+            args = tInp;
+        else
+            return null;
+
+        // For string arguments (already serialized JSON string), extract key hints
+        if (args.ValueKind == JsonValueKind.String)
+        {
+            var raw = args.GetString() ?? "";
+            return SummarizeArgs(raw);
+        }
+
+        // For object arguments, extract key fields
+        if (args.ValueKind == JsonValueKind.Object)
+        {
+            var parts = new List<string>();
+            foreach (var prop in args.EnumerateObject())
+            {
+                if (parts.Count >= 3) break; // limit to 3 key args
+                var val = prop.Value.ValueKind switch
+                {
+                    JsonValueKind.String => prop.Value.GetString() ?? "",
+                    JsonValueKind.Number => prop.Value.GetRawText(),
+                    JsonValueKind.True => "true",
+                    JsonValueKind.False => "false",
+                    _ => "..."
+                };
+                if (val.Length > 60) val = val[..60] + "…";
+                parts.Add($"{prop.Name}={val}");
+            }
+            return parts.Count > 0 ? string.Join(", ", parts) : null;
+        }
+
+        return null;
+    }
+
+    /// <summary>Summarize a serialized JSON argument string into key hints.</summary>
+    private static string SummarizeArgs(string raw)
+    {
+        if (raw.Length < 3) return raw;
+        try
+        {
+            using var doc = JsonDocument.Parse(raw);
+            var parts = new List<string>();
+            foreach (var prop in doc.RootElement.EnumerateObject())
+            {
+                if (parts.Count >= 3) break;
+                var val = prop.Value.ValueKind switch
+                {
+                    JsonValueKind.String => prop.Value.GetString() ?? "",
+                    JsonValueKind.Number => prop.Value.GetRawText(),
+                    _ => "..."
+                };
+                if (val.Length > 60) val = val[..60] + "…";
+                parts.Add($"{prop.Name}={val}");
+            }
+            return parts.Count > 0 ? string.Join(", ", parts) : raw.Length > 80 ? raw[..80] + "…" : raw;
+        }
+        catch
+        {
+            return raw.Length > 80 ? raw[..80] + "…" : raw;
+        }
+    }
+
+    /// <summary>Extract tool result/output summary.</summary>
+    private static string? TryGetToolResult(JsonElement root)
+    {
+        JsonElement result = default;
+        if (root.TryGetProperty("result", out var r))
+            result = r;
+        else if (root.TryGetProperty("output", out var o))
+            result = o;
+        else if (root.TryGetProperty("content", out var c) && c.ValueKind == JsonValueKind.String)
+        {
+            var text = c.GetString() ?? "";
+            if (text.Length > 100) text = text[..100] + "…";
+            return text;
+        }
+        else
+            return null;
+
+        if (result.ValueKind == JsonValueKind.String)
+        {
+            var text = result.GetString() ?? "";
+            return text.Length > 100 ? text[..100] + "…" : text;
+        }
+
         return null;
     }
 
