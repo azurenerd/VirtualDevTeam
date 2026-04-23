@@ -246,12 +246,18 @@ public abstract class AgentBase : IAgent, IDisposable
     protected void UpdateStatus(AgentStatus newStatus, string? reason = null)
     {
         AgentStatus oldStatus;
+        string? oldReason;
         lock (_statusLock)
         {
             oldStatus = _status;
+            oldReason = _statusReason;
             _status = newStatus;
             _statusReason = reason;
         }
+
+        // Skip logging and events when nothing meaningful changed
+        if (oldStatus == newStatus && oldReason == reason)
+            return;
 
         Logger.LogInformation("Agent {AgentId} status changed: {OldStatus} -> {NewStatus} ({Reason})",
             Identity.Id, oldStatus, newStatus, reason ?? "no reason");

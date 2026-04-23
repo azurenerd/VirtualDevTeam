@@ -13,6 +13,7 @@ public class ProjectFileManager
     private readonly IGitHubService _github;
     private readonly ILogger<ProjectFileManager> _logger;
     private readonly string? _branch;
+    private readonly HashSet<string> _warnedMissingAgents = new(StringComparer.OrdinalIgnoreCase);
 
     private const string TeamMembersPath = "TeamMembers.md";
     private const string EngineeringPlanPath = "EngineeringPlan.md";
@@ -106,7 +107,8 @@ public class ProjectFileManager
 
         if (!updated)
         {
-            _logger.LogWarning("Agent {AgentId} not found in TeamMembers.md", agentId);
+            if (_warnedMissingAgents.Add(agentId))
+                _logger.LogWarning("Agent {AgentId} not found in TeamMembers.md", agentId);
             return;
         }
 
