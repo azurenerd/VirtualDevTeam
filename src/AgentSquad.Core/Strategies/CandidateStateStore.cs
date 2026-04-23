@@ -19,13 +19,14 @@ namespace AgentSquad.Core.Strategies;
 /// rehydrated on construction so data survives runner restarts.
 /// </summary>
 /// </summary>
-public sealed class CandidateStateStore
+public sealed class CandidateStateStore : IDisposable
 {
     private readonly ConcurrentDictionary<(string RunId, string TaskId), TaskSnapshot> _active = new();
     private readonly object _recentLock = new();
     private readonly LinkedList<TaskSnapshot> _recent = new();
     private readonly int _recentCapacity;
     private readonly AgentStateStore? _persistence;
+    private readonly Timer? _flushTimer;
 
     private static readonly JsonSerializerOptions _jsonOpts = new()
     {
@@ -38,6 +39,10 @@ public sealed class CandidateStateStore
         _recentCapacity = recentCapacity < 1 ? 1 : recentCapacity;
         _persistence = persistence;
         HydrateFromSqlite();
+
+        // Periodically flush active tasks to SQLite so data survives runner restarts.
+        if (_persistence is not null)
+            _flushTimer = new Timer(_ => FlushActiveTasks(), null, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
     }
 
     /// <summary>Fires on any state mutation. Listeners must be non-throwing and fast.</summary>
@@ -364,6 +369,33 @@ public sealed class CandidateStateStore
         {
             // Best-effort hydration — start fresh if DB is corrupted
         }
+    }
+
+    /// <summary>
+    /// Persist all currently-active tasks to SQLite so they survive runner restarts.
+    /// Uses INSERT OR REPLACE so completed-task writes from PushRecent overwrite these.
+    /// </summary>
+    private void FlushActiveTasks()
+    {
+        if (_persistence is null) return;
+        try
+        {
+            foreach (var task in _active.Values)
+            {
+                PersistToSqlite(task);
+            }
+        }
+        catch
+        {
+            // Best-effort — don't crash the timer
+        }
+    }
+
+    public void Dispose()
+    {
+        _flushTimer?.Dispose();
+        // Final flush before shutdown
+        FlushActiveTasks();
     }
 }
 
