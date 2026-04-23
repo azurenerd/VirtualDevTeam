@@ -13,18 +13,21 @@
 <PageTitle>AgentSquad — Frameworks</PageTitle>
 
 <div class="dashboard-header" data-testid="page-strategies">
-    <h1>Frameworks</h1>
+    <h1 title="Frameworks are pluggable AI coding agents (e.g., Baseline, GitHub Copilot CLI, Squad) that compete on each task. The best output wins.">Frameworks</h1>
     <div class="header-badges">
-        <span class="header-badge @(_enabled?.MasterEnabled == true ? "" : "muted")" data-testid="strategies-enabled-badge">
+        <span class="header-badge @(_enabled?.MasterEnabled == true ? "" : "muted")" data-testid="strategies-enabled-badge"
+              title="@(_enabled?.MasterEnabled == true ? "Multi-framework mode is ON — tasks are sent to multiple AI agents simultaneously" : "Multi-framework mode is OFF — only baseline code generation is active")">
             @(_enabled?.MasterEnabled == true ? "● Framework ON" : "○ Framework OFF")
         </span>
-        <span class="header-badge" data-testid="strategies-active-count">
+        <span class="header-badge" data-testid="strategies-active-count"
+              title="Number of tasks currently being processed by framework candidates">
             Active: @_activeTasks.Count
         </span>
-        <span class="header-badge" data-testid="strategies-recent-count">
+        <span class="header-badge" data-testid="strategies-recent-count"
+              title="Number of recently completed tasks (persisted across restarts)">
             Recent: @_recentTasks.Count
         </span>
-        <button class="ntl-refresh-btn @(_refreshing ? "spinning" : "")" @onclick="RefreshAsync" disabled="@_refreshing" title="Refresh" data-testid="strategies-refresh">
+        <button class="ntl-refresh-btn @(_refreshing ? "spinning" : "")" @onclick="RefreshAsync" disabled="@_refreshing" title="Refresh active and recent task data" data-testid="strategies-refresh">
             <svg class="ntl-refresh-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
                 <path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v2h-2"/>
             </svg>
@@ -42,7 +45,7 @@
 }
 
 <section class="strategies-section">
-    <h2>Active Tasks</h2>
+    <h2 title="Tasks currently being processed — each task runs multiple framework candidates in parallel">Active Tasks</h2>
     @if (_activeTasks.Count == 0)
     {
         <div class="empty-state">No active framework candidates. Waiting for the next task&hellip;</div>
@@ -54,48 +57,48 @@
             <div class="task-card" data-testid="strategies-task-card" data-task-id="@task.TaskId">
                 <div class="task-header">
                     <div>
-                        <span class="task-id">@task.TaskId</span>
-                        <span class="task-run">run @task.RunId</span>
+                        <span class="task-id" title="Unique identifier for this engineering task">@task.TaskId</span>
+                        <span class="task-run" title="Run identifier — groups all candidates executing for this task">run @task.RunId</span>
                     </div>
-                    <div class="task-elapsed">@FormatTaskElapsed(task)</div>
+                    <div class="task-elapsed" title="Time elapsed since task started">@FormatTaskElapsed(task)</div>
                 </div>
                 <div class="candidate-grid">
                     @foreach (var candidate in task.Candidates.Values.OrderBy(c => c.StrategyId))
                     {
                         <div class="candidate-card state-@(candidate.State.ToString().ToLowerInvariant())" data-testid="strategies-candidate-card" data-strategy-id="@candidate.StrategyId">
                             <div class="candidate-head">
-                                <span class="candidate-id">
+                                <span class="candidate-id" title="@StrategyTooltip(candidate.StrategyId)">
                                     @candidate.StrategyId
                                 </span>
-                                <span class="candidate-state">@candidate.State</span>
+                                <span class="candidate-state" title="@StateTooltip(candidate.State)">@candidate.State</span>
                             </div>
                             @if (candidate.ElapsedSec is double e)
                             {
-                                <div class="candidate-timing">@FormatDuration(e) @(candidate.TokensUsed.HasValue ? $"· {candidate.TokensUsed} tok" : "· tokens n/a")</div>
+                                <div class="candidate-timing" title="Execution duration and token usage for this candidate">@FormatDuration(e) @(candidate.TokensUsed.HasValue ? $"· {candidate.TokensUsed} tok" : "· tokens n/a")</div>
                             }
                             @if (candidate.State == CandidateState.Running && candidate.ActivityLog.Count > 0)
                             {
-                                <div class="candidate-activity-live">
+                                <div class="candidate-activity-live" title="Latest activity from this framework's execution">
                                     <span class="activity-pulse">●</span>
                                     <span class="activity-last">@candidate.ActivityLog[^1].Message</span>
-                                    <span class="activity-count" title="Activity entries">(@candidate.ActivityLog.Count)</span>
+                                    <span class="activity-count" title="Total activity log entries captured so far">(@candidate.ActivityLog.Count)</span>
                                 </div>
                             }
                             @if (candidate.State == CandidateState.Scored || candidate.State == CandidateState.Winner)
                             {
-                                <div class="candidate-scores">
-                                    <div>AC <span>@(candidate.AcScore ?? 0)</span></div>
-                                    <div>Des <span>@(candidate.DesignScore ?? 0)</span></div>
-                                    <div>Read <span>@(candidate.ReadabilityScore ?? 0)</span></div>
+                                <div class="candidate-scores" title="LLM judge scores — Acceptance Criteria, Design quality, and Readability (each 0–10)">
+                                    <div title="Acceptance Criteria: How well the code meets the task requirements (0–10)">AC <span>@(candidate.AcScore ?? 0)</span></div>
+                                    <div title="Design: Code architecture, patterns, and structural quality (0–10)">Des <span>@(candidate.DesignScore ?? 0)</span></div>
+                                    <div title="Readability: Code clarity, naming, and maintainability (0–10)">Read <span>@(candidate.ReadabilityScore ?? 0)</span></div>
                                 </div>
                             }
                             else if (candidate.State == CandidateState.Evaluated && candidate.Survived == true)
                             {
-                                <div class="candidate-scores muted">@(candidate.JudgeSkippedReason ?? "not scored")</div>
+                                <div class="candidate-scores muted" title="This candidate passed gate checks but was not scored by the LLM judge">@(candidate.JudgeSkippedReason ?? "not scored")</div>
                             }
                             @if (candidate.Succeeded == false)
                             {
-                                <div class="candidate-fail">@candidate.FailureReason</div>
+                                <div class="candidate-fail" title="Reason this candidate failed during execution">@candidate.FailureReason</div>
                             }
                         </div>
                     }
@@ -106,7 +109,7 @@
 </section>
 
 <section class="strategies-section">
-    <h2>Recent Completed (last @_recentTasks.Count)</h2>
+    <h2 title="Completed tasks with evaluation results — click a row to expand and see detailed candidate data">Recent Completed (last @_recentTasks.Count)</h2>
     @if (_recentTasks.Count == 0)
     {
         <div class="empty-state">No completed tasks yet.</div>
@@ -116,13 +119,13 @@
         <table class="recent-table" data-testid="strategies-recent-table">
             <thead>
                 <tr>
-                    <th></th>
-                    <th>Task</th>
-                    <th>Winner</th>
-                    <th>Candidates</th>
-                    <th>Tie-break</th>
-                    <th>Eval</th>
-                    <th>Completed</th>
+                    <th title="Click a row to expand/collapse details"></th>
+                    <th title="Unique task identifier from the engineering plan">Task</th>
+                    <th title="The framework that produced the best code for this task">Winner</th>
+                    <th title="All frameworks that competed on this task">Candidates</th>
+                    <th title="How the winner was selected (e.g., highest score, only survivor, tie-break rule)">Tie-break</th>
+                    <th title="Time spent evaluating all candidates (gate checks + LLM judge scoring)">Eval</th>
+                    <th title="When the task evaluation finished">Completed</th>
                 </tr>
             </thead>
             <tbody>
@@ -130,22 +133,22 @@
                 {
                     var isExpanded = _expandedTasks.Contains(task.TaskId);
                     <tr class="recent-row @(isExpanded ? "expanded" : "")" @onclick="() => ToggleExpand(task.TaskId)">
-                        <td class="expand-toggle">@(isExpanded ? "▾" : "▸")</td>
-                        <td><span class="task-id">@task.TaskId</span></td>
+                        <td class="expand-toggle" title="@(isExpanded ? "Collapse details" : "Expand to see candidate details")">@(isExpanded ? "▾" : "▸")</td>
+                        <td><span class="task-id" title="Task identifier">@task.TaskId</span></td>
                         <td>
                             @if (task.WinnerStrategyId is string w)
                             {
-                                <span class="winner-badge">@w</span>
+                                <span class="winner-badge" title="@StrategyTooltip(w) — won this task">@w</span>
                             }
                             else
                             {
-                                <span class="muted">— none —</span>
+                                <span class="muted" title="No candidate produced acceptable code for this task">— none —</span>
                             }
                         </td>
-                        <td>@string.Join(", ", task.Candidates.Keys)</td>
-                        <td class="muted">@task.TieBreakReason</td>
-                        <td>@(task.EvaluationElapsedSec.HasValue ? FormatDuration(task.EvaluationElapsedSec.Value) : "-")</td>
-                        <td>@(task.CompletedAt?.ToLocalTime().ToString("M/d h:mm tt") ?? "-")</td>
+                        <td title="Frameworks that ran: @string.Join(", ", task.Candidates.Keys.Select(k => StrategyDisplayName(k)))">@string.Join(", ", task.Candidates.Keys)</td>
+                        <td class="muted" title="Selection reason for the winning candidate">@task.TieBreakReason</td>
+                        <td title="Total evaluation time including gate checks and LLM judge scoring">@(task.EvaluationElapsedSec.HasValue ? FormatDuration(task.EvaluationElapsedSec.Value) : "-")</td>
+                        <td title="@(task.CompletedAt?.ToLocalTime().ToString("yyyy-MM-dd h:mm:ss tt") ?? "Not yet completed")">@(task.CompletedAt?.ToLocalTime().ToString("M/d h:mm tt") ?? "-")</td>
                     </tr>
                     @if (isExpanded)
                     {
@@ -158,22 +161,24 @@
                                         <div class="candidate-detail-card @(isWinner ? "is-winner" : "") @(candidate.Succeeded == false ? "is-failed" : "")">
                                             @* Header *@
                                             <div class="cd-header">
-                                                <span class="cd-name">
-                                                    @if (isWinner) { <span class="cd-trophy">🏆</span> }
+                                                <span class="cd-name" title="@StrategyTooltip(candidate.StrategyId)">
+                                                    @if (isWinner) { <span class="cd-trophy" title="This framework won the task">🏆</span> }
                                                     @candidate.StrategyId
                                                 </span>
-                                                <span class="cd-state cd-state-@(candidate.State.ToString().ToLowerInvariant())">@candidate.State</span>
+                                                <span class="cd-state cd-state-@(candidate.State.ToString().ToLowerInvariant())" title="@StateTooltip(candidate.State)">@candidate.State</span>
                                             </div>
 
                                             @* Progress pipeline *@
-                                            <div class="cd-pipeline">
-                                                <span class="cd-pip @(candidate.State >= CandidateState.Running ? "pip-done" : "")">Started</span>
+                                            <div class="cd-pipeline" title="Execution pipeline: Start → Gate checks (build, tests, screenshots) → LLM Judge scoring → Winner selection">
+                                                <span class="cd-pip @(candidate.State >= CandidateState.Running ? "pip-done" : "")" title="Framework started code generation">Started</span>
                                                 <span class="cd-pip-arrow">→</span>
-                                                <span class="cd-pip @(candidate.Survived == true || candidate.State >= CandidateState.Evaluated ? "pip-done" : candidate.Survived == false && candidate.State >= CandidateState.Evaluated ? "pip-fail" : candidate.Succeeded == false ? "pip-fail" : "")">
+                                                <span class="cd-pip @(candidate.Survived == true || candidate.State >= CandidateState.Evaluated ? "pip-done" : candidate.Survived == false && candidate.State >= CandidateState.Evaluated ? "pip-fail" : candidate.Succeeded == false ? "pip-fail" : "")"
+                                                      title="Gate checks: build success, test pass, and optional screenshot verification">
                                                     @(candidate.Survived == true ? "Gates ✓" : candidate.Survived == false && candidate.State >= CandidateState.Evaluated ? "Gate Failed ✗" : candidate.Succeeded == false ? "Failed ✗" : "Evaluating…")
                                                 </span>
                                                 <span class="cd-pip-arrow">→</span>
-                                                <span class="cd-pip @(candidate.State >= CandidateState.Scored ? "pip-done" : candidate.State >= CandidateState.Evaluated && !string.IsNullOrEmpty(candidate.JudgeSkippedReason) ? "pip-skip" : "")">
+                                                <span class="cd-pip @(candidate.State >= CandidateState.Scored ? "pip-done" : candidate.State >= CandidateState.Evaluated && !string.IsNullOrEmpty(candidate.JudgeSkippedReason) ? "pip-skip" : "")"
+                                                      title="LLM Judge: scores code on Acceptance Criteria, Design, and Readability (each 0–10)">
                                                     @if (candidate.State >= CandidateState.Scored)
                                                     {
                                                         @:Scored ✓
@@ -194,7 +199,7 @@
                                                 @if (isWinner)
                                                 {
                                                     <span class="cd-pip-arrow">→</span>
-                                                    <span class="cd-pip pip-winner">Winner 🏆</span>
+                                                    <span class="cd-pip pip-winner" title="This framework produced the best code and was selected as the winner">Winner 🏆</span>
                                                 }
                                             </div>
 
@@ -204,15 +209,15 @@
                                                 var activeTab = _activeTabs.GetValueOrDefault(tabKey, "overview");
                                             }
                                             <div class="cd-tabs">
-                                                <button class="cd-tab @(activeTab == "overview" ? "active" : "")" @onclick="@(() => SetTab(tabKey, "overview"))" @onclick:stopPropagation="true">Overview</button>
-                                                <button class="cd-tab @(activeTab == "activity" ? "active" : "")" @onclick="@(() => SetTab(tabKey, "activity"))" @onclick:stopPropagation="true">
+                                                <button class="cd-tab @(activeTab == "overview" ? "active" : "")" @onclick="@(() => SetTab(tabKey, "overview"))" @onclick:stopPropagation="true" title="Scores, judge reasoning, key metrics, and screenshot preview">Overview</button>
+                                                <button class="cd-tab @(activeTab == "activity" ? "active" : "")" @onclick="@(() => SetTab(tabKey, "activity"))" @onclick:stopPropagation="true" title="Real-time activity log showing what the framework did step by step">
                                                     Activity @if (candidate.ActivityLog.Count > 0) { <span class="cd-tab-badge">@candidate.ActivityLog.Count</span> }
                                                 </button>
-                                                <button class="cd-tab @(activeTab == "files" ? "active" : "")" @onclick="@(() => SetTab(tabKey, "files"))" @onclick:stopPropagation="true">
+                                                <button class="cd-tab @(activeTab == "files" ? "active" : "")" @onclick="@(() => SetTab(tabKey, "files"))" @onclick:stopPropagation="true" title="Files created, modified, or deleted by this framework">
                                                     Files @if (candidate.ExecutionSummary?.FilesChanged.Count > 0) { <span class="cd-tab-badge">@candidate.ExecutionSummary.FilesChanged.Count</span> }
                                                 </button>
-                                                <button class="cd-tab @(activeTab == "metrics" ? "active" : "")" @onclick="@(() => SetTab(tabKey, "metrics"))" @onclick:stopPropagation="true">Metrics</button>
-                                                <button class="cd-tab @(activeTab == "logs" ? "active" : "")" @onclick="@(() => SetTab(tabKey, "logs"))" @onclick:stopPropagation="true">
+                                                <button class="cd-tab @(activeTab == "metrics" ? "active" : "")" @onclick="@(() => SetTab(tabKey, "metrics"))" @onclick:stopPropagation="true" title="Detailed performance metrics: time, tokens, lines changed, patch size, and judge scores">Metrics</button>
+                                                <button class="cd-tab @(activeTab == "logs" ? "active" : "")" @onclick="@(() => SetTab(tabKey, "logs"))" @onclick:stopPropagation="true" title="Raw diagnostic logs from the framework execution (stdout/stderr)">
                                                     Logs @if (candidate.ExecutionSummary?.DiagnosticLog.Count > 0) { <span class="cd-tab-badge">@candidate.ExecutionSummary.DiagnosticLog.Count</span> }
                                                 </button>
                                             </div>
@@ -224,22 +229,22 @@
                                                     @if (candidate.AcScore.HasValue || candidate.DesignScore.HasValue || candidate.ReadabilityScore.HasValue)
                                                     {
                                                         <div class="cd-scores">
-                                                            <div class="cd-score-row">
+                                                            <div class="cd-score-row" title="Does the generated code satisfy all acceptance criteria from the task?">
                                                                 <span class="cd-score-label">Acceptance</span>
                                                                 <div class="cd-score-bar-bg"><div class="cd-score-bar" style="width: @((candidate.AcScore ?? 0) * 10)%"></div></div>
                                                                 <span class="cd-score-val">@(candidate.AcScore ?? 0)/10</span>
                                                             </div>
-                                                            <div class="cd-score-row">
+                                                            <div class="cd-score-row" title="Code architecture, patterns, separation of concerns, and structural quality">
                                                                 <span class="cd-score-label">Design</span>
                                                                 <div class="cd-score-bar-bg"><div class="cd-score-bar" style="width: @((candidate.DesignScore ?? 0) * 10)%"></div></div>
                                                                 <span class="cd-score-val">@(candidate.DesignScore ?? 0)/10</span>
                                                             </div>
-                                                            <div class="cd-score-row">
+                                                            <div class="cd-score-row" title="Code clarity, naming conventions, comments, and long-term maintainability">
                                                                 <span class="cd-score-label">Readability</span>
                                                                 <div class="cd-score-bar-bg"><div class="cd-score-bar" style="width: @((candidate.ReadabilityScore ?? 0) * 10)%"></div></div>
                                                                 <span class="cd-score-val">@(candidate.ReadabilityScore ?? 0)/10</span>
                                                             </div>
-                                                            <div class="cd-score-total">
+                                                            <div class="cd-score-total" title="Combined score across all three categories (max 30)">
                                                                 Total: <strong>@TotalScore(candidate)</strong>/30
                                                             </div>
                                                         </div>
@@ -267,7 +272,7 @@
                                                     @if (!string.IsNullOrEmpty(candidate.ExecutionSummary?.JudgeReasoning))
                                                     {
                                                         <div class="cd-reasoning">
-                                                            <div class="cd-reasoning-label">Judge Reasoning</div>
+                                                            <div class="cd-reasoning-label" title="The LLM judge's explanation for why it assigned these scores">Judge Reasoning</div>
                                                             <div class="cd-reasoning-text">@candidate.ExecutionSummary.JudgeReasoning</div>
                                                         </div>
                                                     }
@@ -276,16 +281,16 @@
                                                     <div class="cd-metrics">
                                                         @if (candidate.ElapsedSec.HasValue)
                                                         {
-                                                            <span class="cd-metric">⏱ @FormatDuration(candidate.ElapsedSec.Value)</span>
+                                                            <span class="cd-metric" title="Actual execution time for this framework's code generation">⏱ @FormatDuration(candidate.ElapsedSec.Value)</span>
                                                         }
                                                         @if (candidate.TokensUsed.HasValue)
                                                         {
-                                                            <span class="cd-metric">🔤 @(candidate.TokensUsed.Value.ToString("N0")) tokens</span>
+                                                            <span class="cd-metric" title="Total LLM tokens consumed during code generation">🔤 @(candidate.TokensUsed.Value.ToString("N0")) tokens</span>
                                                         }
                                                         @if (candidate.ExecutionSummary is { } s)
                                                         {
-                                                            <span class="cd-metric">📁 @s.FilesChanged.Count files</span>
-                                                            <span class="cd-metric">+@s.TotalLinesAdded / -@s.TotalLinesRemoved lines</span>
+                                                            <span class="cd-metric" title="Number of files created, modified, or deleted">📁 @s.FilesChanged.Count files</span>
+                                                            <span class="cd-metric" title="Lines of code added vs removed">+@s.TotalLinesAdded / -@s.TotalLinesRemoved lines</span>
                                                         }
                                                     </div>
 
@@ -370,29 +375,29 @@
                                                 else if (activeTab == "metrics")
                                                 {
                                                     <div class="cd-metrics-detail">
-                                                        <div class="cd-metric-row">
+                                                        <div class="cd-metric-row" title="Wall-clock time the framework spent generating code">
                                                             <span class="cd-metric-label">Elapsed Time</span>
                                                             <span class="cd-metric-value">@(candidate.ElapsedSec?.ToString("0.1") ?? "—")s</span>
                                                         </div>
-                                                        <div class="cd-metric-row">
+                                                        <div class="cd-metric-row" title="Total LLM tokens consumed (prompt + completion)">
                                                             <span class="cd-metric-label">Tokens Used</span>
                                                             <span class="cd-metric-value">@(candidate.TokensUsed?.ToString("N0") ?? "unknown")</span>
                                                         </div>
                                                         @if (candidate.ExecutionSummary is { } sm)
                                                         {
-                                                            <div class="cd-metric-row">
+                                                            <div class="cd-metric-row" title="Total number of files created, modified, or deleted">
                                                                 <span class="cd-metric-label">Files Changed</span>
                                                                 <span class="cd-metric-value">@sm.FilesChanged.Count</span>
                                                             </div>
-                                                            <div class="cd-metric-row">
+                                                            <div class="cd-metric-row" title="Total new lines of code added across all files">
                                                                 <span class="cd-metric-label">Lines Added</span>
                                                                 <span class="cd-metric-value cd-file-add">+@sm.TotalLinesAdded</span>
                                                             </div>
-                                                            <div class="cd-metric-row">
+                                                            <div class="cd-metric-row" title="Total lines of code removed across all files">
                                                                 <span class="cd-metric-label">Lines Removed</span>
                                                                 <span class="cd-metric-value cd-file-del">-@sm.TotalLinesRemoved</span>
                                                             </div>
-                                                            <div class="cd-metric-row">
+                                                            <div class="cd-metric-row" title="Total size of the git diff/patch produced">
                                                                 <span class="cd-metric-label">Patch Size</span>
                                                                 <span class="cd-metric-value">@FormatBytes(sm.PatchSizeBytes)</span>
                                                             </div>
@@ -400,7 +405,7 @@
                                                         @if (candidate.ExecutionSummary?.Scores is { } sc)
                                                         {
                                                             <div class="cd-metric-divider"></div>
-                                                            <div class="cd-metric-row">
+                                                            <div class="cd-metric-row" title="LLM judge's combined score: Acceptance Criteria + Design + Readability (each 0–10, max 30)">
                                                                 <span class="cd-metric-label">Judge Score</span>
                                                                 <span class="cd-metric-value">@sc.Total / 30 (AC=@sc.AcceptanceCriteria, Design=@sc.Design, Read=@sc.Readability)</span>
                                                             </div>
@@ -743,6 +748,35 @@
         < 1024 => $"{bytes} B",
         < 1024 * 1024 => $"{bytes / 1024.0:0.1} KB",
         _ => $"{bytes / (1024.0 * 1024.0):0.1} MB",
+    };
+
+    private static string StrategyTooltip(string strategyId) => strategyId.ToLowerInvariant() switch
+    {
+        "baseline" => "Baseline: Direct LLM code generation without external tools — the simplest, fastest approach",
+        "copilot-cli" => "GitHub Copilot CLI: Uses the GitHub Copilot CLI tool for autonomous code generation with tool use",
+        "squad" => "Squad: External agentic framework by Brady Gaster — a multi-agent virtual dev team",
+        "mcp-enhanced" => "MCP Enhanced: Uses Model Context Protocol servers for richer tool access during generation",
+        _ => $"{strategyId}: External framework registered as a pluggable code generation strategy",
+    };
+
+    private static string StrategyDisplayName(string strategyId) => strategyId.ToLowerInvariant() switch
+    {
+        "baseline" => "Baseline",
+        "copilot-cli" => "GitHub Copilot CLI",
+        "squad" => "Squad",
+        "mcp-enhanced" => "MCP Enhanced",
+        _ => strategyId,
+    };
+
+    private static string StateTooltip(CandidateState state) => state switch
+    {
+        CandidateState.Pending => "Pending: Waiting to start execution",
+        CandidateState.Running => "Running: Framework is actively generating code",
+        CandidateState.Completed => "Completed: Code generation finished, awaiting evaluation",
+        CandidateState.Evaluated => "Evaluated: Gate checks (build, test) have run",
+        CandidateState.Scored => "Scored: LLM judge has rated the code quality",
+        CandidateState.Winner => "Winner: This candidate was selected as the best solution",
+        _ => state.ToString(),
     };
 
     public async ValueTask DisposeAsync()
