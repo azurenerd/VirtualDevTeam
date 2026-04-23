@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
+using System.Text.Json;
+using AgentSquad.Core.Persistence;
 using AgentSquad.Core.Strategies.Contracts;
 
 namespace AgentSquad.Core.Strategies;
@@ -12,6 +14,10 @@ namespace AgentSquad.Core.Strategies;
 /// Active tasks stay in <see cref="_active"/> keyed by (runId, taskId). When a winner
 /// arrives (or all candidates complete unsuccessfully), the task snapshot is moved
 /// to <see cref="_recent"/>, a bounded ring buffer (default 100, configurable).
+///
+/// Completed tasks are persisted to SQLite via <see cref="AgentStateStore"/> and
+/// rehydrated on construction so data survives runner restarts.
+/// </summary>
 /// </summary>
 public sealed class CandidateStateStore
 {
@@ -19,10 +25,19 @@ public sealed class CandidateStateStore
     private readonly object _recentLock = new();
     private readonly LinkedList<TaskSnapshot> _recent = new();
     private readonly int _recentCapacity;
+    private readonly AgentStateStore? _persistence;
 
-    public CandidateStateStore(int recentCapacity = 100)
+    private static readonly JsonSerializerOptions _jsonOpts = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+    };
+
+    public CandidateStateStore(AgentStateStore? persistence = null, int recentCapacity = 100)
     {
         _recentCapacity = recentCapacity < 1 ? 1 : recentCapacity;
+        _persistence = persistence;
+        HydrateFromSqlite();
     }
 
     /// <summary>Fires on any state mutation. Listeners must be non-throwing and fast.</summary>
@@ -242,6 +257,104 @@ public sealed class CandidateStateStore
             _recent.AddFirst(trimmed);
             while (_recent.Count > _recentCapacity)
                 _recent.RemoveLast();
+        }
+
+        // Persist to SQLite (best-effort — don't crash the pipeline)
+        PersistToSqlite(trimmed);
+    }
+
+    private void PersistToSqlite(TaskSnapshot snapshot)
+    {
+        if (_persistence is null) return;
+        try
+        {
+            var record = new StrategyTaskRecord
+            {
+                RunId = snapshot.RunId,
+                TaskId = snapshot.TaskId,
+                StartedAt = snapshot.StartedAt,
+                CompletedAt = snapshot.CompletedAt,
+                WinnerStrategyId = snapshot.WinnerStrategyId,
+                TieBreakReason = snapshot.TieBreakReason,
+                EvaluationElapsedSec = snapshot.EvaluationElapsedSec,
+                Candidates = snapshot.Candidates.Values.Select(c => new StrategyCandidateRecord
+                {
+                    StrategyId = c.StrategyId,
+                    State = c.State.ToString(),
+                    StartedAt = c.StartedAt,
+                    CompletedAt = c.CompletedAt,
+                    ElapsedSec = c.ElapsedSec,
+                    Succeeded = c.Succeeded,
+                    FailureReason = c.FailureReason,
+                    TokensUsed = c.TokensUsed,
+                    AcScore = c.AcScore,
+                    DesignScore = c.DesignScore,
+                    ReadabilityScore = c.ReadabilityScore,
+                    Survived = c.Survived,
+                    JudgeSkippedReason = c.JudgeSkippedReason,
+                    ExecutionSummaryJson = c.ExecutionSummary is not null
+                        ? JsonSerializer.Serialize(c.ExecutionSummary, _jsonOpts) : null,
+                    ScreenshotBase64 = c.ScreenshotBase64,
+                }).ToList(),
+            };
+            _persistence.SaveStrategyTask(record);
+        }
+        catch
+        {
+            // Best-effort persistence — log failures are acceptable
+        }
+    }
+
+    private void HydrateFromSqlite()
+    {
+        if (_persistence is null) return;
+        try
+        {
+            var tasks = _persistence.LoadRecentStrategyTasks(_recentCapacity);
+            lock (_recentLock)
+            {
+                foreach (var task in tasks)
+                {
+                    var candidates = task.Candidates.ToImmutableDictionary(
+                        c => c.StrategyId,
+                        c => new CandidateSnapshot
+                        {
+                            StrategyId = c.StrategyId,
+                            State = Enum.TryParse<CandidateState>(c.State, out var s) ? s : CandidateState.Completed,
+                            StartedAt = c.StartedAt,
+                            CompletedAt = c.CompletedAt,
+                            ElapsedSec = c.ElapsedSec,
+                            Succeeded = c.Succeeded,
+                            FailureReason = c.FailureReason,
+                            TokensUsed = c.TokensUsed,
+                            AcScore = c.AcScore,
+                            DesignScore = c.DesignScore,
+                            ReadabilityScore = c.ReadabilityScore,
+                            Survived = c.Survived,
+                            JudgeSkippedReason = c.JudgeSkippedReason,
+                            ExecutionSummary = c.ExecutionSummaryJson is not null
+                                ? JsonSerializer.Deserialize<CandidateExecutionSummary>(c.ExecutionSummaryJson, _jsonOpts) : null,
+                            ScreenshotBase64 = c.ScreenshotBase64,
+                        });
+
+                    var snapshot = new TaskSnapshot
+                    {
+                        RunId = task.RunId,
+                        TaskId = task.TaskId,
+                        StartedAt = task.StartedAt,
+                        CompletedAt = task.CompletedAt,
+                        Candidates = candidates,
+                        WinnerStrategyId = task.WinnerStrategyId,
+                        TieBreakReason = task.TieBreakReason,
+                        EvaluationElapsedSec = task.EvaluationElapsedSec,
+                    };
+                    _recent.AddLast(snapshot);
+                }
+            }
+        }
+        catch
+        {
+            // Best-effort hydration — start fresh if DB is corrupted
         }
     }
 }

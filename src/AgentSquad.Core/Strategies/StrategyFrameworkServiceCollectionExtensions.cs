@@ -6,6 +6,7 @@ using AgentSquad.Core.Agents.Steps;
 using AgentSquad.Core.Configuration;
 using AgentSquad.Core.Frameworks;
 using AgentSquad.Core.Mcp;
+using AgentSquad.Core.Persistence;
 
 namespace AgentSquad.Core.Strategies;
 
@@ -75,7 +76,8 @@ public static class StrategyFrameworkServiceCollectionExtensions
         // Phase 4: live candidate state tracking (for the dashboard /strategies page).
         // Store is always registered; the Runner adds the IStrategyBroadcaster implementation
         // and swaps IStrategyEventSink to StrategyEventBroadcaster via an explicit call.
-        services.AddSingleton<CandidateStateStore>(_ => new CandidateStateStore());
+        services.AddSingleton<CandidateStateStore>(sp =>
+            new CandidateStateStore(sp.GetService<AgentStateStore>()));
 
         return services;
     }

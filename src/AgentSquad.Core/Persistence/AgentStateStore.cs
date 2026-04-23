@@ -44,6 +44,39 @@ public record ProcessedItem(
     string ItemType,
     string ItemId);
 
+/// <summary>Flat DTO for persisting a completed strategy task to SQLite.</summary>
+public class StrategyTaskRecord
+{
+    public required string RunId { get; init; }
+    public required string TaskId { get; init; }
+    public required DateTimeOffset StartedAt { get; init; }
+    public DateTimeOffset? CompletedAt { get; init; }
+    public string? WinnerStrategyId { get; init; }
+    public string? TieBreakReason { get; init; }
+    public double? EvaluationElapsedSec { get; init; }
+    public List<StrategyCandidateRecord> Candidates { get; set; } = new();
+}
+
+/// <summary>Flat DTO for persisting a strategy candidate to SQLite.</summary>
+public class StrategyCandidateRecord
+{
+    public required string StrategyId { get; init; }
+    public required string State { get; init; }
+    public DateTimeOffset? StartedAt { get; init; }
+    public DateTimeOffset? CompletedAt { get; init; }
+    public double? ElapsedSec { get; init; }
+    public bool? Succeeded { get; init; }
+    public string? FailureReason { get; init; }
+    public long? TokensUsed { get; init; }
+    public int? AcScore { get; init; }
+    public int? DesignScore { get; init; }
+    public int? ReadabilityScore { get; init; }
+    public bool? Survived { get; init; }
+    public string? JudgeSkippedReason { get; init; }
+    public string? ExecutionSummaryJson { get; init; }
+    public string? ScreenshotBase64 { get; init; }
+}
+
 /// <summary>
 /// SQLite-based persistence for agent state recovery, activity logging, and metrics.
 /// </summary>
@@ -193,6 +226,38 @@ public class AgentStateStore : IDisposable
                 started_at        DATETIME,
                 completed_at      DATETIME,
                 run_id            TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS strategy_tasks (
+                run_id               TEXT NOT NULL,
+                task_id              TEXT NOT NULL,
+                started_at           TEXT NOT NULL,
+                completed_at         TEXT,
+                winner_strategy_id   TEXT,
+                tie_break_reason     TEXT,
+                evaluation_elapsed_sec REAL,
+                PRIMARY KEY (run_id, task_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS strategy_candidates (
+                run_id             TEXT NOT NULL,
+                task_id            TEXT NOT NULL,
+                strategy_id        TEXT NOT NULL,
+                state              TEXT NOT NULL,
+                started_at         TEXT,
+                completed_at       TEXT,
+                elapsed_sec        REAL,
+                succeeded          INTEGER,
+                failure_reason     TEXT,
+                tokens_used        INTEGER,
+                ac_score           INTEGER,
+                design_score       INTEGER,
+                readability_score  INTEGER,
+                survived           INTEGER,
+                judge_skipped_reason TEXT,
+                execution_summary_json TEXT,
+                screenshot_base64  TEXT,
+                PRIMARY KEY (run_id, task_id, strategy_id)
             );
             """;
         cmd.ExecuteNonQuery();
@@ -1198,6 +1263,160 @@ public class AgentStateStore : IDisposable
         CompletedAt = reader.IsDBNull(11) ? null : reader.GetDateTime(11),
         RunId = reader.IsDBNull(12) ? null : reader.GetString(12)
     };
+
+    // ── Strategy / Framework result persistence ──────────────────────────
+
+    /// <summary>
+    /// Persist a completed strategy task and all its candidates (including screenshots) to SQLite.
+    /// Called when a task moves from active → recent in CandidateStateStore.
+    /// </summary>
+    public void SaveStrategyTask(StrategyTaskRecord task)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        using var tx = _connection.BeginTransaction();
+        try
+        {
+            using var taskCmd = _connection.CreateCommand();
+            taskCmd.Transaction = tx;
+            taskCmd.CommandText = """
+                INSERT OR REPLACE INTO strategy_tasks
+                    (run_id, task_id, started_at, completed_at, winner_strategy_id, tie_break_reason, evaluation_elapsed_sec)
+                VALUES
+                    ($run_id, $task_id, $started_at, $completed_at, $winner, $tiebreak, $eval_sec)
+                """;
+            taskCmd.Parameters.AddWithValue("$run_id", task.RunId);
+            taskCmd.Parameters.AddWithValue("$task_id", task.TaskId);
+            taskCmd.Parameters.AddWithValue("$started_at", task.StartedAt.ToString("o"));
+            taskCmd.Parameters.AddWithValue("$completed_at", task.CompletedAt?.ToString("o") ?? (object)DBNull.Value);
+            taskCmd.Parameters.AddWithValue("$winner", task.WinnerStrategyId ?? (object)DBNull.Value);
+            taskCmd.Parameters.AddWithValue("$tiebreak", task.TieBreakReason ?? (object)DBNull.Value);
+            taskCmd.Parameters.AddWithValue("$eval_sec", task.EvaluationElapsedSec ?? (object)DBNull.Value);
+            taskCmd.ExecuteNonQuery();
+
+            foreach (var c in task.Candidates)
+            {
+                using var cCmd = _connection.CreateCommand();
+                cCmd.Transaction = tx;
+                cCmd.CommandText = """
+                    INSERT OR REPLACE INTO strategy_candidates
+                        (run_id, task_id, strategy_id, state, started_at, completed_at,
+                         elapsed_sec, succeeded, failure_reason, tokens_used,
+                         ac_score, design_score, readability_score, survived,
+                         judge_skipped_reason, execution_summary_json, screenshot_base64)
+                    VALUES
+                        ($run_id, $task_id, $strategy_id, $state, $started_at, $completed_at,
+                         $elapsed_sec, $succeeded, $failure_reason, $tokens_used,
+                         $ac_score, $design_score, $readability_score, $survived,
+                         $judge_skipped, $summary_json, $screenshot)
+                    """;
+                cCmd.Parameters.AddWithValue("$run_id", task.RunId);
+                cCmd.Parameters.AddWithValue("$task_id", task.TaskId);
+                cCmd.Parameters.AddWithValue("$strategy_id", c.StrategyId);
+                cCmd.Parameters.AddWithValue("$state", c.State);
+                cCmd.Parameters.AddWithValue("$started_at", c.StartedAt?.ToString("o") ?? (object)DBNull.Value);
+                cCmd.Parameters.AddWithValue("$completed_at", c.CompletedAt?.ToString("o") ?? (object)DBNull.Value);
+                cCmd.Parameters.AddWithValue("$elapsed_sec", c.ElapsedSec ?? (object)DBNull.Value);
+                cCmd.Parameters.AddWithValue("$succeeded", c.Succeeded.HasValue ? (c.Succeeded.Value ? 1 : 0) : DBNull.Value);
+                cCmd.Parameters.AddWithValue("$failure_reason", c.FailureReason ?? (object)DBNull.Value);
+                cCmd.Parameters.AddWithValue("$tokens_used", c.TokensUsed ?? (object)DBNull.Value);
+                cCmd.Parameters.AddWithValue("$ac_score", c.AcScore ?? (object)DBNull.Value);
+                cCmd.Parameters.AddWithValue("$design_score", c.DesignScore ?? (object)DBNull.Value);
+                cCmd.Parameters.AddWithValue("$readability_score", c.ReadabilityScore ?? (object)DBNull.Value);
+                cCmd.Parameters.AddWithValue("$survived", c.Survived.HasValue ? (c.Survived.Value ? 1 : 0) : DBNull.Value);
+                cCmd.Parameters.AddWithValue("$judge_skipped", c.JudgeSkippedReason ?? (object)DBNull.Value);
+                cCmd.Parameters.AddWithValue("$summary_json", c.ExecutionSummaryJson ?? (object)DBNull.Value);
+                cCmd.Parameters.AddWithValue("$screenshot", c.ScreenshotBase64 ?? (object)DBNull.Value);
+                cCmd.ExecuteNonQuery();
+            }
+            tx.Commit();
+        }
+        catch
+        {
+            tx.Rollback();
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Load completed strategy tasks from SQLite, most recent first.
+    /// Used by CandidateStateStore to hydrate on startup.
+    /// </summary>
+    public List<StrategyTaskRecord> LoadRecentStrategyTasks(int limit = 100)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        var tasks = new List<StrategyTaskRecord>();
+
+        using var taskCmd = _connection.CreateCommand();
+        taskCmd.CommandText = """
+            SELECT run_id, task_id, started_at, completed_at, winner_strategy_id,
+                   tie_break_reason, evaluation_elapsed_sec
+            FROM strategy_tasks
+            ORDER BY completed_at DESC, started_at DESC
+            LIMIT $limit
+            """;
+        taskCmd.Parameters.AddWithValue("$limit", limit);
+
+        using var taskReader = taskCmd.ExecuteReader();
+        while (taskReader.Read())
+        {
+            var runId = taskReader.GetString(0);
+            var taskId = taskReader.GetString(1);
+
+            var task = new StrategyTaskRecord
+            {
+                RunId = runId,
+                TaskId = taskId,
+                StartedAt = DateTimeOffset.Parse(taskReader.GetString(2)),
+                CompletedAt = taskReader.IsDBNull(3) ? null : DateTimeOffset.Parse(taskReader.GetString(3)),
+                WinnerStrategyId = taskReader.IsDBNull(4) ? null : taskReader.GetString(4),
+                TieBreakReason = taskReader.IsDBNull(5) ? null : taskReader.GetString(5),
+                EvaluationElapsedSec = taskReader.IsDBNull(6) ? null : taskReader.GetDouble(6),
+                Candidates = new List<StrategyCandidateRecord>(),
+            };
+            tasks.Add(task);
+        }
+
+        // Load candidates for each task
+        foreach (var task in tasks)
+        {
+            using var cCmd = _connection.CreateCommand();
+            cCmd.CommandText = """
+                SELECT strategy_id, state, started_at, completed_at, elapsed_sec,
+                       succeeded, failure_reason, tokens_used,
+                       ac_score, design_score, readability_score, survived,
+                       judge_skipped_reason, execution_summary_json, screenshot_base64
+                FROM strategy_candidates
+                WHERE run_id = $run_id AND task_id = $task_id
+                """;
+            cCmd.Parameters.AddWithValue("$run_id", task.RunId);
+            cCmd.Parameters.AddWithValue("$task_id", task.TaskId);
+
+            using var cReader = cCmd.ExecuteReader();
+            while (cReader.Read())
+            {
+                task.Candidates.Add(new StrategyCandidateRecord
+                {
+                    StrategyId = cReader.GetString(0),
+                    State = cReader.GetString(1),
+                    StartedAt = cReader.IsDBNull(2) ? null : DateTimeOffset.Parse(cReader.GetString(2)),
+                    CompletedAt = cReader.IsDBNull(3) ? null : DateTimeOffset.Parse(cReader.GetString(3)),
+                    ElapsedSec = cReader.IsDBNull(4) ? null : cReader.GetDouble(4),
+                    Succeeded = cReader.IsDBNull(5) ? null : cReader.GetInt32(5) == 1,
+                    FailureReason = cReader.IsDBNull(6) ? null : cReader.GetString(6),
+                    TokensUsed = cReader.IsDBNull(7) ? null : cReader.GetInt64(7),
+                    AcScore = cReader.IsDBNull(8) ? null : cReader.GetInt32(8),
+                    DesignScore = cReader.IsDBNull(9) ? null : cReader.GetInt32(9),
+                    ReadabilityScore = cReader.IsDBNull(10) ? null : cReader.GetInt32(10),
+                    Survived = cReader.IsDBNull(11) ? null : cReader.GetInt32(11) == 1,
+                    JudgeSkippedReason = cReader.IsDBNull(12) ? null : cReader.GetString(12),
+                    ExecutionSummaryJson = cReader.IsDBNull(13) ? null : cReader.GetString(13),
+                    ScreenshotBase64 = cReader.IsDBNull(14) ? null : cReader.GetString(14),
+                });
+            }
+        }
+
+        return tasks;
+    }
 
     public void Dispose()
     {

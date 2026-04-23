@@ -57,7 +57,7 @@
                         <span class="task-id">@task.TaskId</span>
                         <span class="task-run">run @task.RunId</span>
                     </div>
-                    <div class="task-elapsed">@FormatElapsed(task.StartedAt)</div>
+                    <div class="task-elapsed">@FormatTaskElapsed(task)</div>
                 </div>
                 <div class="candidate-grid">
                     @foreach (var candidate in task.Candidates.Values.OrderBy(c => c.StrategyId))
@@ -71,7 +71,7 @@
                             </div>
                             @if (candidate.ElapsedSec is double e)
                             {
-                                <div class="candidate-timing">@e.ToString("0.0")s @(candidate.TokensUsed.HasValue ? $"· {candidate.TokensUsed} tok" : "· tokens n/a")</div>
+                                <div class="candidate-timing">@FormatDuration(e) @(candidate.TokensUsed.HasValue ? $"· {candidate.TokensUsed} tok" : "· tokens n/a")</div>
                             }
                             @if (candidate.State == CandidateState.Running && candidate.ActivityLog.Count > 0)
                             {
@@ -144,8 +144,8 @@
                         </td>
                         <td>@string.Join(", ", task.Candidates.Keys)</td>
                         <td class="muted">@task.TieBreakReason</td>
-                        <td>@(task.EvaluationElapsedSec?.ToString("0.0") ?? "-")s</td>
-                        <td>@(task.CompletedAt?.ToLocalTime().ToString("HH:mm:ss") ?? "-")</td>
+                        <td>@(task.EvaluationElapsedSec.HasValue ? FormatDuration(task.EvaluationElapsedSec.Value) : "-")</td>
+                        <td>@(task.CompletedAt?.ToLocalTime().ToString("M/d h:mm tt") ?? "-")</td>
                     </tr>
                     @if (isExpanded)
                     {
@@ -276,7 +276,7 @@
                                                     <div class="cd-metrics">
                                                         @if (candidate.ElapsedSec.HasValue)
                                                         {
-                                                            <span class="cd-metric">⏱ @(candidate.ElapsedSec.Value.ToString("0.1"))s</span>
+                                                            <span class="cd-metric">⏱ @FormatDuration(candidate.ElapsedSec.Value)</span>
                                                         }
                                                         @if (candidate.TokensUsed.HasValue)
                                                         {
@@ -301,8 +301,16 @@
                                                     @if (!string.IsNullOrEmpty(candidate.ScreenshotBase64))
                                                     {
                                                         <div class="cd-screenshot">
+                                                            <div class="cd-screenshot-label">Preview Screenshot (click to enlarge)</div>
+                                                            <img src="data:image/png;base64,@candidate.ScreenshotBase64" alt="@candidate.StrategyId preview" class="cd-screenshot-img"
+                                                                 @onclick="() => OpenLightbox(candidate.ScreenshotBase64, candidate.StrategyId)" />
+                                                        </div>
+                                                    }
+                                                    else if (candidate.State >= CandidateState.Evaluated)
+                                                    {
+                                                        <div class="cd-screenshot">
                                                             <div class="cd-screenshot-label">Preview Screenshot</div>
-                                                            <img src="data:image/png;base64,@candidate.ScreenshotBase64" alt="@candidate.StrategyId preview" class="cd-screenshot-img" />
+                                                            <div class="cd-no-screenshot">📷 No screenshot captured — app may not have started, or Playwright browser is not installed</div>
                                                         </div>
                                                     }
                                                 }
@@ -314,7 +322,7 @@
                                                             @foreach (var entry in candidate.ActivityLog.Reverse())
                                                             {
                                                                 <div class="cd-activity-entry">
-                                                                    <span class="cd-activity-time">@entry.Timestamp.ToLocalTime().ToString("HH:mm:ss")</span>
+                                                                    <span class="cd-activity-time">@entry.Timestamp.ToLocalTime().ToString("h:mm:ss tt")</span>
                                                                     <span class="cd-activity-cat cd-activity-cat-@entry.Category">@entry.Category</span>
                                                                     <span class="cd-activity-msg">@entry.Message</span>
                                                                 </div>
@@ -427,6 +435,20 @@
         </table>
     }
 </section>
+
+@* Screenshot lightbox modal *@
+@if (_lightboxImage is not null)
+{
+    <div class="lightbox-overlay" @onclick="CloseLightbox">
+        <div class="lightbox-content" @onclick:stopPropagation="true">
+            <div class="lightbox-header">
+                <span class="lightbox-title">@_lightboxTitle</span>
+                <button class="lightbox-close" @onclick="CloseLightbox">✕</button>
+            </div>
+            <img src="data:image/png;base64,@_lightboxImage" alt="@_lightboxTitle" class="lightbox-img" />
+        </div>
+    </div>
+}
 
 <style>
     .strategies-section { margin: 1.5rem 0; }
@@ -574,6 +596,18 @@
 
     /* Empty tab */
     .cd-empty-tab { opacity: .4; font-style: italic; font-size: .85em; padding: .5rem 0; }
+
+    /* No screenshot placeholder */
+    .cd-no-screenshot { font-size: .8em; opacity: .5; font-style: italic; padding: .5rem; background: rgba(255,255,255,.03); border-radius: 4px; border: 1px dashed var(--border, #2d3240); }
+
+    /* Lightbox modal */
+    .lightbox-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,.85); z-index: 10000; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+    .lightbox-content { max-width: 90vw; max-height: 90vh; display: flex; flex-direction: column; cursor: default; }
+    .lightbox-header { display: flex; justify-content: space-between; align-items: center; padding: .5rem .75rem; background: rgba(30,34,42,.95); border-radius: 6px 6px 0 0; }
+    .lightbox-title { font-size: .85em; font-weight: 600; opacity: .8; }
+    .lightbox-close { background: none; border: none; color: #fff; font-size: 1.2rem; cursor: pointer; opacity: .7; padding: .2rem .5rem; }
+    .lightbox-close:hover { opacity: 1; }
+    .lightbox-img { max-width: 90vw; max-height: calc(90vh - 3rem); object-fit: contain; border-radius: 0 0 6px 6px; border: 1px solid var(--border, #2d3240); }
 </style>
 
 @code {
@@ -584,6 +618,20 @@
     private bool _refreshing;
     private readonly HashSet<string> _expandedTasks = new();
     private readonly Dictionary<string, string> _activeTabs = new();
+    private string? _lightboxImage;
+    private string? _lightboxTitle;
+
+    private void OpenLightbox(string base64, string title)
+    {
+        _lightboxImage = base64;
+        _lightboxTitle = title;
+    }
+
+    private void CloseLightbox()
+    {
+        _lightboxImage = null;
+        _lightboxTitle = null;
+    }
 
     private void ToggleExpand(string taskId)
     {
@@ -653,12 +701,32 @@
         }
     }
 
+    private static string FormatTaskElapsed(TaskSnapshot task)
+    {
+        // For completed tasks, show actual execution duration (not wall-clock since start)
+        if (task.CompletedAt is DateTimeOffset completed)
+        {
+            var d = completed - task.StartedAt;
+            return FormatDuration(d.TotalSeconds);
+        }
+        // For running tasks, show live wall-clock
+        return FormatElapsed(task.StartedAt);
+    }
+
     private static string FormatElapsed(DateTimeOffset startedAt)
     {
         var d = DateTimeOffset.UtcNow - startedAt;
         if (d.TotalSeconds < 60) return $"{d.TotalSeconds:0}s";
         if (d.TotalMinutes < 60) return $"{(int)d.TotalMinutes}m {d.Seconds}s";
         return $"{(int)d.TotalHours}h {d.Minutes}m";
+    }
+
+    private static string FormatDuration(double totalSeconds)
+    {
+        if (totalSeconds < 60) return $"{totalSeconds:0.0}s";
+        var ts = TimeSpan.FromSeconds(totalSeconds);
+        if (ts.TotalMinutes < 60) return $"{(int)ts.TotalMinutes}m {ts.Seconds}s";
+        return $"{(int)ts.TotalHours}h {ts.Minutes}m {ts.Seconds}s";
     }
 
     private static string FileTypeIcon(string type) => type switch
