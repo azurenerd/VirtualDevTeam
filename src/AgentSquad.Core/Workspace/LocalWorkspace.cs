@@ -64,7 +64,7 @@ public class LocalWorkspace
                 await RunGitAsync("reset", "--hard", "HEAD", ct: ct, throwOnError: false);
                 await RunGitAsync("checkout", _defaultBranch, ct: ct);
                 await RunGitAsync("reset", "--hard", $"origin/{_defaultBranch}", ct: ct);
-                await RunGitAsync("clean", "-fd", ct: ct);
+                await RunGitCoreAsync(["clean", "-fd", "-e", ".candidates"], workDir: null, throwOnError: false, ct);
             }
             else
             {
@@ -665,7 +665,8 @@ public class LocalWorkspace
             // entries left behind by `git apply --3way`. The prior form left a poisoned
             // index that wedged the next checkout with "resolve your current index first".
             await RunGitAsync("reset", "--hard", "HEAD", ct: ct);
-            await RunGitAsync("clean", "-fd", ct: ct);
+            // Exclude .candidates (strategy worktrees may leave locked files)
+            await RunGitCoreAsync(["clean", "-fd", "-e", ".candidates"], workDir: null, throwOnError: false, ct);
             _logger.LogInformation("[{Agent}] Reverted all uncommitted changes", _agentId);
         }
         finally
