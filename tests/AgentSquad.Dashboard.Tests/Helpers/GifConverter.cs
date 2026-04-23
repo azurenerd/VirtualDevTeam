@@ -6,23 +6,17 @@ namespace AgentSquad.Dashboard.Tests.Helpers;
 
 /// <summary>
 /// Converts WebM video files to optimized animated GIFs using FFmpeg two-pass pipeline.
-/// Pass 1: Generate optimal color palette from video frames.
-/// Pass 2: Encode GIF using the palette for high quality at small file size.
+/// Uses pixel-based detection to find the first non-white frame (when content actually renders)
+/// and trims leading blank/loading frames automatically.
 /// </summary>
 public static class GifConverter
 {
     private static readonly string FfmpegPath = FindFfmpeg();
 
     /// <summary>
-    /// Convert a WebM video to an animated GIF.
+    /// Convert a WebM video to an animated GIF, auto-trimming leading white frames
+    /// by detecting when actual content first renders (pixel-based, not time-based).
     /// </summary>
-    /// <param name="webmPath">Path to the source .webm file.</param>
-    /// <param name="gifPath">Path for the output .gif file.</param>
-    /// <param name="fps">Frames per second (lower = smaller file). Default 4.</param>
-    /// <param name="maxWidth">Max width in pixels. Default 1280.</param>
-    /// <param name="trimStartSeconds">Desired seconds to skip from start. Auto-capped to safe range.</param>
-    /// <param name="ct">Cancellation token.</param>
-    /// <returns>True if conversion succeeded.</returns>
     public static async Task<bool> ConvertAsync(
         string webmPath,
         string gifPath,
@@ -34,9 +28,8 @@ public static class GifConverter
         if (!File.Exists(webmPath))
             return false;
 
-        // Probe video duration to calculate safe trim
-        var duration = await ProbeDurationAsync(webmPath, ct);
-        var safeTrim = CalculateSafeTrim(trimStartSeconds, duration);
+        // Detect when content first appears using pixel analysis
+        var contentStart = await DetectContentStartAsync(webmPath, ct);
 
         var palettePath = Path.Combine(
             Path.GetDirectoryName(gifPath)!,
@@ -44,20 +37,23 @@ public static class GifConverter
 
         try
         {
-            var filters = $"fps={fps},scale={maxWidth}:-1:flags=lanczos";
-            // Use -ss BEFORE -i for fast seek (keyframe-based, reliable with filter chains)
-            var seekArg = safeTrim > 0.1 ? $"-ss {safeTrim:F2} " : "";
+            // Use trim filter (frame-accurate) instead of -ss (keyframe-based),
+            // because WebM files typically have only one keyframe at frame 0.
+            var trimFilter = contentStart > 0.1
+                ? $"trim=start={contentStart:F2},setpts=PTS-STARTPTS,"
+                : "";
+            var filters = $"{trimFilter}fps={fps},scale={maxWidth}:-1:flags=lanczos";
 
             // Pass 1: Generate palette
             var pass1 = await RunFfmpegAsync(
-                $"{seekArg}-i \"{webmPath}\" -vf \"{filters},palettegen=stats_mode=diff\" -y \"{palettePath}\"",
+                $"-i \"{webmPath}\" -vf \"{filters},palettegen=stats_mode=diff\" -y \"{palettePath}\"",
                 ct);
             if (!pass1)
                 return false;
 
             // Pass 2: Encode GIF with palette
             var pass2 = await RunFfmpegAsync(
-                $"{seekArg}-i \"{webmPath}\" -i \"{palettePath}\" -filter_complex \"{filters}[x];[x][1:v]paletteuse=dither=bayer:bayer_scale=5\" -y \"{gifPath}\"",
+                $"-i \"{webmPath}\" -i \"{palettePath}\" -filter_complex \"{filters}[x];[x][1:v]paletteuse=dither=bayer:bayer_scale=5\" -y \"{gifPath}\"",
                 ct);
             return pass2;
         }
@@ -67,20 +63,92 @@ public static class GifConverter
         }
     }
 
+    /// <summary>
+    /// Trim leading white/loading frames from a WebM video in-place.
+    /// Uses pixel-based detection to find where content starts.
+    /// </summary>
+    public static async Task<string> TrimVideoAsync(
+        string webmPath,
+        double trimStartSeconds = 0,
+        CancellationToken ct = default)
+    {
+        if (!File.Exists(webmPath) || !IsAvailable)
+            return webmPath;
+
+        var contentStart = await DetectContentStartAsync(webmPath, ct);
+        if (contentStart < 0.1) return webmPath;
+
+        var trimmedPath = Path.Combine(
+            Path.GetDirectoryName(webmPath)!,
+            Path.GetFileNameWithoutExtension(webmPath) + "-trimmed.webm");
+
+        // Use trim filter (frame-accurate on decoded frames) instead of -ss
+        // which is keyframe-based and may land before content start.
+        var ok = await RunFfmpegAsync(
+            $"-i \"{webmPath}\" -vf \"trim=start={contentStart:F2},setpts=PTS-STARTPTS\" -y \"{trimmedPath}\"",
+            ct);
+
+        if (ok && File.Exists(trimmedPath) && new FileInfo(trimmedPath).Length > 1000)
+        {
+            File.Delete(webmPath);
+            File.Move(trimmedPath, webmPath);
+            return webmPath;
+        }
+
+        try { if (File.Exists(trimmedPath)) File.Delete(trimmedPath); } catch { }
+        return webmPath;
+    }
+
     public static bool IsAvailable => File.Exists(FfmpegPath);
 
-    /// <summary>Calculate a safe trim that won't over-trim short videos.</summary>
-    private static double CalculateSafeTrim(double requested, double? videoDuration)
+    /// <summary>
+    /// Detect when content first renders by comparing per-frame average luminance (YAVG)
+    /// against the first frame's baseline. When YAVG changes significantly from the initial
+    /// value, content has started rendering. Works for any color scheme — dark, light, or colorful.
+    /// Samples at 4fps for precision, returns the timestamp of the first changed frame.
+    /// </summary>
+    private static async Task<double> DetectContentStartAsync(string webmPath, CancellationToken ct)
     {
-        if (requested <= 0.1) return 0;
-        if (videoDuration is null || videoDuration <= 0) return 0;
+        var psi = new ProcessStartInfo
+        {
+            FileName = FfmpegPath,
+            Arguments = $"-i \"{webmPath}\" -vf \"fps=4,signalstats,metadata=print:key=lavfi.signalstats.YAVG\" -f null -",
+            UseShellExecute = false,
+            RedirectStandardError = true,
+            RedirectStandardOutput = true,
+            CreateNoWindow = true,
+        };
 
-        // Don't trim videos shorter than 4 seconds
-        if (videoDuration < 4.0) return 0;
+        using var process = new Process { StartInfo = psi };
+        process.Start();
+        var stderr = await process.StandardError.ReadToEndAsync(ct);
+        try { await process.WaitForExitAsync(ct); } catch { }
 
-        // Cap trim to 30% of video duration or requested, whichever is smaller
-        var maxTrim = videoDuration.Value * 0.3;
-        return Math.Min(requested, Math.Min(maxTrim, 3.0)); // Also hard cap at 3s
+        // Parse YAVG values — each corresponds to a frame at 2fps (0.5s intervals)
+        var matches = Regex.Matches(stderr, @"lavfi\.signalstats\.YAVG=([0-9.]+)");
+        if (matches.Count < 2) return 0;
+
+        // Use the first frame as the baseline (the loading/blank state)
+        if (!double.TryParse(matches[0].Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var baseline))
+            return 0;
+
+        // Find the first frame that differs significantly from the baseline
+        const double changeThreshold = 15.0; // YAVG must shift by at least 15 points
+        for (int i = 1; i < matches.Count; i++)
+        {
+            if (double.TryParse(matches[i].Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var yavg))
+            {
+                if (Math.Abs(yavg - baseline) > changeThreshold)
+                {
+                    // Content detected. Subtract 0.1s buffer so the first
+                    // content frame is fully included after seek.
+                    var contentTime = i * 0.25; // 4fps = 0.25s per frame
+                    return Math.Max(0, contentTime - 0.1);
+                }
+            }
+        }
+
+        return 0; // No change detected — don't trim
     }
 
     /// <summary>Probe video duration using FFmpeg stderr output.</summary>
@@ -101,7 +169,6 @@ public static class GifConverter
         var stderr = await process.StandardError.ReadToEndAsync(ct);
         try { await process.WaitForExitAsync(ct); } catch { }
 
-        // Parse "Duration: HH:MM:SS.xx" from stderr
         var match = Regex.Match(stderr, @"Duration:\s*(\d+):(\d+):(\d+)\.(\d+)");
         if (!match.Success) return null;
 
@@ -127,7 +194,6 @@ public static class GifConverter
         using var process = new Process { StartInfo = psi };
         process.Start();
 
-        // Drain stderr (FFmpeg writes progress there)
         var stderrTask = process.StandardError.ReadToEndAsync(ct);
 
         try
@@ -140,13 +206,12 @@ public static class GifConverter
             throw;
         }
 
-        await stderrTask; // just drain it
+        await stderrTask;
         return process.ExitCode == 0;
     }
 
     private static string FindFfmpeg()
     {
-        // Check common locations
         var candidates = new[]
         {
             @"C:\Tools\ffmpeg\bin\ffmpeg.exe",
@@ -157,7 +222,6 @@ public static class GifConverter
             if (File.Exists(c))
                 return c;
 
-        // Fall back to PATH
         return "ffmpeg";
     }
 }

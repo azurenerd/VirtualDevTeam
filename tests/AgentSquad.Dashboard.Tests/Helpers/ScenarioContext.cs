@@ -91,14 +91,15 @@ public sealed class ScenarioContext : IAsyncDisposable
                 $"{ScenarioId}.webm");
             File.Move(webmFiles[0], videoPath, overwrite: true);
 
-            // Convert to GIF (trim leading white frames using readiness timestamp)
+            // Convert to GIF (pixel-based auto-trim of leading white frames)
             if (GifConverter.IsAvailable)
             {
                 gifPath = Path.Combine(_gifDir, $"{ScenarioId}.gif");
-                // Trim from 300ms before the first ready timestamp (or 0 if never set)
-                var trimSeconds = _readyAtSeconds > 0.3 ? _readyAtSeconds - 0.3 : 0;
-                var converted = await GifConverter.ConvertAsync(videoPath, gifPath, trimStartSeconds: trimSeconds);
+                var converted = await GifConverter.ConvertAsync(videoPath, gifPath);
                 if (!converted) gifPath = null;
+
+                // Also trim the WebM video so thumbnails show content
+                await GifConverter.TrimVideoAsync(videoPath);
             }
         }
 
