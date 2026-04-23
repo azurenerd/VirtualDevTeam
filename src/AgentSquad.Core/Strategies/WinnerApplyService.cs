@@ -22,24 +22,39 @@ public class WinnerApplyService
         if (string.IsNullOrEmpty(patch))
             return new ApplyOutcome(false, "empty-patch", null);
 
-        // 1. Confirm branch current head hasn't advanced past expectedBaseSha
+        // 1. Check branch head vs expected base. If they differ, log but proceed —
+        // common cause is a task-marker commit pushed between worktree creation and apply.
+        // The --3way apply handles small context shifts; only a truly diverged branch
+        // (concurrent modifications) would fail at the apply step itself.
         var currentHead = (await RunGitCaptureAsync(agentRepoPath, new[] { "rev-parse", branchName }, ct)).Trim();
         if (!string.Equals(currentHead, expectedBaseSha, StringComparison.OrdinalIgnoreCase))
         {
-            _logger.LogWarning(
-                "Head mismatch for {Branch}: expected {Expected} but is {Actual} — refusing apply",
-                branchName, expectedBaseSha, currentHead);
-            return new ApplyOutcome(false, "head-changed", currentHead);
+            // Check if expectedBase is an ancestor of currentHead (safe — just our own marker commits)
+            var isAncestor = await TryRunGitAsync(agentRepoPath,
+                new[] { "merge-base", "--is-ancestor", expectedBaseSha, currentHead }, ct);
+            if (isAncestor.ok)
+            {
+                _logger.LogInformation(
+                    "Head advanced for {Branch}: {Expected} → {Actual} (ancestor — safe to apply)",
+                    branchName, expectedBaseSha, currentHead);
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "Head diverged for {Branch}: expected {Expected} but is {Actual} — refusing apply",
+                    branchName, expectedBaseSha, currentHead);
+                return new ApplyOutcome(false, "head-changed", currentHead);
+            }
         }
 
         // 2. Checkout branch in main working tree, after a hard reset so that any
         // pre-existing dirty state (stale merge markers, orphaned apply residue,
         // prior strategy-framework failure) can't poison the 3-way apply.
         await TryRunGitAsync(agentRepoPath, new[] { "reset", "--hard", "HEAD" }, ct);
-        await TryRunGitAsync(agentRepoPath, new[] { "clean", "-fd" }, ct);
+        await TryRunGitAsync(agentRepoPath, new[] { "clean", "-fd", "-e", ".candidates" }, ct);
         await RunGitCaptureAsync(agentRepoPath, new[] { "checkout", branchName }, ct);
         await TryRunGitAsync(agentRepoPath, new[] { "reset", "--hard", branchName }, ct);
-        await TryRunGitAsync(agentRepoPath, new[] { "clean", "-fd" }, ct);
+        await TryRunGitAsync(agentRepoPath, new[] { "clean", "-fd", "-e", ".candidates" }, ct);
 
         // 3. Write patch to a temp file and apply --3way --check, then apply
         var tmp = Path.Combine(Path.GetTempPath(), "sf-winner-" + Guid.NewGuid().ToString("N") + ".patch");
