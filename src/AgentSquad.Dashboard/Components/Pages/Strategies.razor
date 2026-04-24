@@ -63,7 +63,7 @@
                     <div class="task-elapsed" title="Time elapsed since task started">@FormatTaskElapsed(task)</div>
                 </div>
                 <div class="candidate-grid">
-                    @foreach (var candidate in task.Candidates.Values.OrderBy(c => c.StrategyId))
+                    @foreach (var candidate in task.Candidates.Values.OrderBy(c => c.StrategyId.Equals("baseline", StringComparison.OrdinalIgnoreCase) ? 1 : 0).ThenBy(c => c.StrategyId))
                     {
                         var activeKey = $"{task.TaskId}_{candidate.StrategyId}";
                         var isActiveExpanded = _expandedActiveCandidates.Contains(activeKey);
@@ -374,7 +374,7 @@
                         <tr class="detail-row">
                             <td colspan="7">
                                 <div class="candidate-detail-grid">
-                                    @foreach (var candidate in task.Candidates.Values.OrderByDescending(c => TotalScore(c)).ThenBy(c => c.StrategyId))
+                                    @foreach (var candidate in task.Candidates.Values.OrderByDescending(c => TotalScore(c)).ThenBy(c => c.StrategyId.Equals("baseline", StringComparison.OrdinalIgnoreCase) ? 1 : 0).ThenBy(c => c.StrategyId))
                                     {
                                         var isWinner = string.Equals(task.WinnerStrategyId, candidate.StrategyId, StringComparison.OrdinalIgnoreCase);
                                         <div class="candidate-detail-card @(isWinner ? "is-winner" : "") @(candidate.Succeeded == false ? "is-failed" : "")">
