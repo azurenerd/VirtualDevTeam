@@ -38,46 +38,54 @@ public class DevPlatformConfig
     public DevPlatformAuthMethod AuthMethod { get; set; } = DevPlatformAuthMethod.Pat;
 
     /// <summary>
-    /// Azure DevOps organization URL (e.g., "https://dev.azure.com/myorg").
-    /// Only used when Platform = AzureDevOps.
+    /// Azure DevOps-specific settings. Only used when Platform = AzureDevOps.
     /// </summary>
-    public string AdoOrganizationUrl { get; set; } = "";
-
-    /// <summary>
-    /// Azure DevOps project name.
-    /// Only used when Platform = AzureDevOps.
-    /// </summary>
-    public string AdoProject { get; set; } = "";
-
-    /// <summary>
-    /// Azure DevOps repository name.
-    /// Only used when Platform = AzureDevOps.
-    /// </summary>
-    public string AdoRepository { get; set; } = "";
-
-    /// <summary>
-    /// Azure AD tenant ID for bearer token auth (e.g., "72f988bf-86f1-41af-91ab-2d7cd011db47").
-    /// Only used when AuthMethod = AzureCliBearer.
-    /// </summary>
-    public string AzureTenantId { get; set; } = "";
-
-    /// <summary>
-    /// Default work item type for ADO (e.g., "Task", "Bug").
-    /// Only used when Platform = AzureDevOps.
-    /// </summary>
-    public string DefaultWorkItemType { get; set; } = "Task";
-
-    /// <summary>
-    /// Work item type for executive escalation items.
-    /// GitHub: Issue with "executive-request" label. ADO: User Story.
-    /// </summary>
-    public string ExecutiveWorkItemType { get; set; } = "User Story";
+    public AzureDevOpsConfig? AzureDevOps { get; set; }
 
     /// <summary>
     /// Configurable work item state mappings from AgentSquad internal states to platform states.
     /// Keys are AgentSquad states: "Open", "InProgress", "Blocked", "Resolved".
     /// Values are platform-specific states.
     /// When empty, defaults are used per platform.
+    /// </summary>
+    public Dictionary<string, string> StateMappings { get; set; } = new();
+}
+
+/// <summary>
+/// Azure DevOps-specific configuration.
+/// </summary>
+public class AzureDevOpsConfig
+{
+    /// <summary>ADO organization name (e.g., "myorg" for https://dev.azure.com/myorg).</summary>
+    public string Organization { get; set; } = "";
+
+    /// <summary>ADO project name.</summary>
+    public string Project { get; set; } = "";
+
+    /// <summary>ADO repository name.</summary>
+    public string Repository { get; set; } = "";
+
+    /// <summary>Personal Access Token for ADO. Used when AuthMethod = Pat.</summary>
+    public string Pat { get; set; } = "";
+
+    /// <summary>
+    /// Azure AD tenant ID for bearer token auth (e.g., "72f988bf-86f1-41af-91ab-2d7cd011db47").
+    /// Used when AuthMethod = AzureCliBearer.
+    /// </summary>
+    public string TenantId { get; set; } = "";
+
+    /// <summary>Default branch name. Defaults to "main".</summary>
+    public string? DefaultBranch { get; set; } = "main";
+
+    /// <summary>Default work item type for new items (e.g., "Task", "Bug").</summary>
+    public string DefaultWorkItemType { get; set; } = "Task";
+
+    /// <summary>Work item type for executive escalation items.</summary>
+    public string ExecutiveWorkItemType { get; set; } = "User Story";
+
+    /// <summary>
+    /// Configurable work item state mappings from AgentSquad internal states to ADO states.
+    /// Keys: "Open", "InProgress", "Blocked", "Resolved". Values: ADO states.
     /// </summary>
     public Dictionary<string, string> StateMappings { get; set; } = new();
 }

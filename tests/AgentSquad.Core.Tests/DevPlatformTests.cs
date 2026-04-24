@@ -246,7 +246,7 @@ public class DevPlatformTests
 
         Assert.Equal(DevPlatformType.GitHub, config.Platform);
         Assert.Equal(DevPlatformAuthMethod.Pat, config.AuthMethod);
-        Assert.Equal("Task", config.DefaultWorkItemType);
+        Assert.Null(config.AzureDevOps);
     }
 
     [Fact]
@@ -256,21 +256,24 @@ public class DevPlatformTests
         {
             Platform = DevPlatformType.AzureDevOps,
             AuthMethod = DevPlatformAuthMethod.AzureCliBearer,
-            AdoOrganizationUrl = "https://dev.azure.com/myorg",
-            AdoProject = "MyProject",
-            AdoRepository = "MyRepo",
-            AzureTenantId = "72f988bf-86f1-41af-91ab-2d7cd011db47",
-            StateMappings = new()
+            AzureDevOps = new AzureDevOpsConfig
             {
-                ["Open"] = "New",
-                ["InProgress"] = "Active",
-                ["Resolved"] = "Closed"
+                Organization = "myorg",
+                Project = "MyProject",
+                Repository = "MyRepo",
+                TenantId = "72f988bf-86f1-41af-91ab-2d7cd011db47",
+                StateMappings = new()
+                {
+                    ["Open"] = "New",
+                    ["InProgress"] = "Active",
+                    ["Resolved"] = "Closed"
+                }
             }
         };
 
         Assert.Equal(DevPlatformType.AzureDevOps, config.Platform);
-        Assert.Equal("https://dev.azure.com/myorg", config.AdoOrganizationUrl);
-        Assert.Equal(3, config.StateMappings.Count);
+        Assert.Equal("myorg", config.AzureDevOps!.Organization);
+        Assert.Equal(3, config.AzureDevOps.StateMappings.Count);
     }
 
     // ──────────────────── Platform Models ────────────────────
