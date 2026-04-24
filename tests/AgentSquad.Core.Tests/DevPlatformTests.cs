@@ -306,4 +306,104 @@ public class DevPlatformTests
         Assert.Equal("src/test.cs", fc.Path);
         Assert.Equal("// test", fc.Content);
     }
+
+    // ──────────────────── ADO Config ────────────────────
+
+    [Fact]
+    public void AzureDevOpsConfig_HasSensibleDefaults()
+    {
+        var config = new AzureDevOpsConfig();
+
+        Assert.Equal("", config.Organization);
+        Assert.Equal("", config.Project);
+        Assert.Equal("", config.Repository);
+        Assert.Equal("main", config.DefaultBranch);
+        Assert.Equal("Task", config.DefaultWorkItemType);
+        Assert.Equal("User Story", config.ExecutiveWorkItemType);
+        Assert.Empty(config.StateMappings);
+    }
+
+    [Fact]
+    public void DevPlatformConfig_StateMappings_CanBeConfigured()
+    {
+        var config = new DevPlatformConfig
+        {
+            StateMappings = new()
+            {
+                ["Open"] = "New",
+                ["InProgress"] = "Active",
+                ["Blocked"] = "Active",
+                ["Resolved"] = "Closed"
+            }
+        };
+
+        Assert.Equal(4, config.StateMappings.Count);
+        Assert.Equal("New", config.StateMappings["Open"]);
+        Assert.Equal("Closed", config.StateMappings["Resolved"]);
+    }
+
+    [Fact]
+    public void AzureDevOpsConfig_FullConfiguration_AllFieldsPersist()
+    {
+        var config = new DevPlatformConfig
+        {
+            Platform = DevPlatformType.AzureDevOps,
+            AuthMethod = DevPlatformAuthMethod.AzureCliBearer,
+            AzureDevOps = new AzureDevOpsConfig
+            {
+                Organization = "contoso",
+                Project = "ProjectX",
+                Repository = "main-repo",
+                TenantId = "72f988bf-86f1-41af-91ab-2d7cd011db47",
+                DefaultBranch = "develop",
+                DefaultWorkItemType = "Bug",
+                ExecutiveWorkItemType = "Feature",
+                StateMappings = new()
+                {
+                    ["Open"] = "New",
+                    ["InProgress"] = "Active",
+                    ["Blocked"] = "Active",
+                    ["Resolved"] = "Closed"
+                }
+            }
+        };
+
+        Assert.Equal(DevPlatformType.AzureDevOps, config.Platform);
+        Assert.Equal(DevPlatformAuthMethod.AzureCliBearer, config.AuthMethod);
+        Assert.NotNull(config.AzureDevOps);
+        Assert.Equal("contoso", config.AzureDevOps.Organization);
+        Assert.Equal("ProjectX", config.AzureDevOps.Project);
+        Assert.Equal("main-repo", config.AzureDevOps.Repository);
+        Assert.Equal("develop", config.AzureDevOps.DefaultBranch);
+        Assert.Equal("Bug", config.AzureDevOps.DefaultWorkItemType);
+        Assert.Equal("Feature", config.AzureDevOps.ExecutiveWorkItemType);
+        Assert.Equal(4, config.AzureDevOps.StateMappings.Count);
+    }
+
+    [Fact]
+    public void DevPlatformConfig_PatAuth_DefaultsCorrectly()
+    {
+        var config = new DevPlatformConfig
+        {
+            Platform = DevPlatformType.AzureDevOps,
+            AuthMethod = DevPlatformAuthMethod.Pat,
+            AzureDevOps = new AzureDevOpsConfig
+            {
+                Organization = "myorg",
+                Pat = "ado-pat-token"
+            }
+        };
+
+        Assert.Equal(DevPlatformAuthMethod.Pat, config.AuthMethod);
+        Assert.Equal("ado-pat-token", config.AzureDevOps.Pat);
+    }
+
+    [Fact]
+    public void DevPlatformAuthMethod_HasAllExpectedValues()
+    {
+        var values = Enum.GetValues<DevPlatformAuthMethod>();
+        Assert.Contains(DevPlatformAuthMethod.Pat, values);
+        Assert.Contains(DevPlatformAuthMethod.AzureCliBearer, values);
+        Assert.Contains(DevPlatformAuthMethod.ServicePrincipal, values);
+    }
 }
