@@ -156,6 +156,7 @@ public sealed class CandidateStateStore : IDisposable
             AcScore = e.AcScore,
             DesignScore = e.DesignScore,
             ReadabilityScore = e.ReadabilityScore,
+            VisualsScore = e.VisualsScore,
             ScreenshotBase64 = e.ScreenshotBase64,
         };
 
@@ -423,6 +424,8 @@ public sealed record CandidateSnapshot
     public int? AcScore { get; init; }
     public int? DesignScore { get; init; }
     public int? ReadabilityScore { get; init; }
+    /// <summary>Visual quality score (0-10). Null when visual scoring is not applicable (non-visual task). 0 = visual task but screenshot missing or error page.</summary>
+    public int? VisualsScore { get; init; }
     /// <summary>Base64-encoded PNG screenshot captured after build gate passed (null if not available).</summary>
     public string? ScreenshotBase64 { get; init; }
     /// <summary>True if the candidate survived build gates (null if evaluation hasn't run yet).</summary>

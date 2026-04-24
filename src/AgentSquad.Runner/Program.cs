@@ -135,6 +135,11 @@ builder.Services.AddSingleton<AgentSquad.Core.Strategies.IBaselineCodeGenerator,
 builder.Services.AddSingleton<AgentSquad.Core.Strategies.ILlmJudge,
     AgentSquad.Agents.AI.LlmJudge>();
 
+// Strategy framework: real Visual judge (overrides the NullVisualJudge from AddStrategyFramework).
+// Uses a separate vision-capable LLM call to score candidate screenshots on visual quality.
+builder.Services.AddSingleton<AgentSquad.Core.Strategies.IVisualJudge,
+    AgentSquad.Agents.AI.VisualJudge>();
+
 // Agent factory
 builder.Services.AddSingleton<IAgentFactory, AgentFactory>();
 

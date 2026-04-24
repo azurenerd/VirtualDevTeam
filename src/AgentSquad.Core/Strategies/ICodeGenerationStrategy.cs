@@ -100,6 +100,8 @@ public record CandidateScore
     public int AcceptanceCriteriaScore { get; init; }
     public int DesignScore { get; init; }
     public int ReadabilityScore { get; init; }
+    /// <summary>Visual quality score from the vision judge. Null when visual scoring is not applicable (non-visual task).</summary>
+    public int? VisualsScore { get; init; }
     public string Reasoning { get; init; } = "";
 }
 

@@ -23,6 +23,7 @@ public class CandidateEvaluator
     private readonly GitWorktreeManager _worktree;
     private readonly IOptionsMonitor<StrategyFrameworkConfig> _cfg;
     private readonly ILlmJudge? _judge;
+    private readonly IVisualJudge? _visualJudge;
     private readonly PlaywrightRunner? _screenshotRunner;
     private readonly IOptionsMonitor<AgentSquadConfig>? _appCfg;
 
@@ -31,6 +32,7 @@ public class CandidateEvaluator
         GitWorktreeManager worktree,
         IOptionsMonitor<StrategyFrameworkConfig> cfg,
         ILlmJudge? judge = null,
+        IVisualJudge? visualJudge = null,
         PlaywrightRunner? screenshotRunner = null,
         IOptionsMonitor<AgentSquadConfig>? appCfg = null)
     {
@@ -38,6 +40,7 @@ public class CandidateEvaluator
         _worktree = worktree;
         _cfg = cfg;
         _judge = judge;
+        _visualJudge = visualJudge;
         _screenshotRunner = screenshotRunner;
         _appCfg = appCfg;
     }
@@ -94,6 +97,7 @@ public class CandidateEvaluator
                 .OrderByDescending(c => c.Score?.AcceptanceCriteriaScore ?? -1)
                 .ThenByDescending(c => c.Score?.DesignScore ?? -1)
                 .ThenByDescending(c => c.Score?.ReadabilityScore ?? -1)
+                .ThenByDescending(c => c.Score?.VisualsScore ?? -1)
                 .ThenBy(c => c.Execution.TokensUsed ?? long.MaxValue)
                 .ThenBy(c => c.Execution.Elapsed)
                 .ThenBy(c => c.StrategyId, StringComparer.Ordinal)
@@ -120,6 +124,10 @@ public class CandidateEvaluator
         }
 
         sw.Stop();
+
+        // ── Visual scoring (runs for ALL survivors, even sole survivor) ──
+        results = await ApplyVisualScoresAsync(task, results, ct);
+
         return new EvaluationResult
         {
             Candidates = results,
@@ -345,4 +353,82 @@ public class CandidateEvaluator
     }
 
     private static string Truncate(string s, int n) => s.Length <= n ? s : s[..n] + "…[truncated]";
+
+    /// <summary>
+    /// Run the vision judge on all survivors that have screenshots, then merge visual
+    /// scores back into each <see cref="CandidateResult"/>.
+    /// Non-visual tasks (no screenshots at all) get <c>null</c> (excluded from total).
+    /// Visual tasks with missing screenshots get score <c>0</c> (penalized).
+    /// </summary>
+    private async Task<List<CandidateResult>> ApplyVisualScoresAsync(
+        TaskContext task, List<CandidateResult> results, CancellationToken ct)
+    {
+        if (_visualJudge is null or NullVisualJudge) return results;
+
+        // Determine if this is a visual task: at least one survivor captured a screenshot.
+        var survivorsWithScreenshots = results
+            .Where(r => r.Survived && r.ScreenshotBytes is { Length: > 0 })
+            .ToDictionary(r => r.StrategyId, r => r.ScreenshotBytes!);
+
+        bool isVisualTask = survivorsWithScreenshots.Count > 0;
+        if (!isVisualTask)
+        {
+            _logger.LogDebug("No survivors with screenshots for task {TaskId} — skipping visual scoring", task.TaskId);
+            return results;
+        }
+
+        try
+        {
+            var judgeResult = await _visualJudge.ScoreAsync(new VisualJudgeInput
+            {
+                TaskId = task.TaskId,
+                TaskTitle = task.TaskTitle,
+                TaskDescription = task.TaskDescription,
+                CandidateScreenshots = survivorsWithScreenshots,
+            }, ct);
+
+            if (!string.IsNullOrEmpty(judgeResult.Error))
+            {
+                _logger.LogWarning("Visual judge returned error for task {TaskId}: {Error}", task.TaskId, judgeResult.Error);
+            }
+
+            // Apply scores: survivors with screenshots get judge score (or 0 if judge missed them);
+            // survivors without screenshots get 0 (penalized); non-survivors stay null.
+            for (int i = 0; i < results.Count; i++)
+            {
+                var r = results[i];
+                if (!r.Survived)
+                    continue; // failed candidates don't get visual scores
+
+                int visualScore;
+                if (r.ScreenshotBytes is { Length: > 0 })
+                {
+                    visualScore = judgeResult.Scores.TryGetValue(r.StrategyId, out var vs) ? vs.Score : 0;
+                }
+                else
+                {
+                    visualScore = 0; // visual task but no screenshot = penalize
+                }
+
+                var existingScore = r.Score ?? new CandidateScore();
+                results[i] = r with { Score = existingScore with { VisualsScore = visualScore } };
+            }
+
+            _logger.LogInformation(
+                "Visual scoring applied for task {TaskId}: {Scores}",
+                task.TaskId,
+                string.Join(", ", results.Where(r => r.Score?.VisualsScore is not null)
+                    .Select(r => $"{r.StrategyId}={r.Score!.VisualsScore}")));
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Visual judge failed for task {TaskId} — visual scores will be null", task.TaskId);
+        }
+
+        return results;
+    }
 }

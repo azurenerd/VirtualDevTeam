@@ -168,6 +168,7 @@ public class StrategyOrchestrator
                 await _events.EmitAsync(StrategyEvents.CandidateScored, new CandidateScoredEvent(
                     task.RunId, task.TaskId, c.StrategyId,
                     c.Score.AcceptanceCriteriaScore, c.Score.DesignScore, c.Score.ReadabilityScore,
+                    c.Score.VisualsScore,
                     screenshotBase64), ct);
             }
         }
@@ -208,6 +209,7 @@ public class StrategyOrchestrator
                 AcceptanceCriteriaScore = c.Score?.AcceptanceCriteriaScore,
                 DesignScore = c.Score?.DesignScore,
                 ReadabilityScore = c.Score?.ReadabilityScore,
+                VisualsScore = c.Score?.VisualsScore,
                 FrameworkId = c.StrategyId,
                 IsExternalFramework = _externalAdapters.ContainsKey(c.StrategyId),
             }).ToList(),
@@ -512,6 +514,7 @@ public class StrategyOrchestrator
                 AcceptanceCriteria = c.Score.AcceptanceCriteriaScore,
                 Design = c.Score.DesignScore,
                 Readability = c.Score.ReadabilityScore,
+                Visuals = c.Score.VisualsScore,
             } : null,
         };
     }

@@ -173,6 +173,9 @@ public class EvaluatorConfig
     /// <summary>Model tier to use for the LLM judge (premium/standard/budget/local).</summary>
     public string JudgeModelTier { get; set; } = "standard";
 
+    /// <summary>Model tier for the visual (screenshot) judge. Should be a vision-capable model.</summary>
+    public string VisualJudgeModelTier { get; set; } = "standard";
+
     /// <summary>Max patch characters passed to the LLM judge (truncated with a marker if exceeded).</summary>
     public int MaxJudgePatchChars { get; set; } = 40_000;
 

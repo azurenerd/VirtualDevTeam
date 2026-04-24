@@ -85,6 +85,8 @@ public record CandidateRecord
     public int? AcceptanceCriteriaScore { get; init; }
     public int? DesignScore { get; init; }
     public int? ReadabilityScore { get; init; }
+    /// <summary>Visual quality score (0-10). Null when not applicable.</summary>
+    public int? VisualsScore { get; init; }
 
     // ── Framework metadata (populated for external adapters) ──
 

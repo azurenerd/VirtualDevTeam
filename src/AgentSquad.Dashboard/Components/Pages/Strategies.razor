@@ -131,10 +131,14 @@
                             }
                             @if (candidate.State == CandidateState.Scored || candidate.State == CandidateState.Winner)
                             {
-                                <div class="candidate-scores" title="LLM judge scores — Acceptance Criteria, Design quality, and Readability (each 0–10)">
+                                <div class="candidate-scores" title="LLM judge scores — Acceptance Criteria, Design quality, Readability, and Visuals (each 0–10)">
                                     <div title="Acceptance Criteria: How well the code meets the task requirements (0–10)">AC <span>@(candidate.AcScore ?? 0)</span></div>
                                     <div title="Design: Code architecture, patterns, and structural quality (0–10)">Des <span>@(candidate.DesignScore ?? 0)</span></div>
                                     <div title="Readability: Code clarity, naming, and maintainability (0–10)">Read <span>@(candidate.ReadabilityScore ?? 0)</span></div>
+                                    @if (candidate.VisualsScore.HasValue)
+                                    {
+                                        <div title="Visuals: Visual quality of the application screenshot (0–10)" class="visuals-score">Vis <span>@candidate.VisualsScore.Value</span></div>
+                                    }
                                 </div>
                             }
                             else if (candidate.State == CandidateState.Evaluated && candidate.Survived == true)
@@ -198,7 +202,15 @@
                                                         <div class="cd-score-bar-bg"><div class="cd-score-bar" style="width: @((candidate.ReadabilityScore ?? 0) * 10)%"></div></div>
                                                         <span class="cd-score-val">@(candidate.ReadabilityScore ?? 0)/10</span>
                                                     </div>
-                                                    <div class="cd-score-total" title="Combined score (max 30)">Total: <strong>@TotalScore(candidate)</strong>/30</div>
+                                                    @if (candidate.VisualsScore.HasValue)
+                                                    {
+                                                    <div class="cd-score-row">
+                                                        <span class="cd-score-label">Visuals</span>
+                                                        <div class="cd-score-bar-bg"><div class="cd-score-bar cd-score-bar-visuals" style="width: @(candidate.VisualsScore.Value * 10)%"></div></div>
+                                                        <span class="cd-score-val">@candidate.VisualsScore.Value/10</span>
+                                                    </div>
+                                                    }
+                                                    <div class="cd-score-total" title="Combined score (max @MaxScore(candidate))">Total: <strong>@TotalScore(candidate)</strong>/@MaxScore(candidate)</div>
                                                 </div>
                                             }
                                             else if (candidate.Succeeded == false)
@@ -463,8 +475,16 @@
                                                                 <div class="cd-score-bar-bg"><div class="cd-score-bar" style="width: @((candidate.ReadabilityScore ?? 0) * 10)%"></div></div>
                                                                 <span class="cd-score-val">@(candidate.ReadabilityScore ?? 0)/10</span>
                                                             </div>
-                                                            <div class="cd-score-total" title="Combined score across all three categories (max 30)">
-                                                                Total: <strong>@TotalScore(candidate)</strong>/30
+                                                            @if (candidate.VisualsScore.HasValue)
+                                                            {
+                                                            <div class="cd-score-row" title="Visual quality of the application screenshot (0–10)">
+                                                                <span class="cd-score-label">Visuals</span>
+                                                                <div class="cd-score-bar-bg"><div class="cd-score-bar cd-score-bar-visuals" style="width: @(candidate.VisualsScore.Value * 10)%"></div></div>
+                                                                <span class="cd-score-val">@candidate.VisualsScore.Value/10</span>
+                                                            </div>
+                                                            }
+                                                            <div class="cd-score-total" title="Combined score across all categories (max @MaxScore(candidate))">
+                                                                Total: <strong>@TotalScore(candidate)</strong>/@MaxScore(candidate)
                                                             </div>
                                                         </div>
                                                     }
@@ -713,6 +733,7 @@
     .candidate-scores { display: flex; gap: .5rem; font-size: .85em; margin-top: .35rem; }
     .candidate-scores div { flex: 1; background: rgba(255,255,255,.04); padding: .2rem .4rem; border-radius: 3px; }
     .candidate-scores span { font-weight: 600; margin-left: .15rem; }
+    .candidate-scores .visuals-score span { color: #fab005; }
     .candidate-fail { color: #ff6b6b; font-size: .85em; margin-top: .35rem; }
     .candidate-gate-fail { color: #ff8787; font-size: .82em; margin-top: .35rem; background: rgba(255,107,107,.08); padding: .3rem .5rem; border-radius: 4px; border-left: 2px solid #ff6b6b; }
     .gate-fail-detail { display: block; font-size: .9em; opacity: .75; margin-top: .15rem; word-break: break-word; }
@@ -764,6 +785,7 @@
     .cd-score-label { width: 5.5rem; font-size: .75em; opacity: .65; text-align: right; }
     .cd-score-bar-bg { flex: 1; height: 6px; background: rgba(255,255,255,.06); border-radius: 3px; overflow: hidden; }
     .cd-score-bar { height: 100%; background: linear-gradient(90deg, #4dabf7, #51cf66); border-radius: 3px; transition: width .3s; }
+    .cd-score-bar-visuals { background: linear-gradient(90deg, #fab005, #ff922b); }
     .cd-score-val { font-size: .75em; font-family: monospace; width: 2.5rem; opacity: .8; }
     .cd-score-total { text-align: right; font-size: .8em; margin-top: .25rem; opacity: .8; }
     .cd-no-scores { font-size: .8em; opacity: .4; font-style: italic; margin-bottom: .5rem; }
@@ -942,7 +964,10 @@
     }
 
     private static int TotalScore(CandidateSnapshot c)
-        => (c.AcScore ?? 0) + (c.DesignScore ?? 0) + (c.ReadabilityScore ?? 0);
+        => (c.AcScore ?? 0) + (c.DesignScore ?? 0) + (c.ReadabilityScore ?? 0) + (c.VisualsScore ?? 0);
+
+    private static int MaxScore(CandidateSnapshot c)
+        => c.VisualsScore.HasValue ? 40 : 30;
 
     protected override async Task OnInitializedAsync()
     {

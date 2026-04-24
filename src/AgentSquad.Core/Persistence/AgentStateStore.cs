@@ -71,6 +71,8 @@ public class StrategyCandidateRecord
     public int? AcScore { get; init; }
     public int? DesignScore { get; init; }
     public int? ReadabilityScore { get; init; }
+    /// <summary>Visual quality score (0-10). Null when not applicable.</summary>
+    public int? VisualsScore { get; init; }
     public bool? Survived { get; init; }
     public string? JudgeSkippedReason { get; init; }
     public string? ExecutionSummaryJson { get; init; }
@@ -302,7 +304,8 @@ public class AgentStateStore : IDisposable
         [
             "ALTER TABLE workflow_state ADD COLUMN run_id TEXT NOT NULL DEFAULT '_global'",
             "ALTER TABLE gate_approvals ADD COLUMN run_id TEXT NOT NULL DEFAULT '_global'",
-            "ALTER TABLE processed_items ADD COLUMN run_id TEXT NOT NULL DEFAULT '_global'"
+            "ALTER TABLE processed_items ADD COLUMN run_id TEXT NOT NULL DEFAULT '_global'",
+            "ALTER TABLE strategy_candidates ADD COLUMN visuals_score INTEGER",
         ];
 
         foreach (var sql in migrations)
@@ -1321,12 +1324,12 @@ public class AgentStateStore : IDisposable
                     INSERT OR REPLACE INTO strategy_candidates
                         (run_id, task_id, strategy_id, state, started_at, completed_at,
                          elapsed_sec, succeeded, failure_reason, tokens_used,
-                         ac_score, design_score, readability_score, survived,
+                         ac_score, design_score, readability_score, visuals_score, survived,
                          judge_skipped_reason, execution_summary_json, screenshot_base64)
                     VALUES
                         ($run_id, $task_id, $strategy_id, $state, $started_at, $completed_at,
                          $elapsed_sec, $succeeded, $failure_reason, $tokens_used,
-                         $ac_score, $design_score, $readability_score, $survived,
+                         $ac_score, $design_score, $readability_score, $visuals_score, $survived,
                          $judge_skipped, $summary_json, $screenshot)
                     """;
                 cCmd.Parameters.AddWithValue("$run_id", task.RunId);
@@ -1342,6 +1345,7 @@ public class AgentStateStore : IDisposable
                 cCmd.Parameters.AddWithValue("$ac_score", c.AcScore ?? (object)DBNull.Value);
                 cCmd.Parameters.AddWithValue("$design_score", c.DesignScore ?? (object)DBNull.Value);
                 cCmd.Parameters.AddWithValue("$readability_score", c.ReadabilityScore ?? (object)DBNull.Value);
+                cCmd.Parameters.AddWithValue("$visuals_score", c.VisualsScore ?? (object)DBNull.Value);
                 cCmd.Parameters.AddWithValue("$survived", c.Survived.HasValue ? (c.Survived.Value ? 1 : 0) : DBNull.Value);
                 cCmd.Parameters.AddWithValue("$judge_skipped", c.JudgeSkippedReason ?? (object)DBNull.Value);
                 cCmd.Parameters.AddWithValue("$summary_json", c.ExecutionSummaryJson ?? (object)DBNull.Value);
@@ -1424,7 +1428,7 @@ public class AgentStateStore : IDisposable
             cCmd.CommandText = """
                 SELECT strategy_id, state, started_at, completed_at, elapsed_sec,
                        succeeded, failure_reason, tokens_used,
-                       ac_score, design_score, readability_score, survived,
+                       ac_score, design_score, readability_score, visuals_score, survived,
                        judge_skipped_reason, execution_summary_json, screenshot_base64
                 FROM strategy_candidates
                 WHERE run_id = $run_id AND task_id = $task_id
@@ -1448,10 +1452,11 @@ public class AgentStateStore : IDisposable
                     AcScore = cReader.IsDBNull(8) ? null : cReader.GetInt32(8),
                     DesignScore = cReader.IsDBNull(9) ? null : cReader.GetInt32(9),
                     ReadabilityScore = cReader.IsDBNull(10) ? null : cReader.GetInt32(10),
-                    Survived = cReader.IsDBNull(11) ? null : cReader.GetInt32(11) == 1,
-                    JudgeSkippedReason = cReader.IsDBNull(12) ? null : cReader.GetString(12),
-                    ExecutionSummaryJson = cReader.IsDBNull(13) ? null : cReader.GetString(13),
-                    ScreenshotBase64 = cReader.IsDBNull(14) ? null : cReader.GetString(14),
+                    VisualsScore = cReader.IsDBNull(11) ? null : cReader.GetInt32(11),
+                    Survived = cReader.IsDBNull(12) ? null : cReader.GetInt32(12) == 1,
+                    JudgeSkippedReason = cReader.IsDBNull(13) ? null : cReader.GetString(13),
+                    ExecutionSummaryJson = cReader.IsDBNull(14) ? null : cReader.GetString(14),
+                    ScreenshotBase64 = cReader.IsDBNull(15) ? null : cReader.GetString(15),
                 });
             }
 

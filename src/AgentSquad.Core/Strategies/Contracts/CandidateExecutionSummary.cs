@@ -67,5 +67,10 @@ public record ScoreSummary
     public int AcceptanceCriteria { get; init; }
     public int Design { get; init; }
     public int Readability { get; init; }
-    public int Total => AcceptanceCriteria + Design + Readability;
+    /// <summary>Visual quality score (0-10). Null when not applicable (non-visual task).</summary>
+    public int? Visuals { get; init; }
+    /// <summary>Total score: /40 when Visuals applies, /30 when it doesn't.</summary>
+    public int Total => AcceptanceCriteria + Design + Readability + (Visuals ?? 0);
+    /// <summary>Maximum possible score for this candidate.</summary>
+    public int MaxScore => Visuals.HasValue ? 40 : 30;
 }

@@ -32,7 +32,7 @@ public record CandidateEvaluatedEvent(
     string? ScreenshotBase64,
     string? JudgeSkippedReason);
 
-public record CandidateScoredEvent(string RunId, string TaskId, string StrategyId, int AcScore, int DesignScore, int ReadabilityScore, string? ScreenshotBase64 = null);
+public record CandidateScoredEvent(string RunId, string TaskId, string StrategyId, int AcScore, int DesignScore, int ReadabilityScore, int? VisualsScore = null, string? ScreenshotBase64 = null);
 public record WinnerSelectedEvent(string RunId, string TaskId, string StrategyId, string TieBreakReason, double EvaluationElapsedSec);
 
 /// <summary>
