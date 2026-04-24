@@ -1427,3 +1427,25 @@ No persistence layer existed for strategy/framework results. The `AgentStateStor
 - **Screenshot storage**: Base64-encoded in SQLite TEXT column. Not ideal for large images but simple and self-contained.
 - **Execution summaries**: Serialized as camelCase JSON in a TEXT column.
 - **Trim on archive**: Active tasks hold up to 200 activity entries; trimmed to 50 when moved to recent buffer.
+
+---
+
+## 64. Capability-Based Interfaces Beat Monolithic Abstractions for Platform Providers
+
+**Lesson:** When abstracting multiple platform backends (GitHub, Azure DevOps), splitting into many small capability interfaces (7 in our case) is far better than one `IPlatformService` monolith.
+
+### What happened:
+1. Initial design considered a single `IPlatformService` with ~60 methods covering PRs, work items, branches, files, reviews, info, and URL generation.
+2. Rubber-duck critique identified this would force every provider to implement ALL methods (even ADO doesn't support work item deletion) and create a lowest-common-denominator trap.
+3. Redesigned as 7 capability interfaces: `IPullRequestService`, `IWorkItemService`, `IRepositoryContentService`, `IBranchService`, `IReviewService`, `IPlatformInfoService`, `IPlatformHostContext`.
+
+### Why this works better:
+- **Incremental adoption**: Can implement `IPullRequestService` first and leave others as GitHub-only.
+- **Interface segregation**: ADO's `DeleteAsync` returns `false` gracefully (no work item deletion API) without breaking the contract.
+- **Testability**: Each capability can be mocked independently.
+- **Config discovery**: `IPlatformInfoService.Capabilities` lets code check at runtime what the platform supports (e.g., `SupportsWorkItemDeletion`, `SupportsAtomicTreeReset`).
+
+### Key design decisions:
+- **GitHub adapters wrap, not replace**: The existing `IGitHubService` (97KB) stays untouched. GitHub adapters are thin wrappers that delegate to it, preserving all existing behavior.
+- **ADO config is nested**: `DevPlatformConfig.AzureDevOps` is a separate class so GitHub config and ADO config coexist independently — switching platforms doesn't lose the other config.
+- **Bearer token support**: For enterprises like Microsoft where PATs are restricted, `AzureCliBearerProvider` uses `az account get-access-token` with auto-refresh 5 minutes before expiry.

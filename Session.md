@@ -13,6 +13,7 @@ Read C:\Git\AgentSquad\Session.md           (this file — session setup)
 Read C:\Git\AgentSquad\docs\MonitorPrompt.md (monitoring checklist & failure modes)
 Read C:\Git\AgentSquad\docs\Requirements.md  (project requirements)
 Read C:\Git\AgentSquad\LessonsLearned.md     (hard-won operational knowledge)
+Read C:\Git\AgentSquad\docs\AzureDevOpsSetup.md (if using ADO instead of GitHub)
 ```
 
 Also read the `.github/copilot-instructions.md` (auto-loaded) for architecture, conventions, and build/test commands.
@@ -320,8 +321,9 @@ Key settings:
 14. **Copilot CLI reports 0 tokens**: The `copilot` binary doesn't emit usage counts, so per-strategy cost attribution is always `$0` with the default provider. Cost budget enforcement only kicks in when using an API-key fallback (Anthropic/OpenAI/Azure OpenAI direct). Not a bug — documented limitation.
 15. **`.screenshots/` directory in target repo**: The strategy framework commits per-candidate screenshots to `.screenshots/pr-{N}-{strategyId}.png` on PR branches. These are lightweight artifacts (~50–200KB PNGs) that persist after merge into the target repo. Reset scripts do not clean them (they live in the target repo, not the agent workspace). Harmless but accumulate over runs — delete manually from the target repo if desired.
 16. **Winner-strategy marker in PR bodies**: PR bodies contain a `<!-- winner-strategy: {key} -->` HTML comment used by the dashboard for winner identification. If the dashboard misidentifies the winner, inspect the PR body for a missing or malformed marker.
+17. **Azure DevOps platform support**: ADO provider is implemented but not yet live-tested against a real ADO organization. The 7 capability interfaces (PR, Work Item, Branch, File, Review, Info, HostContext) have full implementations but edge cases (custom process templates, non-default state names, large repos) may surface issues. If using ADO, configure via the dashboard Dev Platform dropdown or `appsettings.json` → `DevPlatform` section. See `docs/AzureDevOpsSetup.md`.
 
 Note: Don't do any long pauses that are more than 1 minute long in the Copilot chat, as that makes it so you ignore me for X minutes--always keep checking back no more than a minute so the chat
 thread isn't blocked to get instructions from me. 
 
-*Last updated: 2026-04-22 (Strategy persistence to SQLite, dashboard tooltips, duration/timestamp fixes, screenshot lightbox, standalone CandidateStateStore DI fix. Rename agentic-delegation → copilot-cli complete. Test suite 211 pass / 2 pre-existing flaky)*
+*Last updated: 2026-04-24 (ADO platform provider Phases 4-6 complete, dashboard platform selector, AzureDevOpsSetup.md added, 848 tests passing. Strategy persistence to SQLite, dashboard tooltips, duration/timestamp fixes, screenshot lightbox, standalone CandidateStateStore DI fix. Rename agentic-delegation → copilot-cli complete.)*

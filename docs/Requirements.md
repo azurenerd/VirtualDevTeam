@@ -59,12 +59,13 @@
 47. [Stuck Issue Recovery Requirements](#46-stuck-issue-recovery-requirements)
 48. [Design Fidelity Fallback Requirements](#47-design-fidelity-fallback-requirements)
 49. [Project Completion Dashboard Banner](#48-project-completion-dashboard-banner)
+50. [Multi-Platform Support (GitHub & Azure DevOps)](#49-multi-platform-support-github--azure-devops)
 
 ---
 
 ## 1. System Overview
 
-AgentSquad is a multi-agent AI system where specialized agent roles collaborate through GitHub PRs/Issues and an in-process message bus to build software projects autonomously. The system includes 7 core agent roles, user-defined custom agents, and dynamically-spawned SME (Subject Matter Expert) agents that provide specialist expertise on demand. Agents can be enhanced with per-role customization (custom system prompts, MCP tool servers, and external knowledge links). A human Executive stakeholder (@azurenerd) provides high-level direction and resolves escalations.
+AgentSquad is a multi-agent AI system where specialized agent roles collaborate through GitHub PRs/Issues (or Azure DevOps Work Items/PRs) and an in-process message bus to build software projects autonomously. The system includes 7 core agent roles, user-defined custom agents, and dynamically-spawned SME (Subject Matter Expert) agents that provide specialist expertise on demand. Agents can be enhanced with per-role customization (custom system prompts, MCP tool servers, and external knowledge links). A human Executive stakeholder (@azurenerd) provides high-level direction and resolves escalations.
 
 ### Core Principles
 
@@ -2776,3 +2777,44 @@ These bugs were discovered during scenario analysis and fixed. Listed here as re
 ```
 
 ---
+
+## 49. Multi-Platform Support (GitHub & Azure DevOps)
+
+> **Status (2026-04-24):** Phase 4–6 shipped. GitHub remains default. ADO provider implemented with full interface coverage. Dashboard platform selector live on Configuration page. See `docs/AzureDevOpsSetup.md` for configuration guide.
+
+### REQ-PLAT-001: Platform Abstraction
+
+- **REQ-PLAT-001a**: All platform-specific operations MUST be accessed through 7 capability interfaces: `IPullRequestService`, `IWorkItemService`, `IRepositoryContentService`, `IBranchService`, `IReviewService`, `IPlatformInfoService`, `IPlatformHostContext`. No agent, orchestrator, or dashboard code may call platform-specific APIs directly.
+- **REQ-PLAT-001b**: Platform selection is config-driven via `DevPlatformConfig.Platform` enum (`GitHub` | `AzureDevOps`). DI registration switches all 7 interfaces based on this setting.
+- **REQ-PLAT-001c**: GitHub adapters wrap the existing `IGitHubService` with zero breaking changes to existing behavior.
+
+### REQ-PLAT-002: Azure DevOps Provider
+
+- **REQ-PLAT-002a**: ADO provider MUST support PAT authentication (Basic auth header) and Azure CLI bearer token authentication (`az account get-access-token --resource 499b84ac-...`).
+- **REQ-PLAT-002b**: ADO provider MUST use API version 7.1 across all REST calls.
+- **REQ-PLAT-002c**: ADO work item operations MUST use WIQL for querying/filtering.
+- **REQ-PLAT-002d**: ADO file operations MUST use the Git Pushes API (RefUpdates + Changes).
+- **REQ-PLAT-002e**: ADO does NOT support work item deletion — `DeleteAsync` MUST close the item instead.
+- **REQ-PLAT-002f**: ADO provider MUST handle rate limiting via `X-RateLimit-*` headers with exponential backoff and `Retry-After` support.
+
+### REQ-PLAT-003: Dashboard Platform Configuration
+
+- **REQ-PLAT-003a**: Configuration page MUST provide a Dev Platform dropdown (GitHub / Azure DevOps).
+- **REQ-PLAT-003b**: When AzureDevOps is selected, MUST show: Organization, Project, Repository, Auth method (PAT/Bearer), token/tenant fields, work item type settings.
+- **REQ-PLAT-003c**: Platform terminology MUST adapt dynamically — "Issues" vs "Work Items", "Repository Cleanup" instead of "GitHub Repository Cleanup".
+
+### REQ-PLAT-004: Work Item State Mappings
+
+- **REQ-PLAT-004a**: ADO work item states are configurable via `AzureDevOps.StateMappings` dictionary mapping AgentSquad states (`Open`, `InProgress`, `Blocked`, `Resolved`) to ADO process template states.
+- **REQ-PLAT-004b**: Default mappings: Open→New, InProgress→Active, Blocked→Active, Resolved→Closed.
+
+**Scenario: Switching from GitHub to Azure DevOps**
+```
+1. User opens Configuration page
+2. Changes Dev Platform dropdown from GitHub to Azure DevOps
+3. GitHub-specific fields (repo, PAT) hide; ADO fields (org, project, repo, auth) appear
+4. User fills ADO fields and clicks Save
+5. On next runner restart, DI registers ADO providers for all 7 interfaces
+6. Agents create Work Items (not Issues), file commits via Pushes API, PRs in ADO
+7. Dashboard displays ADO-specific terminology throughout
+```

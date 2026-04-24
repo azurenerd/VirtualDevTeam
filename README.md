@@ -4,7 +4,7 @@
 
 **An AI-powered autonomous development team that builds software end-to-end**
 
-*Give it a project description — it researches, architects, plans, codes, tests, and delivers through real GitHub PRs and Issues, with human oversight at every critical gate.*
+*Give it a project description — it researches, architects, plans, codes, tests, and delivers through real GitHub PRs and Issues (or Azure DevOps Work Items and PRs), with human oversight at every critical gate.*
 
 </div>
 
@@ -17,7 +17,7 @@
 
 ---
 
-AgentSquad is a .NET 8 multi-agent AI system that manages a full software development team — from PM through Test Engineer — to autonomously build software projects. You provide a project description and a GitHub repo; AgentSquad handles research, architecture, engineering planning, parallel implementation, multi-tier testing, code review, and delivery. Every artifact lives in GitHub as real PRs and Issues. A Blazor dashboard gives you real-time visibility, and configurable human gates let you control how much autonomy the team has.
+AgentSquad is a .NET 8 multi-agent AI system that manages a full software development team — from PM through Test Engineer — to autonomously build software projects. You provide a project description and a GitHub repo (or Azure DevOps project); AgentSquad handles research, architecture, engineering planning, parallel implementation, multi-tier testing, code review, and delivery. Every artifact lives in your platform as real PRs and Issues/Work Items. A Blazor dashboard gives you real-time visibility, and configurable human gates let you control how much autonomy the team has.
 
 ## Key Capabilities
 
@@ -48,6 +48,7 @@ AgentSquad is a .NET 8 multi-agent AI system that manages a full software develo
 - **Strategy Framework (A/B/C/D Code Generation)** — The SE can generate multiple candidate implementations in parallel (baseline, mcp-enhanced, copilot-cli, squad) in isolated git worktrees, score each via an LLM judge on Acceptance Criteria / Design / Readability, and apply the winner to the PR branch. After the build gate passes, `CandidateEvaluator` captures a Playwright screenshot for each strategy candidate and commits them to `.screenshots/pr-{N}-{strategyId}.png` on the PR branch. Screenshots are displayed inline in the expandable candidate detail rows on the Frameworks dashboard page. A `<!-- winner-strategy: {key} -->` HTML comment is appended to the PR body so the dashboard can identify the winning tile. Feature-flagged via `AgentSquad.StrategyFramework.Enabled` (default OFF). Sampling policy + cost budget + optional adaptive selector built in; per-strategy cost attribution in `AgentUsageTracker`; live experiment data in `/api/strategies/*` and the `/strategies` dashboard page. Validated end-to-end against live Copilot CLI in April 2026
 - **Feature Mode (WIP)** — In addition to greenfield project creation, AgentSquad supports building individual features against existing repositories. Define features via the `/features` dashboard page with title, description, acceptance criteria, base branch, and optional tech stack overrides. Each run (project or feature) is wrapped in an `ActiveRun` with a unique `RunId` — all workflow state, gates, issues, and PRs are scoped per-run. `RunCoordinator` enforces single-active-run semantics. `WorkflowProfile` abstraction provides different gate definitions, artifact paths, and agent requirements for each mode. Project Control card on the Overview page provides Start/Stop controls
 - **Phase-Gated Workflow** — State machine enforces linear progression: Initialization → Research → Architecture → Planning → Development → Testing → Review → Finalization
+- **Multi-Platform Support** — Works with GitHub (default) or Azure DevOps. ADO support includes PAT and Azure CLI bearer token auth, Work Items (Task/Bug/User Story), WIQL queries, Git Pushes API, and PR threads. Switch platforms via the dashboard dropdown — no code changes needed. See [docs/AzureDevOpsSetup.md](docs/AzureDevOpsSetup.md)
 - **SinglePRMode** — When enabled, the entire project is delivered through a single engineering task and PR, simplifying the workflow for smaller projects. PM correctly gates issue closure on positive merge evidence (at least one merged PR must exist), preventing premature closure after resets
 - **GitHub-Native Coordination** — Dual-layer communication: in-process message bus (<1ms, real-time) + GitHub API (durable PRs/Issues, human-visible). All work products are real GitHub artifacts
 - **Multi-Model Support** — Anthropic Claude, OpenAI GPT, Azure OpenAI, and local Ollama with four configurable tiers (premium / standard / budget / local) assigned per agent role

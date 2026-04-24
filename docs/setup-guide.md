@@ -58,9 +58,9 @@ dotnet build
 
 ## API Key Setup
 
-AgentSquad requires at least one AI provider and a GitHub Personal Access Token. You can mix and match providers across model tiers.
+AgentSquad requires at least one AI provider and a GitHub Personal Access Token (or Azure DevOps credentials if using ADO). You can mix and match providers across model tiers.
 
-### GitHub Personal Access Token (Required)
+### GitHub Personal Access Token (Required for GitHub platform)
 
 1. Go to [github.com/settings/tokens](https://github.com/settings/tokens)
 2. Click **Generate new token (classic)**
@@ -70,6 +70,8 @@ AgentSquad requires at least one AI provider and a GitHub Personal Access Token.
 4. Copy the generated token (starts with `ghp_`)
 
 > **Important:** The token needs access to the target repository where agents will create PRs, issues, and push files.
+
+> **Using Azure DevOps instead?** See [docs/AzureDevOpsSetup.md](AzureDevOpsSetup.md) for ADO-specific configuration (PAT or Azure CLI bearer token auth).
 
 ### Anthropic API Key (Recommended for Premium Tier)
 
