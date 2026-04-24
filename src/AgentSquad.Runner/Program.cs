@@ -251,16 +251,16 @@ api.MapPost("/models/refresh", (DashboardDataService svc) =>
 api.MapGet("/timeline", (DashboardDataService svc) =>
     Results.Ok(svc.GetExecutionTimeline()));
 
-api.MapGet("/github/issues", async (DashboardDataService svc) =>
-    Results.Ok(await svc.GetIssuesAsync()));
+api.MapGet("/platform/work-items", async (DashboardDataService svc) =>
+    Results.Ok(await svc.GetWorkItemsAsync()));
 
-api.MapGet("/github/pull-requests", async (DashboardDataService svc) =>
+api.MapGet("/platform/pull-requests", async (DashboardDataService svc) =>
     Results.Ok(await svc.GetPullRequestsAsync()));
 
-api.MapGet("/github/rate-limited", (DashboardDataService svc) =>
-    Results.Ok(new { IsRateLimited = svc.IsGitHubRateLimited }));
+api.MapGet("/platform/rate-limited", (DashboardDataService svc) =>
+    Results.Ok(new { IsRateLimited = svc.IsRateLimited }));
 
-api.MapGet("/github/rate-limit-info", (DashboardDataService svc) =>
+api.MapGet("/platform/rate-limit-info", (DashboardDataService svc) =>
     Results.Ok(svc.GetRateLimitInfo()));
 
 api.MapPost("/reset", (DashboardDataService svc) =>
@@ -272,10 +272,10 @@ api.MapGet("/cost-summary", (DashboardDataService svc) =>
 api.MapGet("/metrics/aggregates", async (AgentSquad.Core.Metrics.BuildTestMetrics metrics, CancellationToken ct) =>
     Results.Ok(await metrics.GetAggregatesAsync(DateTime.MinValue, ct)));
 
-api.MapGet("/repo-info", (IGitHubService github) =>
-    Results.Ok(new { FullName = github.RepositoryFullName }));
+api.MapGet("/repo-info", (DashboardDataService svc) =>
+    Results.Ok(new { FullName = svc.RepositoryDisplayName }));
 
-api.MapGet("/github/file", async (string path, IGitHubService github, CancellationToken ct) =>
+api.MapGet("/platform/file", async (string path, IGitHubService github, CancellationToken ct) =>
 {
     var content = await github.GetFileContentAsync(path, ct: ct);
     return content is not null ? Results.Ok(new { content }) : Results.NotFound();

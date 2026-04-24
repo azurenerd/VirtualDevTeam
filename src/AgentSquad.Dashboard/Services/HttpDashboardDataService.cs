@@ -1,7 +1,7 @@
 using System.Net.Http.Json;
 using AgentSquad.Core.Agents;
+using AgentSquad.Core.DevPlatform.Models;
 using AgentSquad.Core.Diagnostics;
-using AgentSquad.Core.GitHub.Models;
 using AgentSquad.Core.Persistence;
 using AgentSquad.Orchestrator;
 
@@ -21,11 +21,11 @@ public sealed class HttpDashboardDataService : IDashboardDataService, IHostedSer
     private IReadOnlyList<AgentSnapshot> _agents = [];
     private AgentHealthSnapshot? _healthSnapshot;
     private IReadOnlyList<ExecutionMilestone> _milestones = [];
-    private IReadOnlyList<AgentPullRequest> _pullRequests = [];
-    private IReadOnlyList<AgentIssue> _issues = [];
+    private IReadOnlyList<PlatformPullRequest> _pullRequests = [];
+    private IReadOnlyList<PlatformWorkItem> _issues = [];
     private IReadOnlyList<string> _models = [];
     private bool _isRateLimited;
-    private GitHubRateLimitInfo _rateLimitInfo = new() { Remaining = 5000, Limit = 5000 };
+    private PlatformRateLimitInfo _rateLimitInfo = new() { Remaining = 5000, Limit = 5000, PlatformName = "GitHub" };
     private decimal _cachedTotalCost;
     private int _cachedTotalCalls;
     private string _repoFullName = "";
@@ -60,10 +60,10 @@ public sealed class HttpDashboardDataService : IDashboardDataService, IHostedSer
             var agents = await _http.GetFromJsonAsync<List<AgentSnapshot>>("/api/dashboard/agents");
             if (agents is not null) _agents = agents;
 
-            var rl = await _http.GetFromJsonAsync<RateLimitResponse>("/api/dashboard/github/rate-limited");
+            var rl = await _http.GetFromJsonAsync<RateLimitResponse>("/api/dashboard/platform/rate-limited");
             if (rl is not null) _isRateLimited = rl.IsRateLimited;
 
-            var rli = await _http.GetFromJsonAsync<GitHubRateLimitInfo>("/api/dashboard/github/rate-limit-info");
+            var rli = await _http.GetFromJsonAsync<PlatformRateLimitInfo>("/api/dashboard/platform/rate-limit-info");
             if (rli is not null) _rateLimitInfo = rli;
 
             var cost = await _http.GetFromJsonAsync<CostSummaryResponse>("/api/dashboard/cost-summary");
@@ -298,29 +298,30 @@ public sealed class HttpDashboardDataService : IDashboardDataService, IHostedSer
         catch { /* best effort */ }
     }
 
-    // ── GitHub data ──
+    // ── Platform data ──
 
-    public bool IsGitHubRateLimited => _isRateLimited;
-    public string RepositoryFullName => _repoFullName;
+    public bool IsRateLimited => _isRateLimited;
+    public string RepositoryDisplayName => _repoFullName;
+    public string PlatformName => _rateLimitInfo.PlatformName ?? "GitHub";
 
-    public GitHubRateLimitInfo GetRateLimitInfo() => _rateLimitInfo;
+    public PlatformRateLimitInfo GetRateLimitInfo() => _rateLimitInfo;
 
-    public async Task<IReadOnlyList<AgentPullRequest>> GetPullRequestsAsync()
+    public async Task<IReadOnlyList<PlatformPullRequest>> GetPullRequestsAsync()
     {
         try
         {
-            var result = await _http.GetFromJsonAsync<List<AgentPullRequest>>("/api/dashboard/github/pull-requests");
+            var result = await _http.GetFromJsonAsync<List<PlatformPullRequest>>("/api/dashboard/platform/pull-requests");
             if (result is not null) { _pullRequests = result; return _pullRequests; }
         }
         catch { /* fall through */ }
         return _pullRequests;
     }
 
-    public async Task<IReadOnlyList<AgentIssue>> GetIssuesAsync()
+    public async Task<IReadOnlyList<PlatformWorkItem>> GetWorkItemsAsync()
     {
         try
         {
-            var result = await _http.GetFromJsonAsync<List<AgentIssue>>("/api/dashboard/github/issues");
+            var result = await _http.GetFromJsonAsync<List<PlatformWorkItem>>("/api/dashboard/platform/work-items");
             if (result is not null) { _issues = result; return _issues; }
         }
         catch { /* fall through */ }

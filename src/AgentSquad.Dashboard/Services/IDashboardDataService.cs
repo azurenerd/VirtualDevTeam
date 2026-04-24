@@ -1,6 +1,6 @@
 using AgentSquad.Core.Agents;
+using AgentSquad.Core.DevPlatform.Models;
 using AgentSquad.Core.Diagnostics;
-using AgentSquad.Core.GitHub.Models;
 using AgentSquad.Core.Persistence;
 using AgentSquad.Orchestrator;
 
@@ -43,12 +43,13 @@ public interface IDashboardDataService
     IReadOnlyList<AgentChatMessage> GetAgentChatHistory(string agentId);
     void ClearAgentChat(string agentId);
 
-    // GitHub data
-    string RepositoryFullName { get; }
-    bool IsGitHubRateLimited { get; }
-    GitHubRateLimitInfo GetRateLimitInfo();
-    Task<IReadOnlyList<AgentPullRequest>> GetPullRequestsAsync();
-    Task<IReadOnlyList<AgentIssue>> GetIssuesAsync();
+    // Platform data (PRs, work items, rate limiting)
+    string RepositoryDisplayName { get; }
+    string PlatformName { get; }
+    bool IsRateLimited { get; }
+    PlatformRateLimitInfo GetRateLimitInfo();
+    Task<IReadOnlyList<PlatformPullRequest>> GetPullRequestsAsync();
+    Task<IReadOnlyList<PlatformWorkItem>> GetWorkItemsAsync();
 
     // Cache management
     void ResetCaches();

@@ -1,6 +1,6 @@
 @page "/repository"
 @page "/repository/{Tab}"
-@using AgentSquad.Core.GitHub.Models
+@using AgentSquad.Core.DevPlatform.Models
 @using AgentSquad.Dashboard.Services
 @inject IDashboardDataService DataService
 @inject NavigationManager Navigation
@@ -243,16 +243,16 @@ else
     private bool _loading = true;
 
     // PR state
-    private List<AgentPullRequest> _allPrs = [];
-    private List<AgentPullRequest> _filteredPrs = [];
+    private List<PlatformPullRequest> _allPrs = [];
+    private List<PlatformPullRequest> _filteredPrs = [];
     private string _prFilter = "open";
     private int _prOpenCount => _allPrs.Count(p => p.State == "open" && !p.IsMerged);
     private int _prMergedCount => _allPrs.Count(p => p.IsMerged);
     private int _prClosedCount => _allPrs.Count(p => p.State != "open" && !p.IsMerged);
 
     // Issue state
-    private List<AgentIssue> _allIssues = [];
-    private List<AgentIssue> _filteredIssues = [];
+    private List<PlatformWorkItem> _allIssues = [];
+    private List<PlatformWorkItem> _filteredIssues = [];
     private string _issueStateFilter = "open";
     private string? _labelFilter;
     private string? _assigneeFilter;
@@ -286,7 +286,7 @@ else
         try
         {
             var prsTask = DataService.GetPullRequestsAsync();
-            var issuesTask = DataService.GetIssuesAsync();
+            var issuesTask = DataService.GetWorkItemsAsync();
             await Task.WhenAll(prsTask, issuesTask);
 
             _allPrs = prsTask.Result.ToList();
@@ -337,7 +337,7 @@ else
 
     private void ApplyIssueFilter()
     {
-        IEnumerable<AgentIssue> result = _issueStateFilter switch
+        IEnumerable<PlatformWorkItem> result = _issueStateFilter switch
         {
             "open" => _allIssues.Where(i => i.State == "open"),
             "closed" => _allIssues.Where(i => i.State != "open"),

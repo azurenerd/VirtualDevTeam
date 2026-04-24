@@ -34,7 +34,7 @@ public class DevPlatformTests
 
         var result = GitHubModelMapper.ToPlatform(pr);
 
-        Assert.Equal(42, result.Id);
+        Assert.Equal(42, result.Number);
         Assert.Equal("feat: add auth", result.Title);
         Assert.Equal("Implements JWT", result.Body);
         Assert.Equal("open", result.State);

@@ -1,5 +1,5 @@
 @page "/pullrequests"
-@using AgentSquad.Core.GitHub.Models
+@using AgentSquad.Core.DevPlatform.Models
 @using AgentSquad.Dashboard.Services
 @inject IDashboardDataService DataService
 @rendermode InteractiveServer
@@ -90,8 +90,8 @@ else
 }
 
 @code {
-    private List<AgentPullRequest> _allPrs = new();
-    private List<AgentPullRequest> _filteredPrs = new();
+    private List<PlatformPullRequest> _allPrs = new();
+    private List<PlatformPullRequest> _filteredPrs = new();
     private string _filter = "all";
     private bool _loading = true;
 

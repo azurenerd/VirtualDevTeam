@@ -10,7 +10,7 @@ public static class GitHubModelMapper
 {
     public static PlatformPullRequest ToPlatform(AgentPullRequest pr) => new()
     {
-        Id = pr.Number,
+        Number = pr.Number,
         Title = pr.Title,
         Body = pr.Body,
         State = pr.State,

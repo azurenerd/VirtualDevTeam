@@ -1,5 +1,5 @@
 @page "/issues"
-@using AgentSquad.Core.GitHub.Models
+@using AgentSquad.Core.DevPlatform.Models
 @using AgentSquad.Dashboard.Services
 @inject IDashboardDataService DataService
 @rendermode InteractiveServer
@@ -164,8 +164,8 @@ else
 }
 
 @code {
-    private List<AgentIssue> _allIssues = new();
-    private List<AgentIssue> _filteredIssues = new();
+    private List<PlatformWorkItem> _allIssues = new();
+    private List<PlatformWorkItem> _filteredIssues = new();
     private string _stateFilter = "open";
     private string? _labelFilter;
     private string? _assigneeFilter;
@@ -192,7 +192,7 @@ else
     {
         try
         {
-            var issues = await DataService.GetIssuesAsync();
+            var issues = await DataService.GetWorkItemsAsync();
             _allIssues = issues.ToList();
 
             // Build filter options from data
@@ -271,7 +271,7 @@ else
 
     private void ApplyFilter()
     {
-        IEnumerable<AgentIssue> result = _stateFilter switch
+        IEnumerable<PlatformWorkItem> result = _stateFilter switch
         {
             "open" => _allIssues.Where(i => i.State == "open"),
             "closed" => _allIssues.Where(i => i.State != "open"),

@@ -1,6 +1,6 @@
 @page "/timeline"
 @rendermode InteractiveServer
-@using AgentSquad.Core.GitHub.Models
+@using AgentSquad.Core.DevPlatform.Models
 @using AgentSquad.Core.GitHub
 @using AgentSquad.Core.Strategies
 @using AgentSquad.Dashboard.Services
@@ -389,10 +389,10 @@ else
 }
 
 @code {
-    private List<AgentIssue> _issues = [];
-    private List<AgentPullRequest> _pullRequests = [];
-    private List<AgentIssue> _rawIssues = [];
-    private List<AgentPullRequest> _rawPullRequests = [];
+    private List<PlatformWorkItem> _issues = [];
+    private List<PlatformPullRequest> _pullRequests = [];
+    private List<PlatformWorkItem> _rawIssues = [];
+    private List<PlatformPullRequest> _rawPullRequests = [];
     private List<NeonPhase> _phases = [];
     private HashSet<int> _syntheticPrNumbers = new(); // tracks which issue numbers are actually PRs
     private string _dataFingerprint = ""; // hash to detect actual data changes
@@ -411,7 +411,7 @@ else
     private int? _selectedIssue;
     private IssueGroup? _selectedGroup;
     private int? _selectedPr;
-    private AgentPullRequest? _selectedPrObj;
+    private PlatformPullRequest? _selectedPrObj;
 
     private Dictionary<int, IssueGroup> _groupLookup = new();
 
@@ -446,18 +446,18 @@ else
     private async Task LoadDataAsync(bool showOverlay = false)
     {
         if (showOverlay) _loading = true;
-        _isRateLimited = DataService.IsGitHubRateLimited;
+        _isRateLimited = DataService.IsRateLimited;
         try
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
-            var issuesTask = DataService.GetIssuesAsync();
+            var issuesTask = DataService.GetWorkItemsAsync();
             var prsTask = DataService.GetPullRequestsAsync();
             try { await Task.WhenAll(issuesTask, prsTask).WaitAsync(cts.Token); }
             catch (OperationCanceledException) { }
 
             var newIssues = issuesTask.IsCompletedSuccessfully ? issuesTask.Result.ToList() : [];
             var newPRs = prsTask.IsCompletedSuccessfully ? prsTask.Result.ToList() : [];
-            _isRateLimited = DataService.IsGitHubRateLimited;
+            _isRateLimited = DataService.IsRateLimited;
 
             // Compute fingerprint: issue/PR numbers + states + labels count + PR merged status
             var fp = ComputeFingerprint(newIssues, newPRs);
@@ -500,7 +500,7 @@ else
     /// <summary>
     /// Cheap fingerprint of issue/PR data to detect real changes without rebuilding the whole timeline.
     /// </summary>
-    private static string ComputeFingerprint(List<AgentIssue> issues, List<AgentPullRequest> prs)
+    private static string ComputeFingerprint(List<PlatformWorkItem> issues, List<PlatformPullRequest> prs)
     {
         var hash = new System.HashCode();
         hash.Add(issues.Count);
@@ -577,7 +577,7 @@ else
 
         // --- Step 2: Add doc PRs as synthetic timeline items ---
         // Research, PM Spec, and Architecture phases are PRs, not issues.
-        // Create synthetic AgentIssue entries so they appear as timeline nodes.
+        // Create synthetic work item entries so they appear as timeline nodes.
         // But skip if a real issue from the same agent already exists (avoids duplicates).
         var existingNumbers = _issues.Select(i => i.Number).ToHashSet();
         foreach (var pr in _pullRequests)
@@ -601,7 +601,7 @@ else
                 }
 
                 _syntheticPrNumbers.Add(pr.Number);
-                _issues.Add(new AgentIssue
+                _issues.Add(new PlatformWorkItem
                 {
                     Number = pr.Number,
                     Title = pr.Title,
@@ -635,7 +635,7 @@ else
             if (anchorPr is null) continue;
 
             _syntheticPrNumbers.Add(anchorPr.Number);
-            _issues.Add(new AgentIssue
+            _issues.Add(new PlatformWorkItem
             {
                 Number = anchorPr.Number,
                 Title = anchorPr.Title,
@@ -668,7 +668,7 @@ else
         }
 
         // --- Step 3: Build issue→PR links (for detail panel) ---
-        var prsByIssue = new Dictionary<int, List<AgentPullRequest>>();
+        var prsByIssue = new Dictionary<int, List<PlatformPullRequest>>();
         foreach (var pr in _pullRequests)
         {
             var linked = PullRequestWorkflow.ParseLinkedIssueNumber(pr.Body);
@@ -682,9 +682,9 @@ else
         // --- Step 4: Build parent→child issue relationships ---
         // Enhancement (PM) issues are parents; engineering-task issues are children.
         var childIssueNumbers = new HashSet<int>();
-        var childrenByParent = new Dictionary<int, List<AgentIssue>>();
+        var childrenByParent = new Dictionary<int, List<PlatformWorkItem>>();
         // Also build engineering-task → linked PRs for engineering view
-        var engTaskPRs = new Dictionary<int, List<AgentPullRequest>>();
+        var engTaskPRs = new Dictionary<int, List<PlatformPullRequest>>();
         foreach (var issue in _issues)
         {
             foreach (var parentIssue in _issues)
@@ -1081,7 +1081,7 @@ else
     // Builds a stable raw.githubusercontent.com URL for the canonical ready-for-review
     // screenshot captured at the PR's head SHA. Using HeadSha (not branch name) guards
     // against branch mutation or deletion after merge.
-    private static string? BuildReadyForReviewScreenshotUrl(AgentPullRequest pr)
+    private static string? BuildReadyForReviewScreenshotUrl(PlatformPullRequest pr)
     {
         if (string.IsNullOrEmpty(pr.Url) || string.IsNullOrEmpty(pr.HeadSha)) return null;
         // pr.Url: https://github.com/{owner}/{repo}/pull/{N}
@@ -1099,7 +1099,7 @@ else
 
     // Returns one tile per code-generation strategy. Checks CandidateStateStore for in-memory
     // screenshot data first (base64 from evaluation), then falls back to GitHub raw URLs.
-    private List<ScreenshotCandidate> GetScreenshotCandidates(AgentPullRequest pr)
+    private List<ScreenshotCandidate> GetScreenshotCandidates(PlatformPullRequest pr)
     {
         var results = new List<ScreenshotCandidate>();
         if (string.IsNullOrEmpty(pr.Url) || string.IsNullOrEmpty(pr.HeadSha))
@@ -1221,9 +1221,9 @@ else
 
     private record IssueGroup
     {
-        public required AgentIssue Issue { get; init; }
-        public required List<AgentPullRequest> LinkedPRs { get; init; }
-        public required List<AgentIssue> ChildIssues { get; init; }
+        public required PlatformWorkItem Issue { get; init; }
+        public required List<PlatformPullRequest> LinkedPRs { get; init; }
+        public required List<PlatformWorkItem> ChildIssues { get; init; }
         /// <summary>True when the top-level item is actually a PR rendered as a synthetic issue.</summary>
         public bool IsPullRequest { get; init; }
         /// <summary>Wave assignment for engineering tasks (e.g., "W0", "W1"). Empty for non-engineering items.</summary>

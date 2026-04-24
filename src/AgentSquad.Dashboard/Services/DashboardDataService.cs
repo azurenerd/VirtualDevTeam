@@ -1,5 +1,6 @@
 using AgentSquad.Core.Agents;
 using AgentSquad.Core.Configuration;
+using AgentSquad.Core.DevPlatform.Models;
 using AgentSquad.Core.Diagnostics;
 using AgentSquad.Core.GitHub;
 using AgentSquad.Core.GitHub.Models;
@@ -124,9 +125,9 @@ public sealed class DashboardDataService : BackgroundService, IDashboardDataServ
     private const int MaxDiagnosticHistory = 500;
 
     private AgentHealthSnapshot? _lastHealthSnapshot;
-    private IReadOnlyList<AgentPullRequest> _cachedPullRequests = Array.Empty<AgentPullRequest>();
+    private IReadOnlyList<PlatformPullRequest> _cachedPullRequests = Array.Empty<PlatformPullRequest>();
     private DateTime _lastPrFetchUtc = DateTime.MinValue;
-    private IReadOnlyList<AgentIssue> _cachedIssues = Array.Empty<AgentIssue>();
+    private IReadOnlyList<PlatformWorkItem> _cachedIssues = Array.Empty<PlatformWorkItem>();
     private DateTime _lastIssueFetchUtc = DateTime.MinValue;
     private static readonly TimeSpan PrCacheExpiry = TimeSpan.FromSeconds(30);
 
@@ -214,8 +215,8 @@ public sealed class DashboardDataService : BackgroundService, IDashboardDataServ
             _diagnosticHistory.Clear();
             _milestones.Clear();
             _recordedMilestoneKeys.Clear();
-            _cachedPullRequests = Array.Empty<AgentPullRequest>();
-            _cachedIssues = Array.Empty<AgentIssue>();
+            _cachedPullRequests = Array.Empty<PlatformPullRequest>();
+            _cachedIssues = Array.Empty<PlatformWorkItem>();
             _lastPrFetchUtc = DateTime.MinValue;
             _lastIssueFetchUtc = DateTime.MinValue;
         }
@@ -1033,43 +1034,43 @@ public sealed class DashboardDataService : BackgroundService, IDashboardDataServ
         return $"{ts.Seconds}s";
     }
 
-    // --- Pull Request data for dashboard ---
+    // --- Platform data for dashboard ---
 
-    /// <summary>True when GitHub API rate limit is active — dashboard should show cached data.</summary>
-    public bool IsGitHubRateLimited => _rateLimitManager.IsRateLimited;
+    /// <summary>True when platform API rate limit is active — dashboard should show cached data.</summary>
+    public bool IsRateLimited => _rateLimitManager.IsRateLimited;
 
-    public string RepositoryFullName => _github.RepositoryFullName;
+    public string RepositoryDisplayName => _github.RepositoryFullName;
+    public string PlatformName => "GitHub";
 
-    public GitHubRateLimitInfo GetRateLimitInfo() => new()
+    public PlatformRateLimitInfo GetRateLimitInfo() => new()
     {
         Remaining = _rateLimitManager.Remaining == int.MaxValue ? 5000 : _rateLimitManager.Remaining,
         Limit = 5000,
         ResetAt = _rateLimitManager.ResetAtUtc,
         TotalApiCalls = _rateLimitManager.TotalApiCalls,
-        IsRateLimited = _rateLimitManager.IsRateLimited
+        IsRateLimited = _rateLimitManager.IsRateLimited,
+        PlatformName = "GitHub"
     };
 
     /// <summary>Short timeout for dashboard API calls to avoid blocking on rate limiter semaphore contention.</summary>
     private static readonly TimeSpan DashboardApiTimeout = TimeSpan.FromSeconds(8);
 
-    public async Task<IReadOnlyList<AgentPullRequest>> GetPullRequestsAsync()
+    public async Task<IReadOnlyList<PlatformPullRequest>> GetPullRequestsAsync()
     {
         if (DateTime.UtcNow - _lastPrFetchUtc < PrCacheExpiry && _cachedPullRequests.Count > 0)
             return _cachedPullRequests;
 
         if (_rateLimitManager.IsRateLimited)
         {
-            _logger.LogDebug("Skipping PR fetch — GitHub API is rate-limited");
+            _logger.LogDebug("Skipping PR fetch — platform API is rate-limited");
             return _cachedPullRequests;
         }
 
         try
         {
-            // Use a short timeout to avoid blocking the dashboard when agents saturate the rate limiter semaphore.
-            // If the call times out, return whatever cache we have and schedule a background refresh.
             using var cts = new CancellationTokenSource(DashboardApiTimeout);
             var allPrs = await _github.GetAllPullRequestsAsync(cts.Token);
-            _cachedPullRequests = allPrs.ToList();
+            _cachedPullRequests = allPrs.Select(AgentSquad.Core.DevPlatform.Providers.GitHub.GitHubModelMapper.ToPlatform).ToList();
             _lastPrFetchUtc = DateTime.UtcNow;
         }
         catch (OperationCanceledException)
@@ -1085,16 +1086,16 @@ public sealed class DashboardDataService : BackgroundService, IDashboardDataServ
         return _cachedPullRequests;
     }
 
-    // --- Issue data for dashboard ---
+    // --- Work item data for dashboard ---
 
-    public async Task<IReadOnlyList<AgentIssue>> GetIssuesAsync()
+    public async Task<IReadOnlyList<PlatformWorkItem>> GetWorkItemsAsync()
     {
         if (DateTime.UtcNow - _lastIssueFetchUtc < PrCacheExpiry && _cachedIssues.Count > 0)
             return _cachedIssues;
 
         if (_rateLimitManager.IsRateLimited)
         {
-            _logger.LogDebug("Skipping issue fetch — GitHub API is rate-limited");
+            _logger.LogDebug("Skipping work item fetch — platform API is rate-limited");
             return _cachedIssues;
         }
 
@@ -1102,18 +1103,18 @@ public sealed class DashboardDataService : BackgroundService, IDashboardDataServ
         {
             using var cts = new CancellationTokenSource(DashboardApiTimeout);
             var allIssues = await _github.GetAllIssuesAsync(cts.Token);
-            _logger.LogInformation("Issue fetch: total={Total} issues from GitHub", allIssues.Count);
-            _cachedIssues = allIssues.ToList();
+            _logger.LogInformation("Work item fetch: total={Total} items from platform", allIssues.Count);
+            _cachedIssues = allIssues.Select(AgentSquad.Core.DevPlatform.Providers.GitHub.GitHubModelMapper.ToPlatform).ToList();
             _lastIssueFetchUtc = DateTime.UtcNow;
         }
         catch (OperationCanceledException)
         {
-            _logger.LogDebug("Issue fetch timed out (semaphore contention) — returning cached data, scheduling background refresh");
+            _logger.LogDebug("Work item fetch timed out (semaphore contention) — returning cached data, scheduling background refresh");
             ScheduleBackgroundRefresh();
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to fetch issues for dashboard");
+            _logger.LogWarning(ex, "Failed to fetch work items for dashboard");
         }
 
         return _cachedIssues;
@@ -1135,21 +1136,21 @@ public sealed class DashboardDataService : BackgroundService, IDashboardDataServ
             {
                 await Task.Delay(TimeSpan.FromSeconds(15));
 
-                // Retry issues
+                // Retry work items
                 try
                 {
                     var allIssues = await _github.GetAllIssuesAsync();
-                    _cachedIssues = allIssues.ToList();
+                    _cachedIssues = allIssues.Select(AgentSquad.Core.DevPlatform.Providers.GitHub.GitHubModelMapper.ToPlatform).ToList();
                     _lastIssueFetchUtc = DateTime.UtcNow;
-                    _logger.LogInformation("Background refresh: loaded {Count} issues", _cachedIssues.Count);
+                    _logger.LogInformation("Background refresh: loaded {Count} work items", _cachedIssues.Count);
                 }
-                catch (Exception ex) { _logger.LogDebug(ex, "Background issue refresh failed"); }
+                catch (Exception ex) { _logger.LogDebug(ex, "Background work item refresh failed"); }
 
                 // Retry PRs
                 try
                 {
                     var allPrs = await _github.GetAllPullRequestsAsync();
-                    _cachedPullRequests = allPrs.ToList();
+                    _cachedPullRequests = allPrs.Select(AgentSquad.Core.DevPlatform.Providers.GitHub.GitHubModelMapper.ToPlatform).ToList();
                     _lastPrFetchUtc = DateTime.UtcNow;
                     _logger.LogInformation("Background refresh: loaded {Count} PRs", _cachedPullRequests.Count);
                 }

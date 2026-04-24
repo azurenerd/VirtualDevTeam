@@ -1,4 +1,4 @@
-@using AgentSquad.Core.GitHub.Models
+@using AgentSquad.Core.DevPlatform.Models
 @using AgentSquad.Dashboard.Services
 @inject IServiceProvider ServiceProvider
 @implements IDisposable
@@ -13,7 +13,7 @@
 </div>
 
 @code {
-    private GitHubRateLimitInfo _info = new() { Remaining = 5000, Limit = 5000 };
+    private PlatformRateLimitInfo _info = new() { Remaining = 5000, Limit = 5000 };
     private Timer? _refreshTimer;
     private IDashboardDataService? _dataService;
 

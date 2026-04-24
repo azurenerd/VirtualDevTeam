@@ -5,7 +5,7 @@ namespace AgentSquad.Core.DevPlatform.Models;
 /// </summary>
 public record PlatformPullRequest
 {
-    public int Id { get; init; }
+    public int Number { get; init; }
     public string Title { get; init; } = "";
     public string Body { get; init; } = "";
     public string State { get; init; } = "open";
