@@ -94,8 +94,17 @@ builder.Services.AddSingleton<IStrategiesDataService>(sp =>
     var http = factory.CreateClient("RunnerApi");
     return new HttpStrategiesDataService(http, sp.GetRequiredService<ILogger<HttpStrategiesDataService>>());
 });
-builder.Services.AddSingleton<ConfigurationService>();
-builder.Services.AddSingleton<IConfigurationService>(sp => sp.GetRequiredService<ConfigurationService>());
+// Configuration: proxy to Runner API (save, cleanup, validate) with local file fallback
+builder.Services.AddSingleton<IConfigurationService>(sp =>
+{
+    var factory = sp.GetRequiredService<IHttpClientFactory>();
+    var localPath = Path.Combine(runnerDir, "appsettings.json");
+    return new HttpConfigurationService(
+        factory,
+        "RunnerApi",
+        sp.GetRequiredService<ILogger<HttpConfigurationService>>(),
+        localAppSettingsPath: File.Exists(localPath) ? localPath : null);
+});
 builder.Services.AddSingleton<DirectorCliService>();
 builder.Services.AddSingleton(new DashboardMode(IsStandalone: true));
 
