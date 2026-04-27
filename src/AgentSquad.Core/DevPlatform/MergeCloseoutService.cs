@@ -1,5 +1,7 @@
 using AgentSquad.Core.DevPlatform.Capabilities;
+using AgentSquad.Core.DevPlatform.Config;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace AgentSquad.Core.DevPlatform;
 
@@ -14,15 +16,24 @@ public sealed class MergeCloseoutService
     private readonly IPullRequestService _prService;
     private readonly IWorkItemService _workItemService;
     private readonly ILogger<MergeCloseoutService> _logger;
+    private readonly HashSet<string> _terminalStates;
 
     public MergeCloseoutService(
         IPullRequestService prService,
         IWorkItemService workItemService,
+        IOptions<DevPlatformConfig> platformConfig,
         ILogger<MergeCloseoutService> logger)
     {
         _prService = prService ?? throw new ArgumentNullException(nameof(prService));
         _workItemService = workItemService ?? throw new ArgumentNullException(nameof(workItemService));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+
+        // Build terminal states set from config (handles Agile/Scrum/CMMI)
+        var closedName = platformConfig?.Value?.AzureDevOps?.ClosedStateName ?? "Closed";
+        _terminalStates = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "Closed", "Done", "Resolved", "Removed", closedName
+        };
     }
 
     /// <summary>
@@ -54,11 +65,8 @@ public sealed class MergeCloseoutService
                         continue;
                     }
 
-                    // Skip if already closed
-                    if (string.Equals(workItem.State, "closed", StringComparison.OrdinalIgnoreCase) ||
-                        string.Equals(workItem.State, "Closed", StringComparison.OrdinalIgnoreCase) ||
-                        string.Equals(workItem.State, "Done", StringComparison.OrdinalIgnoreCase) ||
-                        string.Equals(workItem.State, "Resolved", StringComparison.OrdinalIgnoreCase))
+                    // Skip if already in terminal state
+                    if (_terminalStates.Contains(workItem.State ?? ""))
                     {
                         _logger.LogDebug("Work item #{Id} already in terminal state '{State}'", workItemId, workItem.State);
                         continue;

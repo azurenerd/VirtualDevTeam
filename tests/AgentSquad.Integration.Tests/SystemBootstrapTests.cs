@@ -1,6 +1,7 @@
 using AgentSquad.Core.Agents;
 using AgentSquad.Core.AI;
 using AgentSquad.Core.Configuration;
+using AgentSquad.Core.DevPlatform;
 using AgentSquad.Core.GitHub;
 using AgentSquad.Core.Messaging;
 using AgentSquad.Core.Persistence;
@@ -96,6 +97,13 @@ public class SystemBootstrapTests : IDisposable
 
         // Prompt template service (needed by all agents)
         services.AddSingleton<IPromptTemplateService, PromptTemplateService>();
+
+        // DevPlatform abstraction (needed by PM, SE, TE for platform-agnostic operations)
+        services.Configure<AgentSquad.Core.DevPlatform.Config.DevPlatformConfig>(cfg =>
+        {
+            cfg.Platform = AgentSquad.Core.DevPlatform.Config.DevPlatformType.GitHub;
+        });
+        services.AddDevPlatform();
 
         // Orchestrator
         services.AddOrchestrator();

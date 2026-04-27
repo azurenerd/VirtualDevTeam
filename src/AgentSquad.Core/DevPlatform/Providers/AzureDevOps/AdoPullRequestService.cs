@@ -77,7 +77,11 @@ public sealed class AdoPullRequestService : AdoHttpClientBase, IPullRequestServi
         var url = BuildUrl($"{Project}/_apis/git/repositories/{Repository}/pullrequests",
             "searchCriteria.status=completed&$top=200");
         var response = await GetAsync<AdoListResponse<AdoPullRequest>>(url, ct);
-        return response?.Value.Select(p => AdoModelMapper.ToPlatform(p, Organization, Project)).ToList()
+        // Filter to agent-created PRs (branch prefix "agent/") to avoid stale completed PRs
+        // from prior runs after mini-reset. Only AgentSquad PRs use this convention.
+        return response?.Value
+            .Where(p => p.SourceBranch.StartsWith("refs/heads/agent/", StringComparison.OrdinalIgnoreCase))
+            .Select(p => AdoModelMapper.ToPlatform(p, Organization, Project)).ToList()
             ?? new List<PlatformPullRequest>();
     }
 
@@ -194,14 +198,37 @@ public sealed class AdoPullRequestService : AdoHttpClientBase, IPullRequestServi
         return Task.FromResult(false);
     }
 
+    // Cached repo/project GUIDs for vstfs artifact URIs
+    private string? _repoGuid;
+    private string? _projectGuid;
+
+    /// <summary>
+    /// Get repository and project GUIDs, cached after first call.
+    /// Required for constructing vstfs:///Git/PullRequestId artifact URIs.
+    /// </summary>
+    private async Task<(string ProjectGuid, string RepoGuid)> GetRepoGuidsAsync(CancellationToken ct)
+    {
+        if (_projectGuid is not null && _repoGuid is not null)
+            return (_projectGuid, _repoGuid);
+
+        var url = BuildUrl($"{Project}/_apis/git/repositories/{Repository}");
+        var repoInfo = await GetAsync<AdoRepositoryInfo>(url, ct);
+        _repoGuid = repoInfo?.Id ?? throw new InvalidOperationException(
+            $"Could not resolve repository GUID for '{Repository}' in project '{Project}'");
+        _projectGuid = repoInfo?.Project?.Id ?? throw new InvalidOperationException(
+            $"Could not resolve project GUID for repository '{Repository}'");
+
+        _logger.LogDebug("Resolved ADO GUIDs: project={ProjectGuid}, repo={RepoGuid}", _projectGuid, _repoGuid);
+        return (_projectGuid, _repoGuid);
+    }
+
     public async Task LinkWorkItemAsync(int prId, int workItemId, CancellationToken ct = default)
     {
-        // ADO: Link work item to PR via the work item's ArtifactLink relation.
-        // The artifact URI format for PRs: vstfs:///Git/PullRequestId/{projectId}%2F{repoId}%2F{prId}
-        // Since we may not have GUIDs, use the simpler approach: query the PR's work items endpoint.
-        // ADO also supports adding via the work item patch API with a vstfs artifact link.
-        // We'll use the project/repo names in the URL path format that ADO accepts.
-        var prUrl = $"{BaseUrl}{Project}/_apis/git/repositories/{Repository}/pullrequests/{prId}";
+        // ADO: Link work item to PR via ArtifactLink with proper vstfs URI.
+        // Format: vstfs:///Git/PullRequestId/{projectGuid}%2F{repoGuid}%2F{prId}
+        var (projectGuid, repoGuid) = await GetRepoGuidsAsync(ct);
+        var artifactUri = $"vstfs:///Git/PullRequestId/{projectGuid}%2F{repoGuid}%2F{prId}";
+
         var url = BuildUrl($"{Project}/_apis/wit/workitems/{workItemId}");
         var patchDoc = new List<object>
         {
@@ -212,7 +239,7 @@ public sealed class AdoPullRequestService : AdoHttpClientBase, IPullRequestServi
                 value = new
                 {
                     rel = "ArtifactLink",
-                    url = prUrl,
+                    url = artifactUri,
                     attributes = new { name = "Pull Request" }
                 }
             }
@@ -221,7 +248,7 @@ public sealed class AdoPullRequestService : AdoHttpClientBase, IPullRequestServi
         try
         {
             await PatchAsync<object>(url, patchDoc, ct, "application/json-patch+json");
-            _logger.LogInformation("Linked ADO work item #{WorkItemId} to PR #{PrId}", workItemId, prId);
+            _logger.LogInformation("Linked ADO work item #{WorkItemId} to PR #{PrId} (vstfs artifact)", workItemId, prId);
         }
         catch (HttpRequestException ex) when (ex.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase)
             || ex.Message.Contains("VS403654", StringComparison.OrdinalIgnoreCase)

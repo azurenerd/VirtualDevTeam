@@ -248,3 +248,20 @@ internal record AdoPrWorkItemRef
     public string Id { get; init; } = "";
     public string? Url { get; init; }
 }
+
+/// <summary>
+/// Repository info from the Git repositories endpoint.
+/// Used to get the project and repo GUIDs for vstfs artifact URIs.
+/// </summary>
+internal record AdoRepositoryInfo
+{
+    public string Id { get; init; } = "";
+    public string Name { get; init; } = "";
+    public AdoProjectRef? Project { get; init; }
+}
+
+internal record AdoProjectRef
+{
+    public string Id { get; init; } = "";
+    public string Name { get; init; } = "";
+}

@@ -117,12 +117,15 @@ public sealed class GitHubPullRequestAdapter : IPullRequestService
         var pr = await _github.GetPullRequestAsync(prId, ct);
         if (pr is null) return;
 
-        var closePattern = $"Closes #{workItemId}";
         var body = pr.Body ?? "";
 
-        if (body.Contains(closePattern, StringComparison.OrdinalIgnoreCase))
+        // Use regex-parsed linked IDs to avoid numeric prefix false positives
+        // (e.g., "Closes #12" would falsely match when checking for #123)
+        var existingIds = await GetLinkedWorkItemIdsAsync(prId, ct);
+        if (existingIds.Contains(workItemId))
             return; // Already linked
 
+        var closePattern = $"Closes #{workItemId}";
         var updatedBody = string.IsNullOrWhiteSpace(body)
             ? closePattern
             : $"{body}\n\n{closePattern}";
