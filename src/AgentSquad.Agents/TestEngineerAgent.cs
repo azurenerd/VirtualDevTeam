@@ -4,6 +4,7 @@ using AgentSquad.Core.Agents.Decisions;
 using AgentSquad.Core.AI;
 using AgentSquad.Core.Configuration;
 using AgentSquad.Core.DevPlatform.Capabilities;
+using AgentSquad.Core.DevPlatform.Models;
 using AgentSquad.Core.GitHub;
 using AgentSquad.Core.GitHub.Models;
 using AgentSquad.Core.Messaging;
@@ -54,6 +55,9 @@ public class TestEngineerAgent : AgentBase
     private readonly IMessageBus _messageBus;
     private readonly IGitHubService _github;
     private readonly IPullRequestService _prService;
+    private readonly IWorkItemService _workItemService;
+    private readonly IRepositoryContentService _repoContent;
+    private readonly IReviewService _reviewService;
     private readonly PullRequestWorkflow _prWorkflow;
     private readonly ProjectFileManager _projectFiles;
     private readonly ModelRegistry _modelRegistry;
@@ -103,6 +107,9 @@ public class TestEngineerAgent : AgentBase
         IMessageBus messageBus,
         IGitHubService github,
         IPullRequestService prService,
+        IWorkItemService workItemService,
+        IRepositoryContentService repoContent,
+        IReviewService reviewService,
         PullRequestWorkflow prWorkflow,
         ProjectFileManager projectFiles,
         ModelRegistry modelRegistry,
@@ -125,6 +132,9 @@ public class TestEngineerAgent : AgentBase
         _messageBus = messageBus ?? throw new ArgumentNullException(nameof(messageBus));
         _github = github ?? throw new ArgumentNullException(nameof(github));
         _prService = prService ?? throw new ArgumentNullException(nameof(prService));
+        _workItemService = workItemService ?? throw new ArgumentNullException(nameof(workItemService));
+        _repoContent = repoContent ?? throw new ArgumentNullException(nameof(repoContent));
+        _reviewService = reviewService ?? throw new ArgumentNullException(nameof(reviewService));
         _prWorkflow = prWorkflow ?? throw new ArgumentNullException(nameof(prWorkflow));
         _projectFiles = projectFiles ?? throw new ArgumentNullException(nameof(projectFiles));
         _modelRegistry = modelRegistry ?? throw new ArgumentNullException(nameof(modelRegistry));
@@ -289,7 +299,7 @@ public class TestEngineerAgent : AgentBase
         if (_currentTestPrNumber is null)
             return;
 
-        var pr = await _github.GetPullRequestAsync(_currentTestPrNumber.Value, ct);
+        var pr = await _prService.GetAsync(_currentTestPrNumber.Value, ct);
         if (pr is null || !string.Equals(pr.State, "open", StringComparison.OrdinalIgnoreCase))
         {
             Logger.LogInformation("Test PR #{PrNumber} is no longer open (state: {State}), clearing tracking",
@@ -305,7 +315,7 @@ public class TestEngineerAgent : AgentBase
     /// </summary>
     private async Task ScanMergedPRsForTestingAsync(CancellationToken ct)
     {
-        var mergedPRs = await _github.GetMergedPullRequestsAsync(ct);
+        var mergedPRs = await _prService.ListMergedAsync(ct);
 
         foreach (var pr in mergedPRs)
         {
@@ -338,13 +348,13 @@ public class TestEngineerAgent : AgentBase
             }
 
             // AI-based testability assessment for legacy mode
-            var changedFiles = await _github.GetPullRequestChangedFilesAsync(pr.Number, ct);
+            var changedFiles = await _prService.GetChangedFilesAsync(pr.Number, ct);
             
             var assessStepId = _taskTracker.BeginStep(Identity.Id, $"te-pr-{pr.Number}", "Generate test plan",
                 $"Assessing testability of merged PR #{pr.Number}", Identity.ModelTier);
             Logger.LogInformation("Assessing testability of merged PR #{Number} ({FileCount} files): {Title}",
                 pr.Number, changedFiles.Count, pr.Title);
-            var assessment = await AssessTestabilityAsync(pr, changedFiles, ct);
+            var assessment = await AssessTestabilityAsync(pr.ToAgentPR(), changedFiles, ct);
             _taskTracker.RecordLlmCall(assessStepId);
 
             if (!assessment.NeedsTests)
@@ -368,7 +378,7 @@ public class TestEngineerAgent : AgentBase
             {
                 var execStepId = _taskTracker.BeginStep(Identity.Id, $"te-pr-{pr.Number}", "Execute tests",
                     $"Generating and running tests for PR #{pr.Number}", Identity.ModelTier);
-                await GenerateTestsForMergedPRAsync(pr, codeFiles, ct);
+                await GenerateTestsForMergedPRAsync(pr.ToAgentPR(), codeFiles, ct);
                 _testedPRs.Add(pr.Number);
                 _sessionTestedPRs.Add(pr.Number);
                 _taskTracker.CompleteStep(execStepId);
@@ -396,7 +406,7 @@ public class TestEngineerAgent : AgentBase
         if (_currentTestPrNumber is not null)
             return;
 
-        var openPRs = await _github.GetOpenPullRequestsAsync(ct);
+        var openPRs = await _prService.ListOpenAsync(ct);
 
         // Priority: re-test PRs where we previously found source bugs and the engineer may have pushed fixes
         if (_pendingSourceFixPRs.Count > 0)
@@ -419,9 +429,9 @@ public class TestEngineerAgent : AgentBase
                     // Re-fetch changed files and re-test
                     try
                     {
-                        var changedFiles = await _github.GetPullRequestChangedFilesAsync(pendingPr.Number, ct);
+                        var changedFiles = await _prService.GetChangedFilesAsync(pendingPr.Number, ct);
                         // For re-test after source fix, use all changed files — AI assessment already done
-                        await AddInlineTestsToPRAsync(pendingPr, changedFiles, ct);
+                        await AddInlineTestsToPRAsync(pendingPr.ToAgentPR(), changedFiles, ct);
                     }
                     catch (Exception ex)
                     {
@@ -451,7 +461,7 @@ public class TestEngineerAgent : AgentBase
             // the PE worker is still pushing rework commits.
             try
             {
-                var comments = await _github.GetPullRequestCommentsAsync(pr.Number, ct);
+                var comments = await _reviewService.GetCommentsAsync(pr.Number, ct);
                 var lastPeReviewComment = comments
                     .Where(c => c.Body.Contains("[SoftwareEngineer]", StringComparison.OrdinalIgnoreCase)
                              && (c.Body.Contains("APPROVED", StringComparison.OrdinalIgnoreCase)
@@ -495,13 +505,13 @@ public class TestEngineerAgent : AgentBase
             }
 
             // AI-based testability assessment — examines files, acceptance criteria, and context
-            var changedFiles = await _github.GetPullRequestChangedFilesAsync(pr.Number, ct);
+            var changedFiles = await _prService.GetChangedFilesAsync(pr.Number, ct);
 
             var inlineAssessStepId = _taskTracker.BeginStep(Identity.Id, $"te-pr-{pr.Number}", "Generate test plan",
                 $"Assessing testability of PR #{pr.Number}", Identity.ModelTier);
             Logger.LogInformation("Assessing testability of PR #{Number} ({FileCount} changed files): {Title}",
                 pr.Number, changedFiles.Count, pr.Title);
-            var assessment = await AssessTestabilityAsync(pr, changedFiles, ct);
+            var assessment = await AssessTestabilityAsync(pr.ToAgentPR(), changedFiles, ct);
             _taskTracker.RecordLlmCall(inlineAssessStepId);
 
             if (!assessment.NeedsTests)
@@ -509,10 +519,10 @@ public class TestEngineerAgent : AgentBase
                 Logger.LogInformation("AI assessment: PR #{Number} does not need tests — {Rationale}", pr.Number, assessment.Rationale);
                 _testedPRs.Add(pr.Number);
                 // Post comment BEFORE label so PM sees test results when it sees the label
-                await _github.AddPullRequestCommentAsync(pr.Number,
+                await _reviewService.AddCommentAsync(pr.Number,
                     $"✅ **[TestEngineer] No Tests Needed** — {assessment.Rationale}\n\n" +
                     "Marking as tested to proceed with PM review.", ct);
-                await ApplyTestsAddedLabelAsync(pr, ct);
+                await ApplyTestsAddedLabelAsync(pr.ToAgentPR(), ct);
                 _taskTracker.CompleteStep(inlineAssessStepId, AgentTaskStepStatus.Skipped);
                 continue;
             }
@@ -534,7 +544,7 @@ public class TestEngineerAgent : AgentBase
             {
                 var inlineExecStepId = _taskTracker.BeginStep(Identity.Id, $"te-pr-{pr.Number}", "Execute tests",
                     $"Adding inline tests to PR #{pr.Number}", Identity.ModelTier);
-                var testingCompleted = await AddInlineTestsToPRAsync(pr, codeFiles, ct);
+                var testingCompleted = await AddInlineTestsToPRAsync(pr.ToAgentPR(), codeFiles, ct);
                 if (testingCompleted)
                 {
                     _testedPRs.Add(pr.Number);
@@ -575,7 +585,7 @@ public class TestEngineerAgent : AgentBase
                 // Post a comment so the team knows what happened
                 try
                 {
-                    await _github.AddPullRequestCommentAsync(pr.Number,
+                    await _reviewService.AddCommentAsync(pr.Number,
                         $"⚠️ **Test Engineer:** Failed to generate tests for this PR.\n\n" +
                         $"Error: `{ex.Message}`\n\n" +
                         $"The PR can still be reviewed and merged without automated tests.", ct);
@@ -606,7 +616,7 @@ public class TestEngineerAgent : AgentBase
         {
             try
             {
-                var issue = await _github.GetIssueAsync(issueNumber.Value, ct);
+                var issue = await _workItemService.GetAsync(issueNumber.Value, ct);
                 issueBody = issue?.Body;
             }
             catch (Exception ex)
@@ -904,7 +914,7 @@ public class TestEngineerAgent : AgentBase
             {
                 try
                 {
-                    var content = await _github.GetFileContentAsync(filePath, pr.HeadBranch, ct);
+                    var content = await _repoContent.GetFileContentAsync(filePath, pr.HeadBranch, ct);
                     if (!string.IsNullOrWhiteSpace(content))
                         sourceFiles[filePath] = content;
                 }
@@ -971,7 +981,7 @@ public class TestEngineerAgent : AgentBase
                 "Inline test build failed after {Retries} retries for PR #{Number}",
                 wsConfig.MaxBuildRetries, pr.Number);
             await _workspace.RevertUncommittedChangesAsync(ct);
-            await _github.AddPullRequestCommentAsync(pr.Number,
+            await _reviewService.AddCommentAsync(pr.Number,
                 $"❌ **Test Engineer:** Could not make test code compile after " +
                 $"{wsConfig.MaxBuildRetries} attempts. Build errors prevented test addition.\n\n" +
                 $"The PR can still be merged without automated tests.", ct);
@@ -1115,7 +1125,7 @@ public class TestEngineerAgent : AgentBase
         }
 
         // --- Phase 8: Pre-push safety check — is the PR still open? ---
-        var currentPr = await _github.GetPullRequestAsync(pr.Number, ct);
+        var currentPr = await _prService.GetAsync(pr.Number, ct);
         if (currentPr is null || !string.Equals(currentPr.State, "open", StringComparison.OrdinalIgnoreCase))
         {
             Logger.LogWarning("PR #{Number} is no longer open (state: {State}), discarding test work",
@@ -1203,7 +1213,7 @@ public class TestEngineerAgent : AgentBase
                 pr.Number);
             try
             {
-                await _github.AddPullRequestCommentAsync(pr.Number,
+                await _reviewService.AddCommentAsync(pr.Number,
                     $"❌ **Test Engineer:** Encountered an internal error while adding tests. " +
                     $"Error: {ex.GetType().Name}: {ex.Message}\n\n" +
                     "The PR can still be merged without automated tests.", ct);
@@ -1231,7 +1241,7 @@ public class TestEngineerAgent : AgentBase
         {
             try
             {
-                var content = await _github.GetFileContentAsync(filePath, pr.HeadBranch, ct);
+                var content = await _repoContent.GetFileContentAsync(filePath, pr.HeadBranch, ct);
                 if (!string.IsNullOrWhiteSpace(content))
                     sourceFiles[filePath] = content;
             }
@@ -1258,8 +1268,8 @@ public class TestEngineerAgent : AgentBase
         }
 
         // Batch commit all test files to the PR's branch
-        var fileTuples = testFiles.Select(f => (f.Path, f.Content)).ToList();
-        await _github.BatchCommitFilesAsync(
+        var fileTuples = testFiles.Select(f => new PlatformFileCommit { Path = f.Path, Content = f.Content }).ToList();
+        await _repoContent.BatchCommitFilesAsync(
             fileTuples,
             $"test: add {testFiles.Count} test files for PR #{pr.Number}",
             pr.HeadBranch, ct);
@@ -1490,7 +1500,7 @@ public class TestEngineerAgent : AgentBase
                 .Append(PullRequestWorkflow.Labels.TestsAdded)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
-            await _github.UpdatePullRequestAsync(pr.Number, labels: updatedLabels, ct: ct);
+            await _prService.UpdateAsync(pr.Number, labels: updatedLabels, ct: ct);
         }
         catch (Exception ex)
         {
@@ -1530,7 +1540,7 @@ public class TestEngineerAgent : AgentBase
         catch (Exception ex)
         {
             Logger.LogError(ex, "PR #{Number}: Fresh clone push also failed — giving up", pr.Number);
-            await _github.AddPullRequestCommentAsync(pr.Number,
+            await _reviewService.AddCommentAsync(pr.Number,
                 "⚠️ **Test Engineer:** Could not push tests after multiple retries (including fresh clone). " +
                 "Will retry on next cycle.", ct);
             _testedPRs.Remove(pr.Number);
@@ -1685,7 +1695,7 @@ public class TestEngineerAgent : AgentBase
                 {
                     var fileName = $"pr-{pr.Number}-app-preview.png";
                     var repoPath = $"test-results/screenshots/{fileName}";
-                    var imageUrl = await _github.CommitBinaryFileAsync(
+                    var imageUrl = await _repoContent.CommitBinaryFileAsync(
                         repoPath, screenshotBytes,
                         $"📸 App screenshot for PR #{pr.Number}", pr.HeadBranch, ct);
 
@@ -1758,7 +1768,7 @@ public class TestEngineerAgent : AgentBase
 
         try
         {
-            await _github.AddPullRequestCommentAsync(pr.Number, sb.ToString(), ct);
+            await _reviewService.AddCommentAsync(pr.Number, sb.ToString(), ct);
         }
         catch (Exception ex)
         {
@@ -1822,7 +1832,7 @@ public class TestEngineerAgent : AgentBase
                 var bytes = await File.ReadAllBytesAsync(path, ct);
                 var fileName = Path.GetFileName(path);
                 var repoPath = $"test-results/screenshots/{fileName}";
-                var imageUrl = await _github.CommitBinaryFileAsync(
+                var imageUrl = await _repoContent.CommitBinaryFileAsync(
                     repoPath, bytes, $"test-artifact: {fileName}", pr.HeadBranch, ct);
                 if (imageUrl is not null)
                 {
@@ -1851,7 +1861,7 @@ public class TestEngineerAgent : AgentBase
                 }
                 var fileName = Path.GetFileName(path);
                 var repoPath = $"test-results/videos/{fileName}";
-                var videoUrl = await _github.CommitBinaryFileAsync(
+                var videoUrl = await _repoContent.CommitBinaryFileAsync(
                     repoPath, bytes, $"test-artifact: {fileName}", pr.HeadBranch, ct);
                 if (videoUrl is not null)
                     sb.AppendLine($"- 🎥 [{fileName}]({videoUrl}) ({bytes.Length / 1024}KB)");
@@ -1876,7 +1886,7 @@ public class TestEngineerAgent : AgentBase
                 }
                 var fileName = Path.GetFileName(path);
                 var repoPath = $"test-results/traces/{fileName}";
-                var traceUrl = await _github.CommitBinaryFileAsync(
+                var traceUrl = await _repoContent.CommitBinaryFileAsync(
                     repoPath, bytes, $"test-artifact: {fileName}", pr.HeadBranch, ct);
                 if (traceUrl is not null)
                     sb.AppendLine($"- 📋 [{fileName}]({traceUrl}) — [View in Trace Viewer](https://trace.playwright.dev)");
@@ -1908,7 +1918,7 @@ public class TestEngineerAgent : AgentBase
         if (isInline)
         {
             // Inline mode: check open PRs that have been reviewed (architect or PM approved)
-            var openPRs = await _github.GetOpenPullRequestsAsync(ct);
+            var openPRs = await _prService.ListOpenAsync(ct);
             foreach (var pr in openPRs)
             {
                 // Count PRs that have been through at least one review gate
@@ -1948,7 +1958,7 @@ public class TestEngineerAgent : AgentBase
         else
         {
             // Legacy mode: check merged PRs
-            var mergedPRs = await _github.GetMergedPullRequestsAsync(ct);
+            var mergedPRs = await _prService.ListMergedAsync(ct);
             foreach (var pr in mergedPRs)
             {
                 if (pr.MergedAt.HasValue && pr.MergedAt.Value < _sessionStartUtc) continue;
@@ -2002,7 +2012,7 @@ public class TestEngineerAgent : AgentBase
         {
             try
             {
-                var content = await _github.GetFileContentAsync(filePath, _config.Project.DefaultBranch, ct);
+                var content = await _repoContent.GetFileContentAsync(filePath, _config.Project.DefaultBranch, ct);
                 if (!string.IsNullOrWhiteSpace(content))
                     sourceFiles[filePath] = content;
             }
@@ -2068,14 +2078,14 @@ public class TestEngineerAgent : AgentBase
         // Apply "tested" label to the source PR so we don't re-process it on restart
         try
         {
-            var sourcePrData = await _github.GetPullRequestAsync(pr.Number, ct);
+            var sourcePrData = await _prService.GetAsync(pr.Number, ct);
             if (sourcePrData is not null)
             {
                 var updatedLabels = sourcePrData.Labels
                     .Append(TestedLabel)
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToArray();
-                await _github.UpdatePullRequestAsync(pr.Number, labels: updatedLabels, ct: ct);
+                await _prService.UpdateAsync(pr.Number, labels: updatedLabels, ct: ct);
             }
         }
         catch (Exception ex)
@@ -3061,7 +3071,7 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
 
         try
         {
-            var issue = await _github.GetIssueAsync(issueNumber.Value, ct);
+            var issue = await _workItemService.GetAsync(issueNumber.Value, ct);
             return issue?.Body;
         }
         catch
@@ -3084,7 +3094,7 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
         {
             try
             {
-                var issue = await _github.GetIssueAsync(issueNumber.Value, ct);
+                var issue = await _workItemService.GetAsync(issueNumber.Value, ct);
                 if (issue is not null)
                 {
                     context.AppendLine("## Linked Issue (User Story & Acceptance Criteria)");
@@ -3287,7 +3297,7 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
         var existingTests = new Dictionary<string, string>();
         try
         {
-            var repoTree = await _github.GetRepositoryTreeAsync(_config.Project.DefaultBranch, ct);
+            var repoTree = await _repoContent.GetRepositoryTreeAsync(_config.Project.DefaultBranch, ct);
 
             // Build a set of source file names (without extension) to match against test files
             var sourceNames = sourceFilePaths
@@ -3323,7 +3333,7 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
             {
                 try
                 {
-                    var content = await _github.GetFileContentAsync(testPath, _config.Project.DefaultBranch, ct);
+                    var content = await _repoContent.GetFileContentAsync(testPath, _config.Project.DefaultBranch, ct);
                     if (!string.IsNullOrWhiteSpace(content))
                         existingTests[testPath] = content;
                 }
@@ -3371,7 +3381,7 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
         // Commit all test files to the branch
         foreach (var file in testFiles)
         {
-            await _github.CreateOrUpdateFileAsync(
+            await _repoContent.CreateOrUpdateFileAsync(
                 file.Path,
                 file.Content,
                 $"test: add {Path.GetFileName(file.Path)} for PR #{sourcePR.Number}",
@@ -3633,7 +3643,7 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
             await _workspace.RevertUncommittedChangesAsync(ct);
             try
             {
-                await _github.AddPullRequestCommentAsync(sourcePR.Number,
+                await _reviewService.AddCommentAsync(sourcePR.Number,
                     $"❌ **Test Build Blocked:** Test files for PR #{sourcePR.Number} could not be made to compile after " +
                     $"{wsConfig.MaxBuildRetries} fix attempts. Tests were not committed.", ct);
             }
@@ -3899,7 +3909,7 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
             $"Please fix these issues. The Test Engineer will re-run tests after your changes.\n" +
             $"Passing tests have been committed to this PR.";
 
-        await _github.AddPullRequestCommentAsync(pr.Number, comment, ct);
+        await _reviewService.AddCommentAsync(pr.Number, comment, ct);
 
         // Request changes via the PR workflow — this triggers the engineer's rework pipeline
         await _prWorkflow.RequestChangesAsync(
@@ -4055,7 +4065,7 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
 
         var labels = new[] { "tests", PullRequestWorkflow.Labels.InProgress };
 
-        var testPr = await _github.CreatePullRequestAsync(
+        var testPr = await _prService.CreateAsync(
             prTitle,
             prBody,
             branchName,
@@ -4073,9 +4083,9 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
             try
             {
                 var artifactSb = new System.Text.StringBuilder();
-                await UploadTestArtifactsToPrAsync(testPr, testResults.TierResults, artifactSb, ct);
+                await UploadTestArtifactsToPrAsync(testPr.ToAgentPR(), testResults.TierResults, artifactSb, ct);
                 if (artifactSb.Length > 0)
-                    await _github.AddPullRequestCommentAsync(testPr.Number, artifactSb.ToString(), ct);
+                    await _reviewService.AddCommentAsync(testPr.Number, artifactSb.ToString(), ct);
             }
             catch (Exception ex)
             {
@@ -4104,7 +4114,7 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
     {
         while (_reworkQueue.TryDequeue(out var rework))
         {
-            var pr = await _github.GetPullRequestAsync(rework.PrNumber, ct);
+            var pr = await _prService.GetAsync(rework.PrNumber, ct);
             if (pr is null || !string.Equals(pr.State, "open", StringComparison.OrdinalIgnoreCase))
                 continue;
 
@@ -4114,7 +4124,7 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
             if (attempts >= _config.Limits.MaxReworkCycles)
             {
                 Logger.LogWarning("TestEngineer reached max rework cycles for PR #{PrNumber}", rework.PrNumber);
-                await _github.AddPullRequestCommentAsync(rework.PrNumber,
+                await _reviewService.AddCommentAsync(rework.PrNumber,
                     $"⚠️ **{Identity.DisplayName}** has reached the maximum rework cycle limit. " +
                     "Requesting final approval to unblock progress.", ct);
                 await _messageBus.PublishAsync(new ReviewRequestMessage
@@ -4212,7 +4222,7 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
                             commentBody += changesSummary;
                         else
                             commentBody += $"**Files updated:** {string.Join(", ", codeFiles.Select(f => $"`{f.Path}`"))}";
-                        await _github.AddPullRequestCommentAsync(pr.Number, commentBody, ct);
+                        await _reviewService.AddCommentAsync(pr.Number, commentBody, ct);
 
                         await SyncBranchWithMainAsync(pr.Number, ct);
                         await _prWorkflow.MarkReadyForReviewAsync(pr.Number, Identity.DisplayName, ct);
@@ -4239,7 +4249,7 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
                             "TestEngineer rework on PR #{PrNumber} produced no FILE: blocks — no changes committed. " +
                             "Skipping ready-for-review to avoid pointless re-review of unchanged code",
                             rework.PrNumber);
-                        await _github.AddPullRequestCommentAsync(pr.Number,
+                        await _reviewService.AddCommentAsync(pr.Number,
                             $"**[{Identity.DisplayName}] Rework attempted** — AI response did not produce committable file changes. " +
                             $"This rework attempt counted toward the limit ({attempts}/{_config.Limits.MaxReworkCycles}).", ct);
                     }
@@ -4312,7 +4322,7 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
                 // This happens if the runner was killed after creating the PR but before marking it ready.
                 if (pr.Labels.Contains("in-progress", StringComparer.OrdinalIgnoreCase))
                 {
-                    var changedFiles = await _github.GetPullRequestChangedFilesAsync(pr.Number, ct);
+                    var changedFiles = await _prService.GetChangedFilesAsync(pr.Number, ct);
                     if (changedFiles.Count > 0)
                     {
                         Logger.LogInformation(
@@ -4360,7 +4370,7 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
     {
         try
         {
-            var synced = await _github.UpdatePullRequestBranchAsync(prNumber, ct);
+            var synced = await _prService.UpdateBranchAsync(prNumber, ct);
             if (synced)
                 Logger.LogInformation("TestEngineer synced PR #{PrNumber} branch with main", prNumber);
             else
@@ -4403,7 +4413,7 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
     {
         try
         {
-            var tree = await _github.GetRepositoryTreeAsync("main", ct);
+            var tree = await _repoContent.GetRepositoryTreeAsync("main", ct);
             var designFiles = tree
                 .Where(f =>
                 {
@@ -4420,7 +4430,7 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
             var sb = new System.Text.StringBuilder();
             foreach (var file in designFiles)
             {
-                var content = await _github.GetFileContentAsync(file, ct: ct);
+                var content = await _repoContent.GetFileContentAsync(file, ct: ct);
                 if (string.IsNullOrWhiteSpace(content)) continue;
 
                 sb.AppendLine($"### Design File: `{file}`");
