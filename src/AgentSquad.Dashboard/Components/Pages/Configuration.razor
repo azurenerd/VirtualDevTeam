@@ -202,8 +202,12 @@ else if (_config is not null)
                         {
                             <div class="config-field">
                                 <label title="Azure AD tenant ID for bearer token authentication. Required for 'az login --tenant'.">Tenant ID</label>
-                                <input type="text" @bind="AdoConfig.TenantId" class="config-input" placeholder="72f988bf-86f1-41af-91ab-2d7cd011db47"
-                                    title="Your Azure AD tenant ID. Used to run: az login --tenant <id> --allow-no-subscriptions" />
+                                <div class="config-secret-field">
+                                    <input type="@(_showAdoTenant ? "text" : "password")" @bind="AdoConfig.TenantId" class="config-input" placeholder="72f988bf-86f1-41af-91ab-2d7cd011db47"
+                                        title="Your Azure AD tenant ID. Used to run: az login --tenant <id> --allow-no-subscriptions" />
+                                    <button class="config-secret-toggle" @onclick="() => _showAdoTenant = !_showAdoTenant"
+                                        title="@(_showAdoTenant ? "Hide tenant ID" : "Show tenant ID")">@(_showAdoTenant ? "🙈" : "👁️")</button>
+                                </div>
                                 @if (_adoTenantIsFromSecrets)
                                 {
                                     <p class="config-hint">🔐 Tenant ID loaded from <strong>User Secrets</strong>. Manage via: <code>dotnet user-secrets set "AgentSquad:DevPlatform:AzureDevOps:TenantId" "your-tenant-id"</code></p>
@@ -1793,6 +1797,7 @@ else if (_config is not null)
 
     // ADO platform fields
     private bool _showAdoToken;
+    private bool _showAdoTenant;
 
     /// <summary>Ensures the ADO sub-config exists for binding.</summary>
     private AzureDevOpsConfig AdoConfig
