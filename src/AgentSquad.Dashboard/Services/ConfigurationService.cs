@@ -689,50 +689,19 @@ public sealed class ConfigurationService : IConfigurationService
 
             _logger.LogInformation("Internal state reset to Initialization");
 
-            // ── Phase 4: Respawn core agents ─────────────────────────
-            _logger.LogWarning("CLEANUP Phase 4/4: Spawning fresh agents...");
-            result.Phase = "Starting agents";
-
-            var roles = new[]
-            {
-                AgentRole.ProgramManager,
-                AgentRole.Researcher,
-                AgentRole.Architect,
-                AgentRole.SoftwareEngineer,
-                AgentRole.TestEngineer
-            };
-
-            foreach (var role in roles)
-            {
-                try
-                {
-                    var identity = await _spawnManager.SpawnAgentAsync(role, ct);
-                    if (identity is not null)
-                    {
-                        result.AgentsStarted++;
-                        _logger.LogInformation("Spawned {Role}: {Name}", role, identity.DisplayName);
-                    }
-                    else
-                    {
-                        _logger.LogWarning("Failed to spawn {Role} — returned null", role);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Failed to spawn {Role} agent during restart", role);
-                    result.Errors.Add($"Failed to spawn {role}: {ex.Message}");
-                }
-            }
+            // No Phase 4: agents are NOT auto-respawned after reset.
+            // The user must click "Start Project" to begin a new run.
 
             result.Phase = "Complete";
             result.Success = true;
             _logger.LogWarning(
                 "✅ CLEANUP COMPLETE: {Issues} issues deleted, {Prs} PRs closed, " +
                 "{Branches} branches deleted, {Files} files deleted, {Db} DB files deleted, " +
-                "{Workspaces} workspaces cleaned, {Stopped} agents stopped, {Started} agents restarted",
+                "{Workspaces} workspaces cleaned, {Stopped} agents stopped. " +
+                "Click 'Start Project' to begin a new run.",
                 result.IssuesDeleted, result.PrsClosed, result.BranchesDeleted,
                 result.FilesDeleted, result.DbFilesDeleted, result.WorkspaceDirsDeleted,
-                result.AgentsStopped, result.AgentsStarted);
+                result.AgentsStopped);
         }
         catch (Exception ex)
         {

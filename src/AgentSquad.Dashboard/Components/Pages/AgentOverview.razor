@@ -531,7 +531,7 @@ else
         _agents = DataService.GetAllAgentSnapshots().ToList();
         _hasDeadlock = DataService.HasDeadlock(out _deadlockCycle);
         var health = DataService.GetExecutionHealthAssessment();
-        _isProjectComplete = health.Phase == "Completion";
+        _isProjectComplete = health.Phase == "Completion" && _runState is "Running" or "Completed";
     }
 
     private async Task LoadTeamCompositionAsync()
