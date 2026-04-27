@@ -7,6 +7,7 @@ using AgentSquad.Core.AI;
 using AgentSquad.Core.Configuration;
 using AgentSquad.Core.DevPlatform;
 using AgentSquad.Core.DevPlatform.Capabilities;
+using AgentSquad.Core.DevPlatform.Models;
 using AgentSquad.Core.GitHub;
 using AgentSquad.Core.GitHub.Models;
 using AgentSquad.Core.Messaging;
@@ -27,6 +28,8 @@ public class ProgramManagerAgent : AgentBase
     private readonly IGitHubService _github;
     private readonly IPullRequestService _prService;
     private readonly IWorkItemService? _workItemService;
+    private readonly IRepositoryContentService _repoContent;
+    private readonly IReviewService _reviewService;
     private readonly MergeCloseoutService? _mergeCloseout;
     private readonly IssueWorkflow _issueWorkflow;
     private readonly PullRequestWorkflow _prWorkflow;
@@ -87,13 +90,17 @@ public class ProgramManagerAgent : AgentBase
         SMEAgentDefinitionService? definitionService = null,
         DecisionGateService? decisionGate = null,
         MergeCloseoutService? mergeCloseout = null,
-        IWorkItemService? workItemService = null)
+        IWorkItemService? workItemService = null,
+        IRepositoryContentService? repoContent = null,
+        IReviewService? reviewService = null)
         : base(identity, logger, memoryStore, roleContextProvider)
     {
         _messageBus = messageBus ?? throw new ArgumentNullException(nameof(messageBus));
         _github = github ?? throw new ArgumentNullException(nameof(github));
         _prService = prService ?? throw new ArgumentNullException(nameof(prService));
         _workItemService = workItemService;
+        _repoContent = repoContent ?? throw new ArgumentNullException(nameof(repoContent));
+        _reviewService = reviewService ?? throw new ArgumentNullException(nameof(reviewService));
         _mergeCloseout = mergeCloseout;
         _issueWorkflow = issueWorkflow ?? throw new ArgumentNullException(nameof(issueWorkflow));
         _prWorkflow = prWorkflow ?? throw new ArgumentNullException(nameof(prWorkflow));
@@ -177,7 +184,7 @@ public class ProgramManagerAgent : AgentBase
                 // completed successfully — re-creating would cause an infinite
                 // create-close-recreate loop.
                 {
-                    var openEnhancements = await _github.GetIssuesByLabelAsync(
+                    var openEnhancements = await _workItemService!.ListByLabelAsync(
                         IssueWorkflow.Labels.Enhancement, "open", ct);
                     if (openEnhancements.Count == 0 && _reviewedEnhancementIssues.Count == 0)
                     {
@@ -317,7 +324,7 @@ public class ProgramManagerAgent : AgentBase
             // 1. Create a GitHub Issue for tracking and visibility (idempotent)
             var issueTitle = $"Researcher: Research technology stack for {projectName}";
 
-            var existingIssues = await _github.GetOpenIssuesAsync(ct);
+            var existingIssues = await _workItemService!.ListOpenAsync(ct);
             var existingKickoff = existingIssues.FirstOrDefault(i =>
                 i.Title.Equals(issueTitle, StringComparison.OrdinalIgnoreCase));
 
@@ -344,7 +351,7 @@ public class ProgramManagerAgent : AgentBase
                     {researchGuidance}
                     """;
 
-                var issue = await _github.CreateIssueAsync(
+                var issue = await _workItemService!.CreateAsync(
                     issueTitle, issueBody,
                     [IssueWorkflow.Labels.AgentQuestion],
                     ct);
@@ -471,7 +478,7 @@ public class ProgramManagerAgent : AgentBase
     {
         try
         {
-            var content = await _github.GetFileContentAsync("TeamMembers.md", null, ct);
+            var content = await _repoContent.GetFileContentAsync("TeamMembers.md", null, ct);
 
             // Get all core agents that should be listed
             var coreAgents = _registry.GetAllAgents()
@@ -496,7 +503,7 @@ public class ProgramManagerAgent : AgentBase
 
                 if (updated != content)
                 {
-                    await _github.CreateOrUpdateFileAsync("TeamMembers.md", updated,
+                    await _repoContent.CreateOrUpdateFileAsync("TeamMembers.md", updated,
                         "Add missing core agents to TeamMembers.md", null, ct);
                 }
                 return;
@@ -518,7 +525,7 @@ public class ProgramManagerAgent : AgentBase
 
             doc += "\n";
 
-            await _github.CreateOrUpdateFileAsync("TeamMembers.md", doc, "Initialize TeamMembers.md with core agents", null, ct);
+            await _repoContent.CreateOrUpdateFileAsync("TeamMembers.md", doc, "Initialize TeamMembers.md with core agents", null, ct);
             Logger.LogInformation("Created TeamMembers.md with {Count} core agents", coreAgents.Count);
         }
         catch (Exception ex)
@@ -640,7 +647,7 @@ public class ProgramManagerAgent : AgentBase
     {
         try
         {
-            var issues = await _github.GetOpenIssuesAsync(ct);
+            var issues = await _workItemService!.ListOpenAsync(ct);
 
             var executiveIssues = issues.Where(i =>
                 i.Labels.Contains(IssueWorkflow.Labels.ExecutiveRequest,
@@ -649,7 +656,7 @@ public class ProgramManagerAgent : AgentBase
             foreach (var issue in executiveIssues)
             {
                 // GitHub is source of truth: fetch actual comments
-                var comments = await _github.GetIssueCommentsAsync(issue.Number, ct);
+                var comments = await _workItemService!.GetCommentsAsync(issue.Number, ct);
                 if (comments.Count == 0)
                     continue;
 
@@ -700,18 +707,18 @@ public class ProgramManagerAgent : AgentBase
                             }
                         }
 
-                        await _github.AddIssueCommentAsync(issue.Number,
+                        await _workItemService!.AddCommentAsync(issue.Number,
                             $"✅ **Executive approval processed.** Spawned {spawned} additional engineer(s). " +
                             $"Team now has {_additionalEngineersHired} additional engineers.", ct);
                     }
                     else
                     {
-                        await _github.AddIssueCommentAsync(issue.Number,
+                        await _workItemService!.AddCommentAsync(issue.Number,
                             "✅ **Executive approval acknowledged.** Request has been processed.", ct);
                     }
 
                     // Close this executive request issue
-                    await _github.CloseIssueAsync(issue.Number, ct);
+                    await _workItemService!.CloseAsync(issue.Number, ct);
 
                     // Also close linked resource-request issues referenced in the title
                     var linkedNum = ParseLinkedIssueFromTitle(issue.Title);
@@ -719,9 +726,9 @@ public class ProgramManagerAgent : AgentBase
                     {
                         try
                         {
-                            await _github.AddIssueCommentAsync(linkedNum.Value,
+                            await _workItemService!.AddCommentAsync(linkedNum.Value,
                                 $"✅ Executive approved override via #{issue.Number}. Request fulfilled.", ct);
-                            await _github.CloseIssueAsync(linkedNum.Value, ct);
+                            await _workItemService!.CloseAsync(linkedNum.Value, ct);
                         }
                         catch (Exception ex)
                         {
@@ -735,9 +742,9 @@ public class ProgramManagerAgent : AgentBase
                     Logger.LogInformation(
                         "Executive denied request on issue #{Number}", issue.Number);
 
-                    await _github.AddIssueCommentAsync(issue.Number,
+                    await _workItemService!.AddCommentAsync(issue.Number,
                         "❌ **Executive denied this request.** Closing.", ct);
-                    await _github.CloseIssueAsync(issue.Number, ct);
+                    await _workItemService!.CloseAsync(issue.Number, ct);
                 }
             }
         }
@@ -823,7 +830,7 @@ public class ProgramManagerAgent : AgentBase
     {
         try
         {
-            var issues = await _github.GetOpenIssuesAsync(ct);
+            var issues = await _workItemService!.ListOpenAsync(ct);
 
             var resourceIssues = issues.Where(i =>
                 i.Labels.Contains(IssueWorkflow.Labels.ResourceRequest,
@@ -832,7 +839,7 @@ public class ProgramManagerAgent : AgentBase
             foreach (var issue in resourceIssues)
             {
                 // GitHub is source of truth: fetch actual comments to determine state
-                var comments = await _github.GetIssueCommentsAsync(issue.Number, ct);
+                var comments = await _workItemService!.GetCommentsAsync(issue.Number, ct);
                 var lastComment = comments.Count > 0 ? comments[^1] : null;
 
                 // If the last comment is a ✅ or 🚀 (already fulfilled), close and skip
@@ -840,7 +847,7 @@ public class ProgramManagerAgent : AgentBase
                     (lastComment.Body.StartsWith("✅") || lastComment.Body.StartsWith("🚀")))
                 {
                     Logger.LogDebug("Resource request #{Number} already fulfilled, closing", issue.Number);
-                    await _github.CloseIssueAsync(issue.Number, ct);
+                    await _workItemService!.CloseAsync(issue.Number, ct);
                     continue;
                 }
 
@@ -861,7 +868,7 @@ public class ProgramManagerAgent : AgentBase
                         "Resource request #{Number} denied: at max additional engineers ({Max})",
                         issue.Number, _config.Limits.MaxAdditionalEngineers);
 
-                    await _github.AddIssueCommentAsync(issue.Number,
+                    await _workItemService!.AddCommentAsync(issue.Number,
                         $"⚠️ **Resource request denied.** The team has already hired " +
                         $"{_additionalEngineersHired}/{_config.Limits.MaxAdditionalEngineers} " +
                         "additional engineers (the configured maximum). " +
@@ -892,7 +899,7 @@ public class ProgramManagerAgent : AgentBase
                         issue.Number, requestedRole, _additionalEngineersHired,
                         _config.Limits.MaxAdditionalEngineers);
 
-                    await _github.AddIssueCommentAsync(issue.Number,
+                    await _workItemService!.AddCommentAsync(issue.Number,
                         $"✅ **Resource request approved.** Spawning {requestedRole} " +
                         $"(additional engineer #{_additionalEngineersHired} " +
                         $"of {_config.Limits.MaxAdditionalEngineers} maximum).", ct);
@@ -908,14 +915,14 @@ public class ProgramManagerAgent : AgentBase
                         // Track in TeamMembers.md for persistence across restarts
                         await _projectFiles.AddTeamMemberAsync(spawnedIdentity, "Online", ct: ct);
 
-                        await _github.AddIssueCommentAsync(issue.Number,
+                        await _workItemService!.AddCommentAsync(issue.Number,
                             $"🚀 **{requestedRole} '{spawnedIdentity.DisplayName}' is now online** " +
                             "and ready for task assignment.", ct);
                         await RememberAsync(MemoryType.Action,
                             $"Hired {requestedRole} '{spawnedIdentity.DisplayName}' via resource request #{issue.Number}",
                             ct: ct);
 
-                        await _github.CloseIssueAsync(issue.Number, ct);
+                        await _workItemService!.CloseAsync(issue.Number, ct);
                     }
                     else
                     {
@@ -923,7 +930,7 @@ public class ProgramManagerAgent : AgentBase
                             "Failed to spawn {Role} for resource request #{Number} — spawn manager returned null",
                             requestedRole, issue.Number);
 
-                        await _github.AddIssueCommentAsync(issue.Number,
+                        await _workItemService!.AddCommentAsync(issue.Number,
                             $"⚠️ Failed to spawn {requestedRole} — capacity limit may have been reached.", ct);
                     }
 
@@ -941,7 +948,7 @@ public class ProgramManagerAgent : AgentBase
     {
         try
         {
-            var issues = await _github.GetOpenIssuesAsync(ct);
+            var issues = await _workItemService!.ListOpenAsync(ct);
 
             var blockers = issues.Where(i =>
                 i.Labels.Contains(IssueWorkflow.Labels.Blocker,
@@ -962,12 +969,12 @@ public class ProgramManagerAgent : AgentBase
                     $"Blocker: {blocker.Title}", Identity.ModelTier);
 
                 // Try to triage the blocker using AI
-                var resolution = await TriageBlockerAsync(blocker, ct);
+                var resolution = await TriageBlockerAsync(blocker.ToAgentIssue(), ct);
                 _taskTracker.RecordLlmCall(blockerStepId);
 
                 if (resolution is not null)
                 {
-                    await _github.AddIssueCommentAsync(blocker.Number,
+                    await _workItemService!.AddCommentAsync(blocker.Number,
                         $"🔍 **PM Triage:**\n\n{resolution}", ct);
                     _taskTracker.RecordSubStep(blockerStepId, $"Triaged blocker #{blocker.Number}");
                 }
@@ -1032,9 +1039,10 @@ public class ProgramManagerAgent : AgentBase
 
             foreach (var prNumber in prNumbersToReview)
             {
-                var pr = await _github.GetPullRequestAsync(prNumber, ct);
-                if (pr is null)
+                var platformPr = await _prService.GetAsync(prNumber, ct);
+                if (platformPr is null)
                     continue;
+                var pr = platformPr.ToAgentPR();
 
                 // Skip if we've already reviewed this exact HEAD SHA. Re-review if HEAD moved
                 // (e.g., SE pushed fixes after CHANGES REQUESTED).
@@ -1070,7 +1078,7 @@ public class ProgramManagerAgent : AgentBase
                 // EXCEPTION: SinglePRMode has no TE agent — skip.
                 if (_config.Workspace.IsInlineTestWorkflow && !_config.Limits.SinglePRMode)
                 {
-                    var comments = await _github.GetPullRequestCommentsAsync(prNumber, ct);
+                    var comments = await _reviewService.GetCommentsAsync(prNumber, ct);
                     var hasTeCompletionComment = comments.Any(c =>
                         (c.Body.Contains("Test Engineer", StringComparison.OrdinalIgnoreCase) &&
                          (c.Body.Contains("Test Results", StringComparison.OrdinalIgnoreCase) ||
@@ -1174,7 +1182,7 @@ public class ProgramManagerAgent : AgentBase
                                 var critiqueIssueContext = "";
                                 if (issueNumber.HasValue)
                                 {
-                                    var issue = await _github.GetIssueAsync(issueNumber.Value, ct);
+                                    var issue = await _workItemService!.GetAsync(issueNumber.Value, ct);
                                     if (issue is not null)
                                         critiqueIssueContext = $"## Issue #{issue.Number}: {issue.Title}\n{issue.Body}";
                                 }
@@ -1224,14 +1232,14 @@ public class ProgramManagerAgent : AgentBase
                     var approvalComment = string.IsNullOrWhiteSpace(reviewBody)
                         ? "**[ProgramManager] APPROVED**"
                         : $"**[ProgramManager] APPROVED**\n\n{reviewBody}";
-                    await _github.AddPullRequestCommentAsync(pr.Number, approvalComment, ct);
+                    await _reviewService.AddCommentAsync(pr.Number, approvalComment, ct);
 
                     // Submit formal GitHub APPROVE only if agents have separate accounts
                     if (_config.Review.EnableFormalReviews)
                     {
                         try
                         {
-                            await _github.AddPullRequestReviewAsync(pr.Number,
+                            await _reviewService.AddReviewAsync(pr.Number,
                                 $"**[ProgramManager] APPROVED** — Final PM review passed.", "APPROVE", ct);
                         }
                         catch (Exception ex)
@@ -1251,8 +1259,8 @@ public class ProgramManagerAgent : AgentBase
                     var updatedLabels = pr.Labels
                         .Append(PullRequestWorkflow.Labels.PmApproved)
                         .Distinct(StringComparer.OrdinalIgnoreCase)
-                        .ToArray();
-                    await _github.UpdatePullRequestAsync(pr.Number, labels: updatedLabels, ct: ct);
+                        .ToList();
+                    await _prService.UpdateAsync(pr.Number, labels: updatedLabels, ct: ct);
 
                     LogActivity("task", $"✅ PM final approval on PR #{pr.Number}: {pr.Title} — ready to merge");
                     _taskTracker.RecordLlmCall(reviewStepId);
@@ -1289,8 +1297,15 @@ public class ProgramManagerAgent : AgentBase
                                 $"**[ProgramManager] CHANGES REQUESTED**\n\n{reviewBody}\n\n" +
                                 $"_{truncated.Count} inline comment(s) below on specific files._";
 
-                            await _github.CreatePullRequestReviewWithCommentsAsync(
-                                pr.Number, inlineBody, "REQUEST_CHANGES", truncated, ct: ct);
+                            var platformComments = truncated.Select(c => new PlatformInlineComment
+                            {
+                                FilePath = c.FilePath,
+                                Line = c.Line,
+                                Body = c.Body
+                            }).ToList();
+
+                            await _reviewService.CreateReviewWithInlineCommentsAsync(
+                                pr.Number, inlineBody, "REQUEST_CHANGES", platformComments, ct: ct);
 
                             Logger.LogInformation(
                                 "PM posted {Count} inline review comments on PR #{Number}",
@@ -1405,7 +1420,7 @@ public class ProgramManagerAgent : AgentBase
     {
         try
         {
-            var threads = await _github.GetPullRequestReviewThreadsAsync(prNumber, ct);
+            var threads = await _reviewService.GetThreadsAsync(prNumber, ct);
             // Only resolve threads authored by the PM (identified by [ProgramManager] tag in body)
             var ownThreads = threads
                 .Where(t => !t.IsResolved && t.Body.Contains("[ProgramManager]", StringComparison.OrdinalIgnoreCase))
@@ -1420,8 +1435,8 @@ public class ProgramManagerAgent : AgentBase
             foreach (var thread in ownThreads)
             {
                 var replyBody = $"✅ **[ProgramManager] Resolved** — Rework addressed this feedback. Approved.";
-                await _github.ReplyAndResolveReviewThreadAsync(
-                    prNumber, thread.Id, thread.NodeId, replyBody, ct);
+                await _reviewService.ResolveThreadAsync(
+                    prNumber, thread.ThreadId, replyBody, ct);
             }
 
             LogActivity("review", $"🔒 Resolved {ownThreads.Count} PM inline review thread(s) on PR #{prNumber}");
@@ -1442,7 +1457,7 @@ public class ProgramManagerAgent : AgentBase
     {
         try
         {
-            var openIssues = await _github.GetOpenIssuesAsync(ct);
+            var openIssues = await _workItemService!.ListOpenAsync(ct);
             var enhancementIssues = openIssues
                 .Where(i => i.Labels.Any(l => string.Equals(l, "enhancement", StringComparison.OrdinalIgnoreCase)))
                 .Where(i => !_reviewedEnhancementIssues.Contains(i.Number))
@@ -1454,7 +1469,7 @@ public class ProgramManagerAgent : AgentBase
             foreach (var issue in enhancementIssues)
             {
                 // Check sub-issues via GitHub's Sub-Issues API
-                var subIssues = await _github.GetSubIssuesAsync(issue.Number, ct);
+                var subIssues = await _workItemService!.GetChildrenAsync(issue.Number, ct);
 
                 if (subIssues.Count == 0)
                 {
@@ -1472,10 +1487,10 @@ public class ProgramManagerAgent : AgentBase
                                 foreach (var mergedPr in mergedPRs)
                                     await _mergeCloseout.CloseLinkedWorkItemsAsync(mergedPr.Number, ct);
                             }
-                            await _github.AddIssueCommentAsync(issue.Number,
+                            await _workItemService!.AddCommentAsync(issue.Number,
                                 $"✅ **PM Final Review — APPROVED (SinglePRMode)**\n\n" +
                                 "All engineering work has been merged. Closing as complete.", ct);
-                            await _github.CloseIssueAsync(issue.Number, ct);
+                            await _workItemService!.CloseAsync(issue.Number, ct);
                             _reviewedEnhancementIssues.Add(issue.Number);
                             Logger.LogInformation("PM closed enhancement issue #{Number} (SinglePRMode, all merged): {Title}",
                                 issue.Number, issue.Title);
@@ -1539,13 +1554,13 @@ public class ProgramManagerAgent : AgentBase
                         .Replace("APPROVED", "").Replace("approved", "")
                         .Trim().TrimStart('-', ':', ' ', '\n');
 
-                    await _github.AddIssueCommentAsync(issue.Number,
+                    await _workItemService!.AddCommentAsync(issue.Number,
                         $"✅ **PM Final Review — APPROVED**\n\n" +
                         $"All {subIssues.Count} engineering tasks have been delivered and merged.\n\n" +
                         $"{summaryText}\n\n" +
                         $"Closing this user story as complete.",
                         ct);
-                    await _github.CloseIssueAsync(issue.Number, ct);
+                    await _workItemService!.CloseAsync(issue.Number, ct);
                     _reviewedEnhancementIssues.Add(issue.Number);
 
                     Logger.LogInformation("PM approved and closed enhancement issue #{Number}: {Title}",
@@ -1572,12 +1587,12 @@ public class ProgramManagerAgent : AgentBase
                         $"## Identified Gaps\n\n{gapText}\n\n" +
                         $"## Source\nOriginal enhancement: #{issue.Number}";
 
-                    var followUp = await _github.CreateIssueAsync(
+                    var followUp = await _workItemService!.CreateAsync(
                         followUpTitle, followUpBody,
                         new[] { "enhancement", "follow-up" }, ct);
 
                     // Close the original with a reference to the follow-up
-                    await _github.AddIssueCommentAsync(issue.Number,
+                    await _workItemService!.AddCommentAsync(issue.Number,
                         $"🔍 **PM Final Review — Delivered with Known Gaps**\n\n" +
                         $"All {subIssues.Count} engineering tasks are closed and merged. " +
                         $"PM identified improvements needed, but no active engineering " +
@@ -1585,7 +1600,7 @@ public class ProgramManagerAgent : AgentBase
                         $"**Gaps identified:**\n{gapText}\n\n" +
                         $"Closing as delivered. Follow-up improvements tracked in #{followUp.Number}.",
                         ct);
-                    await _github.CloseIssueAsync(issue.Number, ct);
+                    await _workItemService!.CloseAsync(issue.Number, ct);
                     _reviewedEnhancementIssues.Add(issue.Number);
 
                     Logger.LogInformation(
@@ -1831,13 +1846,13 @@ public class ProgramManagerAgent : AgentBase
     {
         try
         {
-            var pr = await _github.GetPullRequestAsync(prNumber, ct);
+            var pr = await _prService.GetAsync(prNumber, ct);
             if (pr is null) return;
             var labels = pr.Labels?.ToList() ?? [];
             labels.Remove("human-approved");
             if (!labels.Contains("awaiting-human-review"))
                 labels.Add("awaiting-human-review");
-            await _github.UpdatePullRequestAsync(prNumber, labels: labels.ToArray(), ct: ct);
+            await _prService.UpdateAsync(prNumber, labels: labels, ct: ct);
         }
         catch (Exception ex)
         {
@@ -1959,7 +1974,7 @@ public class ProgramManagerAgent : AgentBase
                                 $"Revise PMSpec based on reviewer feedback (attempt {revision + 2})", ct);
                         }
                         await ResetGateLabelsAsync(qPr.Number, ct);
-                        await _github.AddPullRequestCommentAsync(qPr.Number,
+                        await _reviewService.AddCommentAsync(qPr.Number,
                             $"📝 **Revised** based on your feedback:\n\n> {gateWait.Feedback}\n\nPlease review the updated PMSpec.md.", ct);
                     }
                 }
@@ -2239,7 +2254,7 @@ public class ProgramManagerAgent : AgentBase
                             $"Revise PMSpec based on reviewer feedback (attempt {revision + 2})", ct);
                     }
                     await ResetGateLabelsAsync(pr.Number, ct);
-                    await _github.AddPullRequestCommentAsync(pr.Number,
+                    await _reviewService.AddCommentAsync(pr.Number,
                         $"📝 **Revised** based on your feedback:\n\n> {gateWait.Feedback}\n\nPlease review the updated PMSpec.md.", ct);
                 }
             }
@@ -2518,7 +2533,7 @@ public class ProgramManagerAgent : AgentBase
         try
         {
             // Idempotency: check if OPEN enhancement issues already exist
-            var existingEnhancements = await _github.GetIssuesByLabelAsync(
+            var existingEnhancements = await _workItemService!.ListByLabelAsync(
                 IssueWorkflow.Labels.Enhancement, "open", ct);
             if (existingEnhancements.Count > 0)
             {
@@ -2543,7 +2558,7 @@ public class ProgramManagerAgent : AgentBase
             // Skip this guard on retry after mini-reset (caller already verified 0 open).
             if (!skipClosedIssueGuard)
             {
-                var closedEnhancements = await _github.GetIssuesByLabelAsync(
+                var closedEnhancements = await _workItemService!.ListByLabelAsync(
                     IssueWorkflow.Labels.Enhancement, "closed", ct);
                 if (closedEnhancements.Count > 0)
                 {
@@ -2649,7 +2664,7 @@ public class ProgramManagerAgent : AgentBase
                     continue;
                 }
 
-                var issue = await _github.CreateIssueAsync(
+                var issue = await _workItemService!.CreateAsync(
                     title, validatedBody,
                     [IssueWorkflow.Labels.Enhancement],
                     ct);
@@ -2706,7 +2721,7 @@ public class ProgramManagerAgent : AgentBase
                     $"Answer question on #{request.IssueNumber}",
                     $"Clarification from {request.FromAgentId}", Identity.ModelTier);
 
-                var issue = await _github.GetIssueAsync(request.IssueNumber, ct);
+                var issue = await _workItemService!.GetAsync(request.IssueNumber, ct);
                 if (issue is null)
                 {
                     Logger.LogWarning("Cannot find issue #{Number} for clarification", request.IssueNumber);
@@ -2773,7 +2788,7 @@ public class ProgramManagerAgent : AgentBase
                         $"Please provide guidance. @{executiveUsername}",
                         ct);
 
-                    await _github.AddIssueCommentAsync(request.IssueNumber,
+                    await _workItemService!.AddCommentAsync(request.IssueNumber,
                         $"**{Identity.DisplayName}**: I need to consult with the Executive stakeholder " +
                         $"on this question. I've created issue #{escalationIssue.Number} for guidance. " +
                         $"I'll follow up once I have an answer.",
@@ -2784,7 +2799,7 @@ public class ProgramManagerAgent : AgentBase
                 else
                 {
                     // Post the answer on the issue
-                    await _github.AddIssueCommentAsync(request.IssueNumber,
+                    await _workItemService!.AddCommentAsync(request.IssueNumber,
                         $"**{Identity.DisplayName}**: {answer}", ct);
 
                     // Notify the engineer
@@ -2871,7 +2886,7 @@ public class ProgramManagerAgent : AgentBase
             {
                 try
                 {
-                    var issue = await _github.GetIssueAsync(issueNumber.Value, ct);
+                    var issue = await _workItemService!.GetAsync(issueNumber.Value, ct);
                     if (issue is not null)
                         issueContext = $"## Linked Issue #{issue.Number}: {issue.Title}\n{issue.Body}\n\n";
                 }
@@ -3279,7 +3294,7 @@ public class ProgramManagerAgent : AgentBase
     {
         try
         {
-            var tree = await _github.GetRepositoryTreeAsync("main", ct);
+            var tree = await _repoContent.GetRepositoryTreeAsync("main", ct);
             var designKeywords = new[] { "design", "mockup", "mock", "wireframe", "prototype", "concept", "reference" };
 
             var htmlDesignFiles = tree
@@ -3327,7 +3342,7 @@ public class ProgramManagerAgent : AgentBase
             // Include HTML source for detailed CSS/layout reference
             foreach (var file in htmlDesignFiles)
             {
-                var content = await _github.GetFileContentAsync(file, ct: ct);
+                var content = await _repoContent.GetFileContentAsync(file, ct: ct);
                 if (string.IsNullOrWhiteSpace(content)) continue;
 
                 sb.AppendLine($"### Design Source: `{file}`");
@@ -3366,7 +3381,7 @@ public class ProgramManagerAgent : AgentBase
     {
         try
         {
-            var comments = await _github.GetPullRequestCommentsAsync(prNumber, ct);
+            var comments = await _reviewService.GetCommentsAsync(prNumber, ct);
 
             // Walk newest-first through TE-authored comments only.
             for (int i = comments.Count - 1; i >= 0; i--)
@@ -3419,7 +3434,7 @@ public class ProgramManagerAgent : AgentBase
         var results = new List<PullRequestWorkflow.ScreenshotImage>();
         try
         {
-            var tree = await _github.GetRepositoryTreeAsync("main", ct);
+            var tree = await _repoContent.GetRepositoryTreeAsync("main", ct);
             var designPngs = tree
                 .Where(f => f.StartsWith("docs/design-screenshots/", StringComparison.OrdinalIgnoreCase) &&
                             f.EndsWith(".png", StringComparison.OrdinalIgnoreCase))
