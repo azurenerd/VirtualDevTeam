@@ -28,6 +28,8 @@ public sealed class ConfigurationService : IConfigurationService
     /// <summary>Tracks the latest saved config so GetCurrentConfig returns fresh data even before IOptions reloads.</summary>
     private AgentSquadConfig? _lastSavedConfig;
 
+    private readonly IWebHostEnvironment _env;
+
     /// <summary>Serializes save operations so concurrent requests don't overlap file I/O with the file-watcher's auto-reload.</summary>
     private readonly SemaphoreSlim _saveLock = new(1, 1);
 
@@ -56,6 +58,7 @@ public sealed class ConfigurationService : IConfigurationService
         _dashboard = dashboard;
         _logger = logger;
         _rootConfiguration = rootConfiguration;
+        _env = env;
         _appSettingsPath = Path.Combine(env.ContentRootPath, "appsettings.json");
     }
 
@@ -155,6 +158,11 @@ public sealed class ConfigurationService : IConfigurationService
             // Serialize the updated config section
             var configJson = JsonSerializer.SerializeToNode(updatedConfig, JsonOptions);
 
+            // Persist secrets to User Secrets before stripping them from the JSON.
+            // This ensures that PAT/API keys entered in the UI survive app restarts.
+            await PersistSecretsToUserSecretsAsync(updatedConfig);
+            _logger.LogInformation("SaveConfig step[user-secrets]: {Ms}ms", step.ElapsedMilliseconds); step.Restart();
+
             // Strip secrets — these live in User Secrets / env vars, not appsettings.json
             StripSecrets(configJson);
 
@@ -240,6 +248,146 @@ public sealed class ConfigurationService : IConfigurationService
             if (azureDevOps.ContainsKey("TenantId"))
                 azureDevOps["TenantId"] = "";
         }
+    }
+
+    /// <summary>
+    /// Persists secret values from the config to .NET User Secrets for both the
+    /// Dashboard and Runner projects, so secrets survive app restarts without
+    /// ever being written to the tracked appsettings.json file.
+    /// Throws on failure so the caller can abort the save rather than lose secrets.
+    /// </summary>
+    private async Task PersistSecretsToUserSecretsAsync(AgentSquadConfig config)
+    {
+        var secrets = CollectSecrets(config);
+        if (secrets.Count == 0) return;
+
+        // Discover UserSecretsIds from both project csproj files
+        var dashboardDir = _env.ContentRootPath;
+        var runnerDir = Path.GetFullPath(Path.Combine(dashboardDir, "..", "AgentSquad.Runner"));
+
+        var secretsIds = new HashSet<string>();
+        foreach (var dir in new[] { dashboardDir, runnerDir })
+        {
+            var id = ReadUserSecretsIdFromCsproj(dir);
+            if (id is not null) secretsIds.Add(id);
+        }
+
+        if (secretsIds.Count == 0)
+        {
+            _logger.LogWarning("No UserSecretsId found in project files — secrets will not be persisted");
+            return;
+        }
+
+        // Write to all discovered stores — let exceptions propagate to abort the save
+        foreach (var secretsId in secretsIds)
+            await MergeUserSecretsAsync(secretsId, secrets);
+
+        _logger.LogInformation("Persisted {Count} secret(s) to {Stores} User Secrets store(s)",
+            secrets.Count, secretsIds.Count);
+    }
+
+    /// <summary>
+    /// Collects all non-empty secret values from the config into a flat key-value map.
+    /// </summary>
+    private static Dictionary<string, string> CollectSecrets(AgentSquadConfig config)
+    {
+        var secrets = new Dictionary<string, string>();
+
+        if (!string.IsNullOrEmpty(config.Project.GitHubToken))
+            secrets["AgentSquad:Project:GitHubToken"] = config.Project.GitHubToken;
+
+        if (!string.IsNullOrEmpty(config.DevPlatform?.AzureDevOps?.Pat))
+            secrets["AgentSquad:DevPlatform:AzureDevOps:Pat"] = config.DevPlatform!.AzureDevOps!.Pat;
+
+        if (!string.IsNullOrEmpty(config.DevPlatform?.AzureDevOps?.TenantId))
+            secrets["AgentSquad:DevPlatform:AzureDevOps:TenantId"] = config.DevPlatform!.AzureDevOps!.TenantId;
+
+        if (config.Models is not null)
+        {
+            foreach (var (tier, model) in config.Models)
+            {
+                if (!string.IsNullOrEmpty(model.ApiKey))
+                    secrets[$"AgentSquad:Models:{tier}:ApiKey"] = model.ApiKey;
+            }
+        }
+
+        // MCP server env vars that contain TOKEN/SECRET/KEY
+        if (config.McpServers is not null)
+        {
+            foreach (var (serverName, server) in config.McpServers)
+            {
+                if (server.Env is null) continue;
+                foreach (var (key, value) in server.Env)
+                {
+                    if (string.IsNullOrEmpty(value)) continue;
+                    if (key.Contains("TOKEN", StringComparison.OrdinalIgnoreCase) ||
+                        key.Contains("SECRET", StringComparison.OrdinalIgnoreCase) ||
+                        key.Contains("KEY", StringComparison.OrdinalIgnoreCase))
+                    {
+                        secrets[$"AgentSquad:McpServers:{serverName}:Env:{key}"] = value;
+                    }
+                }
+            }
+        }
+
+        return secrets;
+    }
+
+    /// <summary>
+    /// Reads the UserSecretsId from the first .csproj file in the given directory.
+    /// </summary>
+    private static string? ReadUserSecretsIdFromCsproj(string projectDir)
+    {
+        if (!Directory.Exists(projectDir)) return null;
+
+        var csproj = Directory.EnumerateFiles(projectDir, "*.csproj").FirstOrDefault();
+        if (csproj is null) return null;
+
+        var content = File.ReadAllText(csproj);
+        var startTag = "<UserSecretsId>";
+        var endTag = "</UserSecretsId>";
+        var start = content.IndexOf(startTag, StringComparison.Ordinal);
+        if (start < 0) return null;
+        start += startTag.Length;
+        var end = content.IndexOf(endTag, start, StringComparison.Ordinal);
+        if (end < 0) return null;
+
+        return content[start..end].Trim();
+    }
+
+    /// <summary>
+    /// Merges secret key-value pairs into the User Secrets JSON file for the given secrets ID.
+    /// Uses atomic temp-file-then-move writes to avoid corruption.
+    /// Uses JsonNode to safely handle both flat and nested JSON formats.
+    /// </summary>
+    private static async Task MergeUserSecretsAsync(string secretsId, Dictionary<string, string> secrets)
+    {
+        var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+        var secretsDir = Path.Combine(appData, "Microsoft", "UserSecrets", secretsId);
+        var secretsPath = Path.Combine(secretsDir, "secrets.json");
+
+        // Read existing secrets using JsonNode (handles both flat and nested formats safely)
+        JsonObject existing;
+        if (File.Exists(secretsPath))
+        {
+            var json = await File.ReadAllTextAsync(secretsPath);
+            existing = JsonNode.Parse(json)?.AsObject() ?? new JsonObject();
+        }
+        else
+        {
+            existing = new JsonObject();
+        }
+
+        // Merge new secrets (flat key:value format, which is what dotnet user-secrets produces)
+        foreach (var (key, value) in secrets)
+            existing[key] = value;
+
+        // Atomic write: temp file then move
+        Directory.CreateDirectory(secretsDir);
+        var output = existing.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+        var tempPath = secretsPath + ".tmp";
+        await File.WriteAllTextAsync(tempPath, output);
+        File.Move(tempPath, secretsPath, overwrite: true);
     }
 
     /// <summary>

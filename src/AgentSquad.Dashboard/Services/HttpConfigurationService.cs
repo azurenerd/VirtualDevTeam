@@ -198,6 +198,9 @@ public sealed class HttpConfigurationService : IConfigurationService
 
         _logger.LogInformation("Saving configuration directly to {Path}", _localAppSettingsPath);
 
+        // Persist secrets to User Secrets before stripping from the JSON file
+        await PersistSecretsToUserSecretsAsync(updatedConfig);
+
         // Read existing file to preserve non-AgentSquad sections
         JsonObject root;
         if (File.Exists(_localAppSettingsPath))
@@ -271,5 +274,127 @@ public sealed class HttpConfigurationService : IConfigurationService
             if (azureDevOps.ContainsKey("TenantId"))
                 azureDevOps["TenantId"] = "";
         }
+    }
+
+    /// <summary>
+    /// Persists secret values to .NET User Secrets so they survive restarts.
+    /// Discovers project UserSecretsIds from csproj files relative to the local appsettings path.
+    /// Throws on failure so the caller can abort the save rather than lose secrets.
+    /// </summary>
+    private async Task PersistSecretsToUserSecretsAsync(AgentSquadConfig config)
+    {
+        var secrets = CollectSecrets(config);
+        if (secrets.Count == 0) return;
+
+        var runnerDir = _localAppSettingsPath is not null ? Path.GetDirectoryName(_localAppSettingsPath) : null;
+        var dashboardDir = runnerDir is not null ? Path.GetFullPath(Path.Combine(runnerDir, "..", "AgentSquad.Dashboard")) : null;
+
+        var secretsIds = new HashSet<string>();
+        foreach (var dir in new[] { runnerDir, dashboardDir })
+        {
+            if (dir is null) continue;
+            var id = ReadUserSecretsIdFromCsproj(dir);
+            if (id is not null) secretsIds.Add(id);
+        }
+
+        if (secretsIds.Count == 0)
+        {
+            _logger.LogWarning("No UserSecretsId found in project files — secrets will not be persisted");
+            return;
+        }
+
+        foreach (var secretsId in secretsIds)
+            await MergeUserSecretsAsync(secretsId, secrets);
+
+        _logger.LogInformation("Persisted {Count} secret(s) to {Stores} User Secrets store(s)",
+            secrets.Count, secretsIds.Count);
+    }
+
+    private static Dictionary<string, string> CollectSecrets(AgentSquadConfig config)
+    {
+        var secrets = new Dictionary<string, string>();
+
+        if (!string.IsNullOrEmpty(config.Project.GitHubToken))
+            secrets["AgentSquad:Project:GitHubToken"] = config.Project.GitHubToken;
+
+        if (!string.IsNullOrEmpty(config.DevPlatform?.AzureDevOps?.Pat))
+            secrets["AgentSquad:DevPlatform:AzureDevOps:Pat"] = config.DevPlatform!.AzureDevOps!.Pat;
+
+        if (!string.IsNullOrEmpty(config.DevPlatform?.AzureDevOps?.TenantId))
+            secrets["AgentSquad:DevPlatform:AzureDevOps:TenantId"] = config.DevPlatform!.AzureDevOps!.TenantId;
+
+        if (config.Models is not null)
+        {
+            foreach (var (tier, model) in config.Models)
+            {
+                if (!string.IsNullOrEmpty(model.ApiKey))
+                    secrets[$"AgentSquad:Models:{tier}:ApiKey"] = model.ApiKey;
+            }
+        }
+
+        if (config.McpServers is not null)
+        {
+            foreach (var (serverName, server) in config.McpServers)
+            {
+                if (server.Env is null) continue;
+                foreach (var (key, value) in server.Env)
+                {
+                    if (string.IsNullOrEmpty(value)) continue;
+                    if (key.Contains("TOKEN", StringComparison.OrdinalIgnoreCase) ||
+                        key.Contains("SECRET", StringComparison.OrdinalIgnoreCase) ||
+                        key.Contains("KEY", StringComparison.OrdinalIgnoreCase))
+                    {
+                        secrets[$"AgentSquad:McpServers:{serverName}:Env:{key}"] = value;
+                    }
+                }
+            }
+        }
+
+        return secrets;
+    }
+
+    private static string? ReadUserSecretsIdFromCsproj(string projectDir)
+    {
+        if (!Directory.Exists(projectDir)) return null;
+        var csproj = Directory.EnumerateFiles(projectDir, "*.csproj").FirstOrDefault();
+        if (csproj is null) return null;
+
+        var content = File.ReadAllText(csproj);
+        var startTag = "<UserSecretsId>";
+        var endTag = "</UserSecretsId>";
+        var start = content.IndexOf(startTag, StringComparison.Ordinal);
+        if (start < 0) return null;
+        start += startTag.Length;
+        var end = content.IndexOf(endTag, start, StringComparison.Ordinal);
+        if (end < 0) return null;
+
+        return content[start..end].Trim();
+    }
+
+    private static async Task MergeUserSecretsAsync(string secretsId, Dictionary<string, string> secrets)
+    {
+        var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+        var secretsDir = Path.Combine(appData, "Microsoft", "UserSecrets", secretsId);
+        var secretsPath = Path.Combine(secretsDir, "secrets.json");
+
+        JsonObject existing;
+        if (File.Exists(secretsPath))
+        {
+            var json = await File.ReadAllTextAsync(secretsPath);
+            existing = JsonNode.Parse(json)?.AsObject() ?? new JsonObject();
+        }
+        else
+        {
+            existing = new JsonObject();
+        }
+
+        foreach (var (key, value) in secrets)
+            existing[key] = value;
+
+        Directory.CreateDirectory(secretsDir);
+        var output = existing.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+        var tempPath = secretsPath + ".tmp";
+        await File.WriteAllTextAsync(tempPath, output);
+        File.Move(tempPath, secretsPath, overwrite: true);
     }
 }
