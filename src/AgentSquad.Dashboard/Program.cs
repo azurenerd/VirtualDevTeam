@@ -1,5 +1,6 @@
 using AgentSquad.Core.Agents;
 using AgentSquad.Core.Configuration;
+using AgentSquad.Core.DevPlatform;
 using AgentSquad.Core.GitHub;
 using AgentSquad.Core.Messaging;
 using AgentSquad.Core.Persistence;
@@ -42,6 +43,7 @@ builder.Services.AddSingleton<AgentSquad.Core.Diagnostics.RequirementsCache>();
 builder.Services.AddSingleton<AgentSquad.Core.Diagnostics.AgentChatService>();
 builder.Services.AddSemanticKernelModels();
 builder.Services.AddGitHubIntegration();
+builder.Services.AddDevPlatform();
 
 // Persistence — use Runner's database so standalone dashboard sees live agent data
 var repoSlug = builder.Configuration["AgentSquad:Project:GitHubRepo"]?.Replace('/', '_') ?? "default";

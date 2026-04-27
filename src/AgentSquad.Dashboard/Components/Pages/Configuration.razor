@@ -1603,7 +1603,7 @@ else if (_config is not null)
             <div>
                 <h2 class="config-section-title">Repository Cleanup</h2>
                 <p class="config-section-desc">
-                    Dangerous operation — permanently closes all @(_config?.DevPlatform.Platform == DevPlatformType.AzureDevOps ? "work items" : "issues") and PRs, and deletes all code from
+                    Dangerous operation — permanently closes all @WorkItemLabel and PRs, and deletes all code from
                     <strong>@GetRepoDisplayName()</strong>. This cannot be undone.
                 </p>
             </div>
@@ -1618,7 +1618,7 @@ else if (_config is not null)
                         <span class="cleanup-branch">(@_config.Project.DefaultBranch)</span>
                     </div>
                     <p class="cleanup-warning">
-                        ⚠️ This will close all open issues, close all open pull requests, delete all agent branches,
+                        ⚠️ This will close all open @WorkItemLabel, close all open pull requests, delete all agent branches,
                         and remove all files from the <code>@_config.Project.DefaultBranch</code> branch.
                     </p>
                 </div>
@@ -1645,7 +1645,7 @@ else if (_config is not null)
                             </div>
                             <div class="cleanup-stat">
                                 <div class="cleanup-stat-value">@_cleanupSummary.OpenIssues</div>
-                                <div class="cleanup-stat-label">Open Issues</div>
+                                <div class="cleanup-stat-label">Open @WorkItemLabel</div>
                             </div>
                             <div class="cleanup-stat">
                                 <div class="cleanup-stat-value">@_cleanupSummary.OpenPrs</div>
@@ -1653,7 +1653,7 @@ else if (_config is not null)
                             </div>
                             <div class="cleanup-stat">
                                 <div class="cleanup-stat-value">@_cleanupSummary.TotalIssues</div>
-                                <div class="cleanup-stat-label">Total Issues</div>
+                                <div class="cleanup-stat-label">Total @WorkItemLabel</div>
                             </div>
                         </div>
 
@@ -1673,10 +1673,10 @@ else if (_config is not null)
                     <h3 class="cleanup-result-title">@(_cleanupResult.Success ? "✅ Clean & Restart Complete" : "⚠️ Cleanup Completed with Errors")</h3>
                     <div class="cleanup-result-stats">
                         <span>Agents stopped: <strong>@_cleanupResult.AgentsStopped</strong></span>
-                        <span>Issues deleted: <strong>@_cleanupResult.IssuesDeleted</strong></span>
+                        <span>@WorkItemLabel deleted: <strong>@_cleanupResult.IssuesDeleted</strong></span>
                         @if (_cleanupResult.IssuesClosed > 0)
                         {
-                            <span>Issues closed (delete failed): <strong>@_cleanupResult.IssuesClosed</strong></span>
+                            <span>@WorkItemLabel closed (delete failed): <strong>@_cleanupResult.IssuesClosed</strong></span>
                         }
                         <span>PRs closed: <strong>@_cleanupResult.PrsClosed</strong></span>
                         <span>PRs labeled "tested": <strong>@_cleanupResult.PrsLabeled</strong></span>
@@ -1722,14 +1722,14 @@ else if (_config is not null)
             <div class="modal-body">
                 <div class="modal-repo-badge">
                     <span class="cleanup-repo-icon">📦</span>
-                    <strong>@_config?.Project.GitHubRepo @(_config?.DevPlatform.Platform == DevPlatformType.AzureDevOps ? "(ADO)" : "")</strong>
+                    <strong>@GetRepoDisplayName() (@PlatformLabel)</strong>
                 </div>
 
                 <div class="modal-impact">
                     <h4>This will clean the repo and kick off a fresh project:</h4>
                     <ul class="modal-impact-list">
                         <li class="impact-info">🛑 <strong>Stop all running agents</strong> (PM, Researcher, Architect, PE, TE)</li>
-                        <li class="impact-danger">Delete <strong>@(_cleanupSummary?.TotalIssues ?? 0)</strong> issues (@(_cleanupSummary?.OpenIssues ?? 0) open, @(_cleanupSummary?.ClosedIssues ?? 0) closed)</li>
+                        <li class="impact-danger">Delete <strong>@(_cleanupSummary?.TotalIssues ?? 0)</strong> @WorkItemLabel (@(_cleanupSummary?.OpenIssues ?? 0) open, @(_cleanupSummary?.ClosedIssues ?? 0) closed)</li>
                         <li class="impact-danger">Close <strong>@(_cleanupSummary?.OpenPrs ?? 0)</strong> open pull requests</li>
                         <li class="impact-warning">Label <strong>@(_cleanupSummary?.MergedPrs ?? 0)</strong> merged PRs as "tested"</li>
                         <li class="impact-danger">Delete all agent branches</li>
@@ -1815,6 +1815,10 @@ else if (_config is not null)
         }
         return _config.Project.GitHubRepo ?? "";
     }
+
+    private bool IsAdo => _config?.DevPlatform.Platform == DevPlatformType.AzureDevOps;
+    private string WorkItemLabel => IsAdo ? "work items" : "issues";
+    private string PlatformLabel => IsAdo ? "ADO" : "GitHub";
 
     // Strategy/Framework IDs — keep in sync with ICodeGenerationStrategy.Id and
     // IAgenticFrameworkAdapter.Id values.

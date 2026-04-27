@@ -2,8 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using AgentSquad.Core.Agents;
 using AgentSquad.Core.Configuration;
-using AgentSquad.Core.GitHub;
-using AgentSquad.Core.GitHub.Models;
+using AgentSquad.Core.DevPlatform.Capabilities;
 using AgentSquad.Core.Persistence;
 using AgentSquad.Orchestrator;
 using Microsoft.Extensions.Options;
@@ -11,12 +10,15 @@ using Microsoft.Extensions.Options;
 namespace AgentSquad.Dashboard.Services;
 
 /// <summary>
-/// Service for reading/writing appsettings.json and performing GitHub repo cleanup operations.
+/// Service for reading/writing appsettings.json and performing repository cleanup operations.
 /// </summary>
 public sealed class ConfigurationService : IConfigurationService
 {
     private readonly IOptionsMonitor<AgentSquadConfig> _config;
-    private readonly IGitHubService _github;
+    private readonly IWorkItemService _workItems;
+    private readonly IPullRequestService _pullRequests;
+    private readonly IBranchService _branches;
+    private readonly IRepositoryContentService _repoContent;
     private readonly AgentRegistry _registry;
     private readonly AgentSpawnManager _spawnManager;
     private readonly WorkflowStateMachine _workflow;
@@ -43,7 +45,10 @@ public sealed class ConfigurationService : IConfigurationService
 
     public ConfigurationService(
         IOptionsMonitor<AgentSquadConfig> config,
-        IGitHubService github,
+        IWorkItemService workItems,
+        IPullRequestService pullRequests,
+        IBranchService branches,
+        IRepositoryContentService repoContent,
         AgentRegistry registry,
         AgentSpawnManager spawnManager,
         WorkflowStateMachine workflow,
@@ -55,7 +60,10 @@ public sealed class ConfigurationService : IConfigurationService
         IWebHostEnvironment env)
     {
         _config = config;
-        _github = github;
+        _workItems = workItems;
+        _pullRequests = pullRequests;
+        _branches = branches;
+        _repoContent = repoContent;
         _registry = registry;
         _spawnManager = spawnManager;
         _workflow = workflow;
@@ -397,7 +405,7 @@ public sealed class ConfigurationService : IConfigurationService
     }
 
     /// <summary>
-    /// Scans the GitHub repo and returns a summary of what would be cleaned up.
+    /// Scans the repository and returns a summary of what would be cleaned up.
     /// </summary>
     public async Task<CleanupSummary> ScanRepoForCleanupAsync(CancellationToken ct = default)
     {
@@ -406,19 +414,19 @@ public sealed class ConfigurationService : IConfigurationService
 
         try
         {
-            // Get all issues (open + closed)
-            var allIssues = await _github.GetAllIssuesAsync(ct);
-            summary.OpenIssues = allIssues.Count(i => i.State == "open");
-            summary.ClosedIssues = allIssues.Count(i => i.State != "open");
+            // Get all work items (open + closed)
+            var allItems = await _workItems.ListAllAsync(ct);
+            summary.OpenIssues = allItems.Count(i => i.State == "open");
+            summary.ClosedIssues = allItems.Count(i => i.State != "open");
 
             // Get all PRs
-            var allPrs = await _github.GetAllPullRequestsAsync(ct);
+            var allPrs = await _pullRequests.ListAllAsync(ct);
             summary.OpenPrs = allPrs.Count(p => p.State == "open" && !p.IsMerged);
             summary.MergedPrs = allPrs.Count(p => p.IsMerged);
             summary.ClosedPrs = allPrs.Count(p => p.State != "open" && !p.IsMerged);
 
             // Get repo file tree
-            var files = await _github.GetRepositoryTreeAsync(config.DefaultBranch, ct);
+            var files = await _repoContent.GetRepositoryTreeAsync(config.DefaultBranch, ct);
             summary.FileCount = files.Count;
             summary.Files = files.ToList();
         }
@@ -494,19 +502,19 @@ public sealed class ConfigurationService : IConfigurationService
             // Parse caveats to find files to preserve
             var preserveFiles = ParseCaveats(caveats);
 
-            // 2a. Delete ALL issues (open + closed) — with verify-and-retry
-            _logger.LogWarning("CLEANUP: Deleting all issues in {Repo}", config.GitHubRepo);
+            // 2a. Delete ALL work items (open + closed) — with verify-and-retry
+            _logger.LogWarning("CLEANUP: Deleting all work items in {Repo}", config.GitHubRepo);
             const int maxCleanupRetries = 3;
             for (var attempt = 1; attempt <= maxCleanupRetries; attempt++)
             {
-                var allIssues = await _github.GetAllIssuesAsync(ct);
-                if (allIssues.Count == 0) break;
+                var allItems = await _workItems.ListAllAsync(ct);
+                if (allItems.Count == 0) break;
 
-                foreach (var issue in allIssues)
+                foreach (var item in allItems)
                 {
                     try
                     {
-                        var deleted = await _github.DeleteIssueAsync(issue.Number, ct);
+                        var deleted = await _workItems.DeleteAsync(item.Number, ct);
                         if (deleted)
                             result.IssuesDeleted++;
                         else
@@ -514,21 +522,21 @@ public sealed class ConfigurationService : IConfigurationService
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogWarning(ex, "Failed to delete issue #{Number}", issue.Number);
-                        result.Errors.Add($"Failed to delete issue #{issue.Number}: {ex.Message}");
+                        _logger.LogWarning(ex, "Failed to delete work item #{Number}", item.Number);
+                        result.Errors.Add($"Failed to delete work item #{item.Number}: {ex.Message}");
                     }
                 }
 
-                // Verify: re-check for any remaining open issues
+                // Verify: re-check for any remaining open items
                 await Task.Delay(2000, ct);
-                var remaining = await _github.GetAllIssuesAsync(ct);
+                var remaining = await _workItems.ListAllAsync(ct);
                 var openRemaining = remaining.Where(i => i.State == "open").ToList();
                 if (openRemaining.Count == 0)
                 {
-                    _logger.LogInformation("Issue cleanup verified — 0 open issues remain");
+                    _logger.LogInformation("Work item cleanup verified — 0 open items remain");
                     break;
                 }
-                _logger.LogWarning("Issue cleanup attempt {Attempt}/{Max}: {Count} open issues still remain, retrying...",
+                _logger.LogWarning("Work item cleanup attempt {Attempt}/{Max}: {Count} open items still remain, retrying...",
                     attempt, maxCleanupRetries, openRemaining.Count);
             }
 
@@ -536,7 +544,7 @@ public sealed class ConfigurationService : IConfigurationService
             _logger.LogWarning("CLEANUP: Closing open PRs and labeling merged PRs in {Repo}", config.GitHubRepo);
             for (var attempt = 1; attempt <= maxCleanupRetries; attempt++)
             {
-                var allPrs = await _github.GetAllPullRequestsAsync(ct);
+                var allPrs = await _pullRequests.ListAllAsync(ct);
                 var openPrs = allPrs.Where(p => p.State == "open" && !p.IsMerged).ToList();
                 if (openPrs.Count == 0 && attempt > 1) break; // skip label pass on retries
 
@@ -546,7 +554,7 @@ public sealed class ConfigurationService : IConfigurationService
                     {
                         if (pr.State == "open" && !pr.IsMerged)
                         {
-                            await _github.ClosePullRequestAsync(pr.Number, ct);
+                            await _pullRequests.CloseAsync(pr.Number, ct);
                             result.PrsClosed++;
                         }
 
@@ -556,7 +564,7 @@ public sealed class ConfigurationService : IConfigurationService
                                 .Append("tested")
                                 .Distinct(StringComparer.OrdinalIgnoreCase)
                                 .ToArray();
-                            await _github.UpdatePullRequestAsync(pr.Number, labels: updatedLabels, ct: ct);
+                            await _pullRequests.UpdateAsync(pr.Number, labels: updatedLabels, ct: ct);
                             result.PrsLabeled++;
                         }
                     }
@@ -569,7 +577,7 @@ public sealed class ConfigurationService : IConfigurationService
 
                 // Verify: re-check for any remaining open PRs
                 await Task.Delay(2000, ct);
-                var remainingPrs = await _github.GetAllPullRequestsAsync(ct);
+                var remainingPrs = await _pullRequests.ListAllAsync(ct);
                 var stillOpen = remainingPrs.Where(p => p.State == "open" && !p.IsMerged).ToList();
                 if (stillOpen.Count == 0)
                 {
@@ -584,14 +592,14 @@ public sealed class ConfigurationService : IConfigurationService
             _logger.LogWarning("CLEANUP: Deleting agent branches in {Repo}", config.GitHubRepo);
             for (var attempt = 1; attempt <= maxCleanupRetries; attempt++)
             {
-                var allAgentBranches = await _github.ListBranchesAsync("agent/", ct);
+                var allAgentBranches = await _branches.ListAsync("agent/", ct);
                 if (allAgentBranches.Count == 0) break;
 
                 foreach (var branch in allAgentBranches)
                 {
                     try
                     {
-                        await _github.DeleteBranchAsync(branch, ct);
+                        await _branches.DeleteAsync(branch, ct);
                         result.BranchesDeleted++;
                     }
                     catch (Exception ex)
@@ -602,7 +610,7 @@ public sealed class ConfigurationService : IConfigurationService
 
                 // Verify
                 await Task.Delay(1000, ct);
-                var remainingBranches = await _github.ListBranchesAsync("agent/", ct);
+                var remainingBranches = await _branches.ListAsync("agent/", ct);
                 if (remainingBranches.Count == 0)
                 {
                     _logger.LogInformation("Branch cleanup verified — 0 agent branches remain");
@@ -614,13 +622,13 @@ public sealed class ConfigurationService : IConfigurationService
 
             // 2d. Atomically reset repo to baseline via Git Trees API (~4 API calls total)
             _logger.LogWarning("CLEANUP: Resetting repo to baseline files in {Repo}", config.GitHubRepo);
-            var files = await _github.GetRepositoryTreeAsync(config.DefaultBranch, ct);
+            var files = await _repoContent.GetRepositoryTreeAsync(config.DefaultBranch, ct);
 
             List<string> filesToKeep;
             if (!string.IsNullOrWhiteSpace(config.BaselineCommitSha))
             {
                 _logger.LogInformation("Using BaselineCommitSha {Sha} for repo reset", config.BaselineCommitSha[..Math.Min(8, config.BaselineCommitSha.Length)]);
-                filesToKeep = (await _github.GetRepositoryTreeForCommitAsync(config.BaselineCommitSha, ct)).ToList();
+                filesToKeep = (await _repoContent.GetRepositoryTreeForCommitAsync(config.BaselineCommitSha, ct)).ToList();
             }
             else
             {
@@ -629,7 +637,7 @@ public sealed class ConfigurationService : IConfigurationService
 
             try
             {
-                await _github.CleanRepoToBaselineAsync(filesToKeep, "Clean slate reset via Dashboard", config.DefaultBranch, ct);
+                await _branches.CleanToBaselineAsync(filesToKeep, "Clean slate reset via Dashboard", config.DefaultBranch, ct);
                 result.FilesDeleted = files.Count - filesToKeep.Count;
                 result.FilesPreserved = filesToKeep.Count;
             }
