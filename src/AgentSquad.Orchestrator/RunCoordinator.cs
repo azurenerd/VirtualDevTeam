@@ -382,6 +382,32 @@ public class RunCoordinator
     }
 
     /// <summary>
+    /// Cancel the current run (e.g., during cleanup/reset). Clears the active run so recovery
+    /// won't attempt to resume it. Also cancels the run CTS to signal any waiting agents.
+    /// </summary>
+    public async Task CancelRunAsync(CancellationToken ct = default)
+    {
+        ActiveRun? run;
+        lock (_lock) { run = _activeRun; }
+
+        if (run is null) return;
+
+        await _stateStore.UpdateRunStatusAsync(run.RunId, RunStatus.Cancelled, ct);
+
+        lock (_lock)
+        {
+            _activeRun = null;
+            _activeProfile = null;
+        }
+
+        _runCts?.Cancel();
+        _runCts?.Dispose();
+        _runCts = null;
+
+        _logger.LogWarning("Run {RunId} cancelled via cleanup/reset", run.RunId);
+    }
+
+    /// <summary>
     /// Spawn the agents required for the active run's workflow profile.
     /// </summary>
     public async Task SpawnAgentsForRunAsync(CancellationToken ct = default)

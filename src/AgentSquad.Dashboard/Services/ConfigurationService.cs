@@ -28,6 +28,8 @@ public sealed class ConfigurationService : IConfigurationService
     /// <summary>Tracks the latest saved config so GetCurrentConfig returns fresh data even before IOptions reloads.</summary>
     private AgentSquadConfig? _lastSavedConfig;
 
+    private readonly RunCoordinator _runCoordinator;
+    private readonly AgentStateStore _stateStore;
     private readonly IWebHostEnvironment _env;
 
     /// <summary>Serializes save operations so concurrent requests don't overlap file I/O with the file-watcher's auto-reload.</summary>
@@ -45,6 +47,8 @@ public sealed class ConfigurationService : IConfigurationService
         AgentRegistry registry,
         AgentSpawnManager spawnManager,
         WorkflowStateMachine workflow,
+        RunCoordinator runCoordinator,
+        AgentStateStore stateStore,
         IDashboardDataService dashboard,
         ILogger<ConfigurationService> logger,
         IConfiguration rootConfiguration,
@@ -55,6 +59,8 @@ public sealed class ConfigurationService : IConfigurationService
         _registry = registry;
         _spawnManager = spawnManager;
         _workflow = workflow;
+        _runCoordinator = runCoordinator;
+        _stateStore = stateStore;
         _dashboard = dashboard;
         _logger = logger;
         _rootConfiguration = rootConfiguration;
@@ -436,23 +442,49 @@ public sealed class ConfigurationService : IConfigurationService
 
         try
         {
-            // ── Phase 1: Stop all running agents ─────────────────────
-            _logger.LogWarning("CLEANUP Phase 1/4: Stopping all agents...");
+            // ── Phase 1: Stop all running agents via RunCoordinator ──
+            _logger.LogWarning("CLEANUP Phase 1/4: Stopping run and all agents...");
             result.Phase = "Stopping agents";
-            var agents = _registry.GetAllAgents();
-            foreach (var agent in agents)
+
+            // StopAsync properly: checkpoints workflow, stops agent loops, unregisters
+            // from registry, resets spawn slots, sets status to Paused.
+            var agentCountBeforeStop = _registry.GetAllAgents().Count;
+            try
             {
-                try
+                await _runCoordinator.StopAsync(ct);
+                result.AgentsStopped = agentCountBeforeStop;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "RunCoordinator.StopAsync failed — falling back to manual agent stop");
+                // Fallback: manually unregister each agent from registry
+                var remainingAgents = _registry.GetAllAgents();
+                foreach (var agent in remainingAgents)
                 {
-                    await _registry.UnregisterAsync(agent.Identity.Id, ct);
-                    result.AgentsStopped++;
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Failed to stop agent {AgentId}", agent.Identity.Id);
+                    try
+                    {
+                        await _registry.UnregisterAsync(agent.Identity.Id, ct);
+                        result.AgentsStopped++;
+                    }
+                    catch (Exception ex2)
+                    {
+                        _logger.LogWarning(ex2, "Failed to stop agent {AgentId}", agent.Identity.Id);
+                    }
                 }
             }
-            _logger.LogInformation("Stopped {Count} agents", result.AgentsStopped);
+
+            // Cancel the run so recovery won't resume it on next startup.
+            // This sets status to Cancelled and clears in-memory state.
+            try
+            {
+                await _runCoordinator.CancelRunAsync(ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "RunCoordinator.CancelRunAsync failed");
+            }
+
+            _logger.LogInformation("Stopped {Count} agents, run cancelled", result.AgentsStopped);
             await Task.Delay(500, ct); // brief pause for cleanup
 
             // ── Phase 2: Clean GitHub repository ─────────────────────
@@ -616,6 +648,9 @@ public sealed class ConfigurationService : IConfigurationService
 
             // Reset spawn slot counters so agents can be re-spawned
             _spawnManager.ResetSlots();
+
+            // Update boot timestamp so SeedFromDatabase ignores old agent activity
+            _stateStore.RecordBoot();
 
             // Reset dashboard caches
             _dashboard.ResetCaches();
