@@ -45,7 +45,7 @@ else if (_config is not null)
             <span class="config-section-icon">📝</span>
             <div>
                 <h2 class="config-section-title">Application Settings</h2>
-                <p class="config-section-desc">Configure AgentSquad behavior, models, and agent settings. Changes are saved to appsettings.json.</p>
+                <p class="config-section-desc">Configure Virtual Dev Team behavior, models, and agent settings. Changes are saved to appsettings.json.</p>
             </div>
         </div>
 
@@ -377,7 +377,7 @@ else if (_config is not null)
             {
                 <div class="config-card-body">
                     <p class="config-hint" style="margin-bottom: 12px;">
-                        Choose which AI code-generation frameworks run under the hood when Software Engineers implement a task. AgentSquad orchestrates visibility, approvals, and metrics regardless of which framework generates code. When <strong>disabled</strong>, engineers use the legacy single-shot generator (fastest, least autonomous). When <strong>enabled</strong>, every listed framework runs in parallel for each task and the winning patch is applied.
+                        Choose which AI code-generation frameworks run under the hood when Software Engineers implement a task. Virtual Dev Team orchestrates visibility, approvals, and metrics regardless of which framework generates code. When <strong>disabled</strong>, engineers use the legacy single-shot generator (fastest, least autonomous). When <strong>enabled</strong>, every listed framework runs in parallel for each task and the winning patch is applied.
                     </p>
 
                     <div class="config-field-row">
@@ -1045,7 +1045,7 @@ else if (_config is not null)
                         <div class="config-field">
                             <label title="Git user.name for commits made by agents in their workspaces. Shows up in git log and PR commit history.">Git User Name</label>
                             <input type="text" @bind="_config.Workspace.GitUserName" class="config-input"
-                                title="The git author name used for agent commits. e.g., 'AgentSquad Bot'" />
+                                title="The git author name used for agent commits. e.g., 'Virtual Dev Team Bot'" />
                         </div>
                         <div class="config-field">
                             <label title="Git user.email for commits made by agents. Should be a valid email or a noreply address.">Git User Email</label>
