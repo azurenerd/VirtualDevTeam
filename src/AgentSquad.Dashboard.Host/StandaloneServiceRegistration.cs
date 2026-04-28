@@ -2,6 +2,7 @@ using System.Net.Http.Json;
 using AgentSquad.Core.Agents;
 using AgentSquad.Core.Configuration;
 using AgentSquad.Core.DevPlatform.Capabilities;
+using AgentSquad.Core.DevPlatform.Models;
 using AgentSquad.Core.Frameworks;
 using AgentSquad.Core.GitHub;
 using AgentSquad.Core.GitHub.Models;
@@ -66,6 +67,11 @@ public static class StandaloneServiceRegistration
 
         // IRepositoryManagementService — proxies to Runner's /api/develop/repo/create
         services.AddSingleton<IRepositoryManagementService, HttpRepositoryManagementProxy>();
+
+        // Platform capability stubs — DashboardDataService needs these for PR/work item fetching
+        services.AddSingleton<IPullRequestService, NullPullRequestService>();
+        services.AddSingleton<IWorkItemService, NullWorkItemService>();
+        services.AddSingleton<IPlatformInfoService, NullPlatformInfoService>();
 
         return services;
     }
@@ -280,4 +286,103 @@ file sealed class HttpRepositoryManagementProxy : IRepositoryManagementService
             return new RepositoryCreationResult(false, null, $"Runner unreachable: {ex.Message}");
         }
     }
+}
+
+/// <summary>
+/// No-op pull request service for standalone dashboard mode.
+/// Returns empty collections — real data comes from the Runner process.
+/// </summary>
+file sealed class NullPullRequestService : IPullRequestService
+{
+    public Task<PlatformPullRequest> CreateAsync(string title, string body, string headBranch, string baseBranch, IReadOnlyList<string> labels, CancellationToken ct = default)
+        => throw new NotSupportedException("PR operations not available in standalone mode");
+    public Task<PlatformPullRequest?> GetAsync(int id, CancellationToken ct = default)
+        => Task.FromResult<PlatformPullRequest?>(null);
+    public Task<IReadOnlyList<PlatformPullRequest>> ListOpenAsync(CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<PlatformPullRequest>>([]);
+    public Task<IReadOnlyList<PlatformPullRequest>> ListAllAsync(CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<PlatformPullRequest>>([]);
+    public Task<IReadOnlyList<PlatformPullRequest>> ListMergedAsync(CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<PlatformPullRequest>>([]);
+    public Task<IReadOnlyList<PlatformPullRequest>> ListForAgentAsync(string agentName, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<PlatformPullRequest>>([]);
+    public Task UpdateAsync(int id, string? title = null, string? body = null, IReadOnlyList<string>? labels = null, CancellationToken ct = default)
+        => Task.CompletedTask;
+    public Task MergeAsync(int id, string? commitMessage = null, CancellationToken ct = default)
+        => Task.CompletedTask;
+    public Task CloseAsync(int id, CancellationToken ct = default)
+        => Task.CompletedTask;
+    public Task<IReadOnlyList<string>> GetChangedFilesAsync(int prId, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<string>>([]);
+    public Task<IReadOnlyList<PlatformFileDiff>> GetFileDiffsAsync(int prId, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<PlatformFileDiff>>([]);
+    public Task<IReadOnlyList<string>> GetCommitMessagesAsync(int prId, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<string>>([]);
+    public Task<IReadOnlyList<PlatformCommitInfo>> GetCommitsWithDatesAsync(int prId, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<PlatformCommitInfo>>([]);
+    public Task<bool> IsBehindBaseAsync(int prId, CancellationToken ct = default)
+        => Task.FromResult(false);
+    public Task<bool> UpdateBranchAsync(int prId, CancellationToken ct = default)
+        => Task.FromResult(false);
+    public Task<bool> RebaseBranchAsync(int prId, CancellationToken ct = default)
+        => Task.FromResult(false);
+    public Task LinkWorkItemAsync(int prId, int workItemId, CancellationToken ct = default)
+        => Task.CompletedTask;
+    public Task<IReadOnlyList<int>> GetLinkedWorkItemIdsAsync(int prId, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<int>>([]);
+}
+
+/// <summary>
+/// No-op work item service for standalone dashboard mode.
+/// </summary>
+file sealed class NullWorkItemService : IWorkItemService
+{
+    public Task<PlatformWorkItem> CreateAsync(string title, string body, IReadOnlyList<string> labels, CancellationToken ct = default)
+        => throw new NotSupportedException("Work item operations not available in standalone mode");
+    public Task<PlatformWorkItem?> GetAsync(int id, CancellationToken ct = default)
+        => Task.FromResult<PlatformWorkItem?>(null);
+    public Task<IReadOnlyList<PlatformWorkItem>> ListOpenAsync(CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<PlatformWorkItem>>([]);
+    public Task<IReadOnlyList<PlatformWorkItem>> ListAllAsync(CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<PlatformWorkItem>>([]);
+    public Task<IReadOnlyList<PlatformWorkItem>> ListForAgentAsync(string agentName, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<PlatformWorkItem>>([]);
+    public Task<IReadOnlyList<PlatformWorkItem>> ListByLabelAsync(string label, string? state = null, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<PlatformWorkItem>>([]);
+    public Task UpdateAsync(int id, string? title = null, string? body = null, IReadOnlyList<string>? labels = null, string? state = null, CancellationToken ct = default)
+        => Task.CompletedTask;
+    public Task UpdateTitleAsync(int id, string newTitle, CancellationToken ct = default)
+        => Task.CompletedTask;
+    public Task CloseAsync(int id, CancellationToken ct = default)
+        => Task.CompletedTask;
+    public Task<bool> DeleteAsync(int id, CancellationToken ct = default)
+        => Task.FromResult(false);
+    public Task AddCommentAsync(int id, string comment, CancellationToken ct = default)
+        => Task.CompletedTask;
+    public Task<IReadOnlyList<PlatformComment>> GetCommentsAsync(int id, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<PlatformComment>>([]);
+    public Task<bool> AddChildAsync(int parentId, long childPlatformId, CancellationToken ct = default)
+        => Task.FromResult(false);
+    public Task<IReadOnlyList<PlatformWorkItem>> GetChildrenAsync(int parentId, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<PlatformWorkItem>>([]);
+    public Task<bool> AddDependencyAsync(int blockedId, long blockingPlatformId, CancellationToken ct = default)
+        => Task.FromResult(false);
+}
+
+/// <summary>
+/// No-op platform info service for standalone dashboard mode.
+/// </summary>
+file sealed class NullPlatformInfoService : IPlatformInfoService
+{
+    public string PlatformName => "Standalone";
+    public string RepositoryDisplayName => "standalone/not-connected";
+    public PlatformCapabilities Capabilities => new();
+    public Task<PlatformRateLimitInfo> GetRateLimitAsync(CancellationToken ct = default)
+        => Task.FromResult(new PlatformRateLimitInfo
+        {
+            Remaining = 0,
+            Limit = 0,
+            ResetAt = DateTime.UtcNow,
+            PlatformName = "Standalone"
+        });
 }

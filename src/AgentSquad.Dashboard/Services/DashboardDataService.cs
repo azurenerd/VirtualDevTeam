@@ -5,7 +5,6 @@ using AgentSquad.Core.DevPlatform.Capabilities;
 using AgentSquad.Core.DevPlatform.Models;
 using AgentSquad.Core.Diagnostics;
 using AgentSquad.Core.GitHub;
-using AgentSquad.Core.GitHub.Models;
 using AgentSquad.Core.Persistence;
 using AgentSquad.Dashboard.Hubs;
 using AgentSquad.Orchestrator;
@@ -116,7 +115,9 @@ public sealed class DashboardDataService : BackgroundService, IDashboardDataServ
     private readonly AgentStateStore _stateStore;
     private readonly AgentChatService _chatService;
     private readonly IHubContext<AgentHub> _hubContext;
-    private readonly IGitHubService _github;
+    private readonly IPullRequestService _pullRequestService;
+    private readonly IWorkItemService _workItemService;
+    private readonly IPlatformInfoService _platformInfo;
     private readonly IPlatformHostContext _platformHost;
     private readonly RateLimitManager _rateLimitManager;
     private readonly IAgentTaskTracker? _taskTracker;
@@ -150,7 +151,9 @@ public sealed class DashboardDataService : BackgroundService, IDashboardDataServ
         AgentStateStore stateStore,
         AgentChatService chatService,
         IHubContext<AgentHub> hubContext,
-        IGitHubService github,
+        IPullRequestService pullRequestService,
+        IWorkItemService workItemService,
+        IPlatformInfoService platformInfo,
         IPlatformHostContext platformHost,
         RateLimitManager rateLimitManager,
         ILogger<DashboardDataService> logger,
@@ -164,7 +167,9 @@ public sealed class DashboardDataService : BackgroundService, IDashboardDataServ
         _stateStore = stateStore;
         _chatService = chatService;
         _hubContext = hubContext;
-        _github = github;
+        _pullRequestService = pullRequestService;
+        _workItemService = workItemService;
+        _platformInfo = platformInfo;
         _platformHost = platformHost;
         _rateLimitManager = rateLimitManager;
         _logger = logger;
@@ -1093,7 +1098,7 @@ public sealed class DashboardDataService : BackgroundService, IDashboardDataServ
     /// <summary>True when platform API rate limit is active — dashboard should show cached data.</summary>
     public bool IsRateLimited => _rateLimitManager.IsRateLimited;
 
-    public string RepositoryDisplayName => _github.RepositoryFullName;
+    public string RepositoryDisplayName => _platformInfo.RepositoryDisplayName;
     public string PlatformName => _platformHost is Core.DevPlatform.Providers.AzureDevOps.AdoHostContext
         ? "Azure DevOps" : "GitHub";
 
@@ -1127,10 +1132,10 @@ public sealed class DashboardDataService : BackgroundService, IDashboardDataServ
         try
         {
             using var cts = new CancellationTokenSource(DashboardApiTimeout);
-            var allPrs = await _github.GetAllPullRequestsAsync(cts.Token);
+            var allPrs = await _pullRequestService.ListAllAsync(cts.Token);
             if (allPrs != null)
             {
-                _cachedPullRequests = allPrs.Select(AgentSquad.Core.DevPlatform.Providers.GitHub.GitHubModelMapper.ToPlatform).ToList();
+                _cachedPullRequests = allPrs.ToList();
                 _lastPrFetchUtc = DateTime.UtcNow;
             }
             else
@@ -1167,11 +1172,11 @@ public sealed class DashboardDataService : BackgroundService, IDashboardDataServ
         try
         {
             using var cts = new CancellationTokenSource(DashboardApiTimeout);
-            var allIssues = await _github.GetAllIssuesAsync(cts.Token);
-            if (allIssues != null)
+            var allItems = await _workItemService.ListAllAsync(cts.Token);
+            if (allItems != null)
             {
-                _logger.LogInformation("Work item fetch: total={Total} items from platform", allIssues.Count);
-                _cachedIssues = allIssues.Select(AgentSquad.Core.DevPlatform.Providers.GitHub.GitHubModelMapper.ToPlatform).ToList();
+                _logger.LogInformation("Work item fetch: total={Total} items from platform", allItems.Count);
+                _cachedIssues = allItems.ToList();
                 _lastIssueFetchUtc = DateTime.UtcNow;
             }
             else
@@ -1211,10 +1216,10 @@ public sealed class DashboardDataService : BackgroundService, IDashboardDataServ
                 // Retry work items
                 try
                 {
-                    var allIssues = await _github.GetAllIssuesAsync();
-                    if (allIssues != null)
+                    var allItems = await _workItemService.ListAllAsync();
+                    if (allItems != null)
                     {
-                        _cachedIssues = allIssues.Select(AgentSquad.Core.DevPlatform.Providers.GitHub.GitHubModelMapper.ToPlatform).ToList();
+                        _cachedIssues = allItems.ToList();
                         _lastIssueFetchUtc = DateTime.UtcNow;
                         _logger.LogInformation("Background refresh: loaded {Count} work items", _cachedIssues.Count);
                     }
@@ -1224,10 +1229,10 @@ public sealed class DashboardDataService : BackgroundService, IDashboardDataServ
                 // Retry PRs
                 try
                 {
-                    var allPrs = await _github.GetAllPullRequestsAsync();
+                    var allPrs = await _pullRequestService.ListAllAsync();
                     if (allPrs != null)
                     {
-                        _cachedPullRequests = allPrs.Select(AgentSquad.Core.DevPlatform.Providers.GitHub.GitHubModelMapper.ToPlatform).ToList();
+                        _cachedPullRequests = allPrs.ToList();
                         _lastPrFetchUtc = DateTime.UtcNow;
                         _logger.LogInformation("Background refresh: loaded {Count} PRs", _cachedPullRequests.Count);
                     }
