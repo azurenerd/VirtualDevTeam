@@ -141,4 +141,20 @@ public sealed class AdoReviewService : AdoHttpClientBase, IReviewService
 
         _logger.LogInformation("Resolved ADO thread #{ThreadId} on PR #{PrNumber}", threadId, prId);
     }
+
+    public async Task ReplyToThreadAsync(
+        int prId, string threadId, string replyBody, CancellationToken ct = default)
+    {
+        if (!int.TryParse(threadId, out var threadIdInt))
+        {
+            _logger.LogWarning("Invalid ADO thread ID: {ThreadId}", threadId);
+            return;
+        }
+
+        var commentUrl = BuildUrl(
+            $"{Project}/_apis/git/repositories/{Repository}/pullrequests/{prId}/threads/{threadIdInt}/comments");
+        await PostAsync<object>(commentUrl, new { content = replyBody, commentType = 1 }, ct);
+
+        _logger.LogDebug("Replied to ADO thread #{ThreadId} on PR #{PrNumber} (not resolved)", threadId, prId);
+    }
 }

@@ -29,6 +29,7 @@ public class ProgramManagerAgent : AgentBase
     private readonly IWorkItemService? _workItemService;
     private readonly IRepositoryContentService _repoContent;
     private readonly IReviewService _reviewService;
+    private readonly IPlatformHostContext? _platformHost;
     private readonly MergeCloseoutService? _mergeCloseout;
     private readonly IssueWorkflow _issueWorkflow;
     private readonly PullRequestWorkflow _prWorkflow;
@@ -90,7 +91,8 @@ public class ProgramManagerAgent : AgentBase
         MergeCloseoutService? mergeCloseout = null,
         IWorkItemService? workItemService = null,
         IRepositoryContentService? repoContent = null,
-        IReviewService? reviewService = null)
+        IReviewService? reviewService = null,
+        IPlatformHostContext? platformHost = null)
         : base(identity, logger, memoryStore, roleContextProvider)
     {
         _messageBus = messageBus ?? throw new ArgumentNullException(nameof(messageBus));
@@ -98,6 +100,7 @@ public class ProgramManagerAgent : AgentBase
         _workItemService = workItemService;
         _repoContent = repoContent ?? throw new ArgumentNullException(nameof(repoContent));
         _reviewService = reviewService ?? throw new ArgumentNullException(nameof(reviewService));
+        _platformHost = platformHost;
         _mergeCloseout = mergeCloseout;
         _issueWorkflow = issueWorkflow ?? throw new ArgumentNullException(nameof(issueWorkflow));
         _prWorkflow = prWorkflow ?? throw new ArgumentNullException(nameof(prWorkflow));
@@ -3346,8 +3349,8 @@ public class ProgramManagerAgent : AgentBase
                 foreach (var screenshot in designScreenshots)
                 {
                     var fileName = Path.GetFileNameWithoutExtension(screenshot);
-                    // Use raw GitHub URL for image embedding (GitHubRepo is "owner/repo" format)
-                    var imageUrl = $"https://raw.githubusercontent.com/{_config.Project.GitHubRepo}/main/{screenshot}";
+                    var imageUrl = _platformHost?.GetRawFileUrl(screenshot, "main")
+                        ?? $"https://raw.githubusercontent.com/{_config.Project.GitHubRepo}/main/{screenshot}";
                     sb.AppendLine($"### {fileName}");
                     sb.AppendLine();
                     sb.AppendLine($"![{fileName} design reference]({imageUrl})");
@@ -3476,7 +3479,8 @@ public class ProgramManagerAgent : AgentBase
                     try
                     {
                         using var http2 = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(10) };
-                        var htmlUrl = $"https://raw.githubusercontent.com/{_config.Project.GitHubRepo}/main/{designHtmlFiles[0]}";
+                        var htmlUrl = _platformHost?.GetRawFileUrl(designHtmlFiles[0], "main")
+                            ?? $"https://raw.githubusercontent.com/{_config.Project.GitHubRepo}/main/{designHtmlFiles[0]}";
                         var htmlContent = await http2.GetStringAsync(htmlUrl, ct);
                         // Extract key structural elements (cap at 2000 chars to avoid token bloat)
                         var summary = ExtractDesignHtmlSummary(htmlContent, designHtmlFiles[0]);
@@ -3497,7 +3501,8 @@ public class ProgramManagerAgent : AgentBase
             {
                 try
                 {
-                    var url = $"https://raw.githubusercontent.com/{_config.Project.GitHubRepo}/main/{path}";
+                    var url = _platformHost?.GetRawFileUrl(path, "main")
+                        ?? $"https://raw.githubusercontent.com/{_config.Project.GitHubRepo}/main/{path}";
                     var resp = await http.GetAsync(url, ct);
                     if (!resp.IsSuccessStatusCode) continue;
                     var bytes = await resp.Content.ReadAsByteArrayAsync(ct);

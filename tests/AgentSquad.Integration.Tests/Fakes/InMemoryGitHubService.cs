@@ -696,6 +696,12 @@ public sealed class InMemoryGitHubService : IGitHubService
         }
     }
 
+    public Task ReplyToReviewCommentAsync(int prNumber, long commentId, string replyBody, CancellationToken ct = default)
+    {
+        // Reply without resolving — no state change needed for in-memory mock
+        return Task.CompletedTask;
+    }
+
     public Task<IReadOnlyList<(string Sha, string Message, DateTime CommittedAt)>> GetPullRequestCommitsWithDatesAsync(int prNumber, CancellationToken ct = default)
     {
         lock (_lock)

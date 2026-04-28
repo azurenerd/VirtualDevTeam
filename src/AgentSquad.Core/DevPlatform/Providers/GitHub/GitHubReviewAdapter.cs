@@ -61,4 +61,14 @@ public sealed class GitHubReviewAdapter : IReviewService
             await _github.ReplyAndResolveReviewThreadAsync(prId, match.Id, match.NodeId, replyBody, ct);
         }
     }
+
+    public async Task ReplyToThreadAsync(int prId, string threadId, string replyBody, CancellationToken ct = default)
+    {
+        var threads = await _github.GetPullRequestReviewThreadsAsync(prId, ct);
+        var match = threads.FirstOrDefault(t => t.NodeId == threadId);
+        if (match is not null)
+        {
+            await _github.ReplyToReviewCommentAsync(prId, match.Id, replyBody, ct);
+        }
+    }
 }

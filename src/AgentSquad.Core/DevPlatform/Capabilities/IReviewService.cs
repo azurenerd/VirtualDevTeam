@@ -25,10 +25,18 @@ public interface IReviewService
     Task<IReadOnlyList<PlatformReviewThread>> GetThreadsAsync(int prId, CancellationToken ct = default);
 
     /// <summary>
-    /// Reply to a review thread and optionally resolve it.
+    /// Reply to a review thread and resolve it.
     /// threadId is platform-specific: GitHub GraphQL node_id, ADO thread int ID.
     /// </summary>
     Task ResolveThreadAsync(
+        int prId, string threadId, string replyBody,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Reply to a review thread without resolving it (resolution is the reviewer's job).
+    /// threadId is platform-specific: GitHub GraphQL node_id, ADO thread int ID.
+    /// </summary>
+    Task ReplyToThreadAsync(
         int prId, string threadId, string replyBody,
         CancellationToken ct = default);
 }

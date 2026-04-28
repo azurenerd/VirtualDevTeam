@@ -790,6 +790,41 @@ public class GitHubService : IGitHubService
         }, ct);
     }
 
+    public async Task ReplyToReviewCommentAsync(
+        int prNumber, long commentId, string replyBody, CancellationToken ct = default)
+    {
+        await _rl.ExecuteAsync(async _ =>
+        {
+            try
+            {
+                using var httpClient = new HttpClient();
+                httpClient.DefaultRequestHeaders.Add("Authorization", $"token {_token}");
+                httpClient.DefaultRequestHeaders.Add("User-Agent", "AgentSquad");
+
+                var replyPayload = System.Text.Json.JsonSerializer.Serialize(new { body = replyBody });
+                var resp = await httpClient.PostAsync(
+                    $"https://api.github.com/repos/{_owner}/{_repo}/pulls/{prNumber}/comments/{commentId}/replies",
+                    new StringContent(replyPayload, Encoding.UTF8, "application/json"), ct);
+
+                if (!resp.IsSuccessStatusCode)
+                {
+                    var err = await resp.Content.ReadAsStringAsync(ct);
+                    _logger.LogWarning("Failed to reply to review comment {CommentId} on PR #{Number}: {Status} {Error}",
+                        commentId, prNumber, resp.StatusCode, err);
+                }
+                else
+                {
+                    TrackRateLimit();
+                    _logger.LogDebug("Replied to review comment {CommentId} on PR #{Number}", commentId, prNumber);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to reply to review comment {CommentId} on PR #{Number}", commentId, prNumber);
+            }
+        }, ct);
+    }
+
     public async Task<IReadOnlyList<(string Sha, string Message, DateTime CommittedAt)>> GetPullRequestCommitsWithDatesAsync(
         int prNumber, CancellationToken ct = default)
     {

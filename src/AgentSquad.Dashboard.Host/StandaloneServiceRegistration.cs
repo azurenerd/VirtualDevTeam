@@ -109,6 +109,8 @@ file sealed class NullGitHubService : IGitHubService
         => Task.FromResult<IReadOnlyList<ReviewThread>>([]);
     public Task ReplyAndResolveReviewThreadAsync(int prNumber, long commentId, string nodeId, string replyBody, CancellationToken ct = default)
         => Task.CompletedTask;
+    public Task ReplyToReviewCommentAsync(int prNumber, long commentId, string replyBody, CancellationToken ct = default)
+        => Task.CompletedTask;
     public Task<IReadOnlyList<(string Sha, string Message, DateTime CommittedAt)>> GetPullRequestCommitsWithDatesAsync(int prNumber, CancellationToken ct = default)
         => Task.FromResult<IReadOnlyList<(string Sha, string Message, DateTime CommittedAt)>>([]);
 

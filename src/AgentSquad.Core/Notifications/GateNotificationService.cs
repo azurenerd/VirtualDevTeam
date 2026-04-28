@@ -1,4 +1,5 @@
 using AgentSquad.Core.Configuration;
+using AgentSquad.Core.DevPlatform.Capabilities;
 using AgentSquad.Core.GitHub;
 using AgentSquad.Core.Persistence;
 using Microsoft.Extensions.DependencyInjection;
@@ -10,7 +11,7 @@ namespace AgentSquad.Core.Notifications;
 
 /// <summary>
 /// Central service that tracks gate notifications, dispatches them to registered channels,
-/// and periodically polls GitHub for resolution status to keep the dashboard up to date.
+/// and periodically polls for resolution status to keep the dashboard up to date.
 /// Runs as a hosted service so it can poll in the background without exhausting rate limits.
 /// </summary>
 public class GateNotificationService : BackgroundService
@@ -20,6 +21,7 @@ public class GateNotificationService : BackgroundService
     private readonly IServiceProvider _serviceProvider;
     private readonly AgentSquadConfig _config;
     private readonly AgentStateStore? _stateStore;
+    private readonly IPlatformHostContext? _platformHost;
     private readonly ILogger<GateNotificationService> _logger;
     private readonly object _lock = new();
 
@@ -44,12 +46,14 @@ public class GateNotificationService : BackgroundService
         IServiceProvider serviceProvider,
         IOptions<AgentSquadConfig> config,
         ILogger<GateNotificationService> logger,
+        IPlatformHostContext? platformHost = null,
         AgentStateStore? stateStore = null)
     {
         _channels = channels.ToList();
         _serviceProvider = serviceProvider;
         _config = config.Value;
         _logger = logger;
+        _platformHost = platformHost;
         _stateStore = stateStore;
         RestoreFromStore();
     }
@@ -362,7 +366,7 @@ public class GateNotificationService : BackgroundService
                 GateName = "Project Complete",
                 Context = "All PRs merged and all issues closed — the project is finished!",
                 ResourceType = "Project",
-                GitHubUrl = $"https://github.com/{_config.Project.GitHubRepo}",
+                GitHubUrl = BuildRepositoryUrl(),
                 IsResolved = true,
                 ResolvedAt = DateTime.UtcNow,
             };
@@ -437,11 +441,36 @@ public class GateNotificationService : BackgroundService
 
     private string? BuildGitHubUrl(int? resourceNumber)
     {
-        if (!resourceNumber.HasValue || string.IsNullOrEmpty(_config.Project.GitHubRepo))
+        if (!resourceNumber.HasValue)
             return null;
 
-        var repo = _config.Project.GitHubRepo;
-        return $"https://github.com/{repo}/pull/{resourceNumber.Value}";
+        if (_platformHost is not null)
+            return _platformHost.GetPullRequestWebUrl(resourceNumber.Value);
+
+        // Fallback for when platform host is not available
+        if (string.IsNullOrEmpty(_config.Project.GitHubRepo))
+            return null;
+
+        return $"https://github.com/{_config.Project.GitHubRepo}/pull/{resourceNumber.Value}";
+    }
+
+    private string? BuildRepositoryUrl()
+    {
+        if (_platformHost is not null)
+        {
+            // Derive repo URL from a PR URL by stripping the PR-specific suffix
+            var prUrl = _platformHost.GetPullRequestWebUrl(1);
+            var idx = prUrl.LastIndexOf("/pull/", StringComparison.OrdinalIgnoreCase);
+            if (idx > 0) return prUrl[..idx];
+            idx = prUrl.LastIndexOf("/pullrequest/", StringComparison.OrdinalIgnoreCase);
+            if (idx > 0) return prUrl[..idx];
+            return prUrl;
+        }
+
+        if (!string.IsNullOrEmpty(_config.Project.GitHubRepo))
+            return $"https://github.com/{_config.Project.GitHubRepo}";
+
+        return null;
     }
 
     private static string GetGateName(string gateId)

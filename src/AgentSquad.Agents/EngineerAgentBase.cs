@@ -1799,21 +1799,14 @@ public abstract class EngineerAgentBase : AgentBase
                         "The feedback may be addressed by changes in related files, or may need a follow-up.";
                 }
 
-                // Reply via REST (don't resolve — that's the reviewer's job)
+                // Reply via platform-abstract review service (don't resolve — that's the reviewer's job)
                 try
                 {
-                    using var httpClient = new HttpClient();
-                    httpClient.DefaultRequestHeaders.Add("Authorization", $"token {GetGitHubToken()}");
-                    httpClient.DefaultRequestHeaders.Add("User-Agent", "AgentSquad");
-
-                    var payload = System.Text.Json.JsonSerializer.Serialize(new { body = replyBody });
-                    await httpClient.PostAsync(
-                        $"https://api.github.com/repos/{Config.Project.GitHubRepo}/pulls/{prNumber}/comments/{thread.Id}/replies",
-                        new System.Net.Http.StringContent(payload, System.Text.Encoding.UTF8, "application/json"), ct);
+                    await ReviewService.ReplyToThreadAsync(prNumber, thread.ThreadId, replyBody, ct);
                 }
                 catch (Exception ex)
                 {
-                    Logger.LogDebug(ex, "Failed to reply to review thread {ThreadId} on PR #{Number}", thread.Id, prNumber);
+                    Logger.LogDebug(ex, "Failed to reply to review thread {ThreadId} on PR #{Number}", thread.ThreadId, prNumber);
                 }
             }
 
@@ -1825,9 +1818,6 @@ public abstract class EngineerAgentBase : AgentBase
             Logger.LogWarning(ex, "Failed to reply to inline review threads on PR #{PrNumber} — rework still submitted", prNumber);
         }
     }
-
-    /// <summary>Get the GitHub token for raw API calls from config.</summary>
-    private string GetGitHubToken() => Config.Project.GitHubToken;
 
     #endregion
 
