@@ -876,8 +876,8 @@ else
                 var json = await resp.Content.ReadFromJsonAsync<RunActiveResponse>();
                 if (json?.run is not null)
                 {
-                    _runState = json.run.status ?? "Idle";
-                    _runMode = json.run.mode ?? "";
+                    _runState = json.run.StatusText;
+                    _runMode = json.run.ModeText;
                     _runDisplayName = json.profile?.displayName ?? "";
                 }
                 else
@@ -1026,8 +1026,26 @@ else
         }
     }
 
-    // DTOs for JSON deserialization
+    // DTOs for JSON deserialization (status/mode are int enums from the API)
     private record RunActiveResponse(RunInfo? run, ProfileInfo? profile);
-    private record RunInfo(string? status, string? mode, string? runId);
+    private record RunInfo(int? status, int? mode, string? runId)
+    {
+        public string StatusText => status switch
+        {
+            0 => "NotStarted",
+            1 => "Running",
+            2 => "Completed",
+            3 => "Failed",
+            4 => "Cancelled",
+            _ => "Idle"
+        };
+        public string ModeText => mode switch
+        {
+            0 => "Project",
+            1 => "SinglePR",
+            2 => "Feature",
+            _ => ""
+        };
+    }
     private record ProfileInfo(string? displayName, string? mode);
 }
