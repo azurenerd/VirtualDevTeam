@@ -231,11 +231,29 @@ else
                     </span>
                 </div>
                 <div class="agent-card-body">
+                    @* Task = parent task name; Step = specific activity within that task *@
+                    @{
+                        var activeStep = _taskTracker?.GetCurrentStep(agent.Id);
+                        var stepName = agent.CurrentStepName ?? activeStep?.Name;
+                        var stepDescription = agent.CurrentStepDescription ?? activeStep?.Description;
+                        // Resolve the parent task display name from the task tracker groups
+                        string? parentTaskName = null;
+                        if (activeStep is not null && _taskTracker is not null)
+                        {
+                            var groups = _taskTracker.GetGroupedSteps(agent.Id);
+                            parentTaskName = groups.FirstOrDefault(g => g.TaskId == activeStep.TaskId)?.DisplayName;
+                        }
+                        var taskDisplay = parentTaskName ?? agent.StatusReason;
+                        var timeInState = DateTime.UtcNow - agent.LastStatusChange;
+                        var timeLabel = timeInState.TotalMinutes < 1 ? "just now"
+                            : timeInState.TotalMinutes < 60 ? $"{(int)timeInState.TotalMinutes}m ago"
+                            : $"{(int)timeInState.TotalHours}h {(int)(timeInState.TotalMinutes % 60)}m ago";
+                    }
                     <div class="agent-detail">
                         <span class="detail-label">Task</span>
-                        @if (!string.IsNullOrEmpty(agent.StatusReason))
+                        @if (!string.IsNullOrEmpty(taskDisplay))
                         {
-                            <span class="detail-value task-active" title="@agent.StatusReason">@TruncateTask(agent.StatusReason)</span>
+                            <span class="detail-value task-active" title="@agent.StatusReason">@TruncateTask(taskDisplay)</span>
                         }
                         else if (agent.AssignedPullRequest is not null)
                         {
@@ -246,6 +264,13 @@ else
                             <span class="detail-value task-idle">Idle</span>
                         }
                     </div>
+                    @if (!string.IsNullOrEmpty(stepName))
+                    {
+                        <div class="agent-detail">
+                            <span class="detail-label">⚡ Step</span>
+                            <span class="detail-value step-active" title="@stepDescription">@TruncateTask(stepName)</span>
+                        </div>
+                    }
 
                     @* Work item link (PR or Issue) *@
                     @{ var prNum = ExtractPrNumber(agent.StatusReason) ?? agent.AssignedPullRequest; }
@@ -282,25 +307,8 @@ else
                         </div>
                     }
 
-                    @* Current step from task tracker (replaces redundant diagnostic "Why") *@
-                    @{
-                        var currentStep = agent.CurrentStepName ?? _taskTracker?.GetCurrentStep(agent.Id)?.Name;
-                        var stepDescription = agent.CurrentStepDescription ?? _taskTracker?.GetCurrentStep(agent.Id)?.Description;
-                        var timeInState = DateTime.UtcNow - agent.LastStatusChange;
-                        var timeLabel = timeInState.TotalMinutes < 1 ? "just now"
-                            : timeInState.TotalMinutes < 60 ? $"{(int)timeInState.TotalMinutes}m ago"
-                            : $"{(int)timeInState.TotalHours}h {(int)(timeInState.TotalMinutes % 60)}m ago";
-                    }
-                    @if (currentStep is not null)
-                    {
-                        <div class="agent-detail diagnostic-row" title="@stepDescription">
-                            <span class="detail-label">⚡ Step</span>
-                            <span class="detail-value diagnostic-value">
-                                @TruncateDiagnostic(currentStep) <span class="time-ago">(@timeLabel)</span>
-                            </span>
-                        </div>
-                    }
-                    else if (!agent.DiagnosticCompliant && !string.IsNullOrEmpty(agent.DiagnosticComplianceIssue))
+                    @* Time in state + diagnostic compliance *@
+                    @if (!agent.DiagnosticCompliant && !string.IsNullOrEmpty(agent.DiagnosticComplianceIssue))
                     {
                         <div class="agent-detail diagnostic-row" title="@agent.DiagnosticJustification">
                             <span class="detail-label">⚠️ Issue</span>

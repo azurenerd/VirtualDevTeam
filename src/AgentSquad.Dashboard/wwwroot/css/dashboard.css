@@ -724,6 +724,11 @@ main {
     color: var(--accent-cyan);
 }
 
+.agent-detail .detail-value.step-active {
+    color: var(--accent-purple, #a78bfa);
+    font-size: 0.82rem;
+}
+
 .agent-detail .detail-value.task-idle {
     color: var(--text-muted);
     font-style: italic;
