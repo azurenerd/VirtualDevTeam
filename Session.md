@@ -198,7 +198,29 @@ Stop-Process -Id <PID>
 
 ---
 
-## 4. Monitoring Expectations
+## 3b. Dev Platform Parity Rule (GitHub ↔ Azure DevOps)
+
+> 🚨 **CRITICAL: Every fix to a platform-specific service MUST be assessed for cross-platform parity.**
+
+AgentSquad supports two dev platforms via the `IPullRequestService`, `IWorkItemService`, and `IRepositoryContentService` abstractions:
+- **GitHub** — `src/AgentSquad.Core/DevPlatform/Providers/GitHub/`
+- **Azure DevOps** — `src/AgentSquad.Core/DevPlatform/Providers/AzureDevOps/`
+
+When fixing a bug or adding a feature in **either** provider:
+1. **Ask:** Does this same issue exist in the other provider? (Often yes — e.g., API limits, missing field hydration, pagination gaps)
+2. **Ask:** Is the fix applicable? (Sometimes no — e.g., ADO has overflow comments due to 4000-char PR description limits; GitHub doesn't need this because its limit is 65K)
+3. **Document** the decision — if a fix is deliberately NOT applied to the other platform, add a code comment explaining why (e.g., `// GitHub: not needed — 65K char limit is sufficient`)
+
+**Known platform differences:**
+| Aspect | GitHub | Azure DevOps |
+|--------|--------|--------------|
+| PR description limit | 65,536 chars | 4,000 chars (overflow comment pattern) |
+| PR list returns labels | ✅ Yes | ❌ No (separate `/labels` endpoint) |
+| Work item description | 65K (Markdown body) | Unlimited (HTML field) |
+| Merge = auto-close linked issues | ✅ Built-in (`Closes #X`) | ❌ Manual (must close via API) |
+| Rate limiting | 5000/hr with shared cache | Per-user, higher limits |
+
+---
 
 Read `docs/MonitorPrompt.md` for the full checklist. Key points:
 
