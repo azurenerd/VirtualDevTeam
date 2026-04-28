@@ -122,7 +122,7 @@ Override these in `StateMappings` if your process template uses different state 
 
 ## Key Differences from GitHub
 
-1. **No work item deletion** — ADO doesn't support deleting work items via API. `DeleteAsync` closes the item instead.
+1. **Work item deletion** — ADO supports permanent deletion via `DELETE ...?destroy=true` (requires PAT with "Work Items: Read, Write & Manage" scope). Falls back to closing if permissions are insufficient. PRs cannot be deleted on either platform — only abandoned/closed.
 2. **Work item hierarchy** — ADO supports parent/child relationships natively. AgentSquad leverages this for task decomposition.
 3. **WIQL queries** — Work item filtering uses ADO's SQL-like query language internally.
 4. **Rate limiting** — ADO uses `X-RateLimit-*` headers. AgentSquad tracks these and backs off automatically.

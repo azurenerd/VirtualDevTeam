@@ -2796,7 +2796,7 @@ These bugs were discovered during scenario analysis and fixed. Listed here as re
 - **REQ-PLAT-002b**: ADO provider MUST use API version 7.1 across all REST calls. Exception: work item comments require `api-version=7.1-preview`.
 - **REQ-PLAT-002c**: ADO work item operations MUST use WIQL for querying/filtering.
 - **REQ-PLAT-002d**: ADO file operations MUST use the Git Pushes API (RefUpdates + Changes).
-- **REQ-PLAT-002e**: ADO does NOT support work item deletion — `DeleteAsync` MUST close the item instead.
+- **REQ-PLAT-002e**: ADO supports permanent work item deletion via `DELETE ...?destroy=true` (requires "Work Items: Read, Write & Manage" PAT scope). `DeleteAsync` MUST fall back to closing if hard delete fails (e.g., insufficient permissions). PRs cannot be deleted on either platform.
 - **REQ-PLAT-002f**: ADO provider MUST handle rate limiting via `X-RateLimit-*` headers with exponential backoff and `Retry-After` support.
 - **REQ-PLAT-002g**: ADO PR descriptions MUST be truncated to 4000 characters (hard API limit). Truncation suffix length must be calculated exactly to avoid 400 errors.
 - **REQ-PLAT-002h**: ADO work item Description fields MUST use HTML format (not Markdown). Markdig converts Markdown to HTML before writing.

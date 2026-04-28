@@ -510,6 +510,7 @@ public sealed class ConfigurationService : IConfigurationService
                 var allItems = await _workItems.ListAllAsync(ct);
                 if (allItems.Count == 0) break;
 
+                var countBefore = allItems.Count;
                 foreach (var item in allItems)
                 {
                     try
@@ -527,17 +528,33 @@ public sealed class ConfigurationService : IConfigurationService
                     }
                 }
 
-                // Verify: re-check for any remaining open items
+                // Verify: re-check for any remaining items
                 await Task.Delay(2000, ct);
                 var remaining = await _workItems.ListAllAsync(ct);
+                if (remaining.Count == 0)
+                {
+                    _logger.LogInformation("Work item cleanup verified — all items permanently deleted");
+                    break;
+                }
+
+                // If hard delete removed some but not all, retry the remainder
                 var openRemaining = remaining.Where(i => i.State == "open").ToList();
                 if (openRemaining.Count == 0)
                 {
-                    _logger.LogInformation("Work item cleanup verified — 0 open items remain");
+                    _logger.LogInformation("Work item cleanup verified — {Total} items closed (hard delete may have fallen back), 0 open remain",
+                        remaining.Count);
                     break;
                 }
-                _logger.LogWarning("Work item cleanup attempt {Attempt}/{Max}: {Count} open items still remain, retrying...",
-                    attempt, maxCleanupRetries, openRemaining.Count);
+
+                // If no progress was made, stop retrying
+                if (remaining.Count >= countBefore)
+                {
+                    _logger.LogWarning("Work item cleanup: no progress on attempt {Attempt}/{Max}, stopping", attempt, maxCleanupRetries);
+                    break;
+                }
+
+                _logger.LogWarning("Work item cleanup attempt {Attempt}/{Max}: {Count} items still remain, retrying...",
+                    attempt, maxCleanupRetries, remaining.Count);
             }
 
             // 2b. Close all open PRs (with verify-and-retry) and label merged PRs

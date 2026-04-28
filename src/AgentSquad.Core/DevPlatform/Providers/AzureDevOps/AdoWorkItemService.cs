@@ -150,10 +150,22 @@ public sealed class AdoWorkItemService : AdoHttpClientBase, IWorkItemService
 
     public async Task<bool> DeleteAsync(int id, CancellationToken ct = default)
     {
-        // ADO doesn't support hard delete via REST for most work item types
-        _logger.LogDebug("ADO doesn't support work item deletion. Closing work item #{Number} instead", id);
-        await CloseAsync(id, ct);
-        return true;
+        try
+        {
+            // ADO supports permanent deletion via DELETE with destroy=true
+            // Requires PAT with "Work Items (Read, Write & Manage)" scope
+            var url = BuildUrl($"{Project}/_apis/wit/workitems/{id}", "destroy=true");
+            await DeleteAsync(url, ct);
+            _logger.LogInformation("Permanently deleted ADO work item #{Number}", id);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            // Fall back to closing if hard delete fails (e.g., insufficient permissions)
+            _logger.LogWarning(ex, "Hard delete failed for work item #{Number}, falling back to close", id);
+            await CloseAsync(id, ct);
+            return true;
+        }
     }
 
     public async Task AddCommentAsync(int id, string comment, CancellationToken ct = default)
