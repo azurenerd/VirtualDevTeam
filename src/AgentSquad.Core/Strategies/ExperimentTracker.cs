@@ -61,6 +61,9 @@ public static class ExperimentJson
 /// <summary>One ndjson row per task.</summary>
 public record ExperimentRecord
 {
+    /// <summary>Schema version for backward compat. 1 = original, 2 = revision-round fields present.</summary>
+    public int SchemaVersion { get; init; } = 1;
+
     public required string RunId { get; init; }
     public required string TaskId { get; init; }
     public required string TaskTitle { get; init; }
@@ -104,4 +107,19 @@ public record CandidateRecord
 
     /// <summary>Whether this candidate came from an external framework vs built-in strategy.</summary>
     public bool IsExternalFramework { get; init; }
+
+    // ── Revision round data (all nullable for backward compat — SchemaVersion >= 2) ──
+
+    /// <summary>Initial acceptance criteria score from first judge round. Null when revision round disabled.</summary>
+    public int? InitialAcceptanceCriteriaScore { get; init; }
+    /// <summary>Initial design score from first judge round.</summary>
+    public int? InitialDesignScore { get; init; }
+    /// <summary>Initial readability score from first judge round.</summary>
+    public int? InitialReadabilityScore { get; init; }
+    /// <summary>Initial visual quality score from first judge round.</summary>
+    public int? InitialVisualsScore { get; init; }
+    /// <summary>Wall-clock seconds for the revision attempt. Null when no revision ran.</summary>
+    public double? RevisionElapsedSec { get; init; }
+    /// <summary>Whether this candidate went through a revision round.</summary>
+    public bool? HadRevision { get; init; }
 }

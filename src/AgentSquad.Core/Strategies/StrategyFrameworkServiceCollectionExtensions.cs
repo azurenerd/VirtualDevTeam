@@ -29,6 +29,7 @@ public static class StrategyFrameworkServiceCollectionExtensions
         services.AddSingleton<AdaptiveStrategySelector>();
         services.AddSingleton<ILlmJudge, NullLlmJudge>();
         services.AddSingleton<IVisualJudge, NullVisualJudge>();
+        services.AddSingleton<RevisionFeedbackGenerator>();
 
         // MCP server locator: default implementation probes disk for the server DLL.
         services.AddSingleton<IMcpServerLocator, DefaultMcpServerLocator>();

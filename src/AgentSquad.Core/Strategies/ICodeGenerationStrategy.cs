@@ -60,6 +60,29 @@ public record StrategyInvocation
     /// Strategies report significant events (tool calls, decisions, file writes) via this sink.
     /// </summary>
     public IProgress<Frameworks.FrameworkActivityEvent>? ActivitySink { get; init; }
+    /// <summary>
+    /// Non-null during the revision round. Contains initial scores, judge feedback,
+    /// rubber-duck critique, and the original patch for targeted fixes.
+    /// Null on the initial (first) pass.
+    /// </summary>
+    public RevisionContext? Revision { get; init; }
+}
+
+/// <summary>
+/// Context provided to strategies during the revision round. Contains initial scores,
+/// judge feedback, rubber-duck critique, and the original patch so the strategy can
+/// make targeted fixes rather than regenerating from scratch.
+/// </summary>
+public record RevisionContext
+{
+    /// <summary>Initial judge scores keyed by axis name (e.g., "ac", "design", "readability").</summary>
+    public required IReadOnlyDictionary<string, int> InitialScores { get; init; }
+    /// <summary>Actionable feedback from the LLM judge (what to fix, per scoring axis).</summary>
+    public required string JudgeFeedback { get; init; }
+    /// <summary>Adversarial critique from a different model tier (rubber-duck perspective).</summary>
+    public required string RubberDuckFeedback { get; init; }
+    /// <summary>The unified diff patch from the initial round. Strategies can read their own prior output.</summary>
+    public required string OriginalPatch { get; init; }
 }
 
 /// <summary>What a strategy returns after executing inside its worktree.</summary>
