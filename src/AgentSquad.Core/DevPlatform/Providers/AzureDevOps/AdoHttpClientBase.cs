@@ -90,7 +90,7 @@ public class AdoHttpClientBase : IDisposable
     protected async Task<T?> GetAsync<T>(string url, CancellationToken ct = default)
     {
         var response = await SendWithRetryAsync(HttpMethod.Get, url, null, ct);
-        response.EnsureSuccessStatusCode();
+        await EnsureSuccessOrLogBodyAsync(response, url);
         return await response.Content.ReadFromJsonAsync<T>(JsonOptions, ct);
     }
 
@@ -99,7 +99,7 @@ public class AdoHttpClientBase : IDisposable
     {
         var content = JsonContent.Create(body, options: JsonOptions);
         var response = await SendWithRetryAsync(HttpMethod.Post, url, content, ct);
-        response.EnsureSuccessStatusCode();
+        await EnsureSuccessOrLogBodyAsync(response, url);
         return await response.Content.ReadFromJsonAsync<T>(JsonOptions, ct);
     }
 
@@ -247,6 +247,18 @@ public class AdoHttpClientBase : IDisposable
             if (long.TryParse(resetValues.FirstOrDefault(), out var resetEpoch))
                 _windowResetUtc = DateTimeOffset.FromUnixTimeSeconds(resetEpoch).UtcDateTime;
         }
+    }
+
+    /// <summary>Log the response body on non-success status codes for diagnostics, then throw.</summary>
+    private async Task EnsureSuccessOrLogBodyAsync(HttpResponseMessage response, string url)
+    {
+        if (response.IsSuccessStatusCode) return;
+
+        var body = "(empty)";
+        try { body = await response.Content.ReadAsStringAsync(); } catch { /* best effort */ }
+        _logger.LogError("ADO API {Status} for {Url}: {Body}",
+            (int)response.StatusCode, url, body.Length > 2000 ? body[..2000] : body);
+        response.EnsureSuccessStatusCode(); // still throws
     }
 
     public void Dispose()

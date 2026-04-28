@@ -22,7 +22,6 @@ internal record AdoPullRequest
     public string Title { get; init; } = "";
     public string Description { get; init; } = "";
     public string Status { get; init; } = "active"; // active, abandoned, completed
-    public AdoGitRef? SourceRefName { get; init; }
     [JsonPropertyName("sourceRefName")]
     public string SourceBranch { get; init; } = "";
     [JsonPropertyName("targetRefName")]
@@ -35,12 +34,6 @@ internal record AdoPullRequest
     public string Url { get; init; } = "";
     public List<AdoPrLabel>? Labels { get; init; }
     public List<AdoPrReviewer>? Reviewers { get; init; }
-}
-
-internal record AdoGitRef
-{
-    public string Name { get; init; } = "";
-    public string ObjectId { get; init; } = "";
 }
 
 internal record AdoIdentity
@@ -77,11 +70,6 @@ internal record AdoWorkItem
     public int Rev { get; init; }
     public Dictionary<string, object?> Fields { get; init; } = new();
     public string Url { get; init; } = "";
-    public AdoWorkItemRelations? Relations { get; init; }
-}
-
-internal record AdoWorkItemRelations
-{
     public List<AdoWorkItemRelation>? Relations { get; init; }
 }
 

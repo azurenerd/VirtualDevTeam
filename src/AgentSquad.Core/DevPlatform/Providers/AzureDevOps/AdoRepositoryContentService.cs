@@ -30,7 +30,7 @@ public sealed class AdoRepositoryContentService : AdoHttpClientBase, IRepository
         var normalizedPath = NormalizePath(path);
         var url = BuildUrl(
             $"{Project}/_apis/git/repositories/{Repository}/items",
-            $"path={Uri.EscapeDataString(normalizedPath)}&includeContent=true" +
+            $"path={Uri.EscapeDataString(normalizedPath)}&includeContent=true&$format=json" +
             (branch is not null ? $"&versionDescriptor.version={Uri.EscapeDataString(branch)}&versionDescriptor.versionType=branch" : ""));
 
         try

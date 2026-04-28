@@ -2,6 +2,7 @@ using AgentSquad.Core.DevPlatform.Auth;
 using AgentSquad.Core.DevPlatform.Capabilities;
 using AgentSquad.Core.DevPlatform.Config;
 using AgentSquad.Core.DevPlatform.Models;
+using Markdig;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -29,6 +30,19 @@ public sealed class AdoWorkItemService : AdoHttpClientBase, IWorkItemService
 
     private string DefaultWorkItemType => _platformConfig.AzureDevOps?.DefaultWorkItemType ?? "Task";
 
+    private static readonly MarkdownPipeline MarkdownPipeline = new MarkdownPipelineBuilder()
+        .UseAdvancedExtensions()
+        .Build();
+
+    /// <summary>Convert markdown body to HTML for ADO's Description field.</summary>
+    private static string ToHtml(string? markdown)
+    {
+        if (string.IsNullOrWhiteSpace(markdown)) return "";
+        // If content already looks like HTML, pass through
+        if (markdown.TrimStart().StartsWith('<')) return markdown;
+        return Markdown.ToHtml(markdown, MarkdownPipeline);
+    }
+
     public async Task<PlatformWorkItem> CreateAsync(
         string title, string body, IReadOnlyList<string> labels,
         CancellationToken ct = default)
@@ -39,7 +53,7 @@ public sealed class AdoWorkItemService : AdoHttpClientBase, IWorkItemService
         var patchDoc = new List<object>
         {
             new { op = "add", path = "/fields/System.Title", value = title },
-            new { op = "add", path = "/fields/System.Description", value = body }
+            new { op = "add", path = "/fields/System.Description", value = ToHtml(body) }
         };
 
         if (labels.Count > 0)
@@ -107,7 +121,7 @@ public sealed class AdoWorkItemService : AdoHttpClientBase, IWorkItemService
         if (title is not null)
             patchDoc.Add(new { op = "replace", path = "/fields/System.Title", value = title });
         if (body is not null)
-            patchDoc.Add(new { op = "replace", path = "/fields/System.Description", value = body });
+            patchDoc.Add(new { op = "replace", path = "/fields/System.Description", value = ToHtml(body) });
         if (state is not null)
         {
             var mappedState = MapToAdoState(state);
@@ -180,10 +194,10 @@ public sealed class AdoWorkItemService : AdoHttpClientBase, IWorkItemService
         var url = BuildUrl($"{Project}/_apis/wit/workitems/{parentId}", "$expand=Relations");
         var parent = await GetAsync<AdoWorkItem>(url, ct);
 
-        if (parent?.Relations?.Relations is null)
+        if (parent?.Relations is null)
             return new List<PlatformWorkItem>();
 
-        var childIds = parent.Relations.Relations
+        var childIds = parent.Relations
             .Where(r => r.Rel == "System.LinkTypes.Hierarchy-Forward")
             .Select(r =>
             {
@@ -257,7 +271,7 @@ public sealed class AdoWorkItemService : AdoHttpClientBase, IWorkItemService
         var ids = queryResult.WorkItems.Select(w => w.Id).Take(200).ToList();
         var idsParam = string.Join(",", ids);
         var batchUrl = BuildUrl($"{Project}/_apis/wit/workitems",
-            $"ids={idsParam}&$expand=Relations&fields=System.Id,System.Title,System.Description,System.State,System.AssignedTo,System.CreatedDate,System.ChangedDate,Microsoft.VSTS.Common.ClosedDate,System.CommentCount,System.WorkItemType,System.Tags");
+            $"ids={idsParam}&$expand=Relations");
         var batch = await GetAsync<AdoListResponse<AdoWorkItem>>(batchUrl, ct);
 
         return batch?.Value.Select(w => AdoModelMapper.ToPlatform(w, Organization, Project)).ToList()
