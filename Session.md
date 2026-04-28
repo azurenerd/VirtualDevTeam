@@ -28,6 +28,13 @@ Before starting a new agent workflow run, fully reset the target GitHub repo.
 >
 > `src/AgentSquad.Runner/appsettings.json` is **NOT gitignored** — it is committed to the repository. **NEVER** write PAT tokens, API keys, or any secrets to this file. Always use `dotnet user-secrets` for sensitive values. If the runner can't find a token at startup, the fix is to add explicit user-secrets loading in `Program.cs` (`builder.Configuration.AddUserSecrets<Program>(optional: true)`), **not** to write the secret into appsettings.json. This applies to ALL tracked config files in the repo.
 
+> 🚨 **CRITICAL: NEVER DISPLAY PAT TOKENS IN CLI OUTPUT.**
+>
+> When running shell commands (PowerShell, reset scripts, ADO API calls), **NEVER** hardcode PAT values in command text (e.g., `$pat = "actual-token"`). The Copilot CLI preview pane shows all command text to the user. Instead:
+> - Read PATs from `dotnet user-secrets list` and parse the value into a variable
+> - Or use environment variables set outside the visible command
+> - The PAT must never appear as a literal string in any shell command
+
 > 🚨 **CRITICAL: NEVER DO A MANUAL RESET. ALWAYS USE THE SCRIPTS.**
 >
 > This is a **hard rule with no exceptions.** Manual resets (ad-hoc process kills, manual DB deletes, manual GitHub API calls) **always miss steps** and leave the environment in an inconsistent state. Known failures from manual resets:
@@ -192,6 +199,7 @@ Stop-Process -Id <PID>
 - **ALWAYS** verify reset before starting (run Section 2 verification block) — never start services on a dirty repo
 - **NEVER** use `dotnet run | Tee-Object` — it kills the runner during Copilot CLI subprocess calls
 - **NEVER** kill processes by name (`Stop-Process -Name`, `taskkill /IM`) — it kills your own CLI session
+- **NEVER** approve gates or start agent runs without explicit user permission — the user may be away
 - **Always** stop the runner before building (file locks on DLLs)
 - Find runner PID: `Get-Process -Id (Get-Content runner.pid)` or `Get-NetTCPConnection -LocalPort 5050`
 - The Runner spawns a child dotnet process — the child owns port 5050. Check both PIDs.

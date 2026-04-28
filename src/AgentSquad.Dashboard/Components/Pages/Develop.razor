@@ -2,9 +2,12 @@
 @using AgentSquad.Core.Configuration
 @using AgentSquad.Core.DevPlatform.Capabilities
 @using System.Timers
+@using AgentSquad.Core.DevPlatform.Config
+@using AgentSquad.Dashboard.Services
 @inject DevelopSettingsService SettingsService
 @inject IWorkItemSearchService WorkItemSearch
 @inject IRepositoryManagementService RepoService
+@inject IConfigurationService ConfigService
 @inject NavigationManager Navigation
 @inject ILogger<Develop> Logger
 @rendermode InteractiveServer
@@ -248,33 +251,59 @@ else
                 <div class="config-card-body">
                     <div class="config-field">
                         <label>Personal Access Token (PAT)</label>
-                        <div class="config-pat-row">
-                            <div class="config-secret-field" style="flex:1;">
-                                <input type="@(_showPat ? "text" : "password")" class="config-input"
-                                       placeholder="Paste your PAT here…"
-                                       @bind="_patInput" @bind:event="oninput" />
-                                <button class="config-secret-toggle" @onclick="() => _showPat = !_showPat" type="button">
-                                    @(_showPat ? "🙈" : "👁️")
+                        @if (_hasUserSecretsPat && !_overridePat)
+                        {
+                            <div class="config-pat-result config-pat-success" style="margin-bottom:0.5rem;">
+                                ✓ PAT configured via User Secrets
+                            </div>
+                            <p class="config-hint">
+                                Your PAT is securely stored in .NET User Secrets and will be used automatically.
+                                <button class="config-btn-inline" style="margin-left:0.5rem;" @onclick="() => _overridePat = true" type="button">
+                                    Use a different PAT
+                                </button>
+                            </p>
+                        }
+                        else
+                        {
+                            <div class="config-pat-row">
+                                <div class="config-secret-field" style="flex:1;">
+                                    <input type="@(_showPat ? "text" : "password")" class="config-input"
+                                           placeholder="Paste your PAT here…"
+                                           @bind="_patInput" @bind:event="oninput" />
+                                    <button class="config-secret-toggle" @onclick="() => _showPat = !_showPat" type="button">
+                                        @(_showPat ? "🙈" : "👁️")
+                                    </button>
+                                </div>
+                                <button class="config-validate-btn @(_patVerified == true ? "config-validate-success" : "")"
+                                        @onclick="VerifyPatAsync" disabled="@(_patVerifying || string.IsNullOrWhiteSpace(_patInput))">
+                                    @if (_patVerifying) { <span class="config-spinner-sm"></span> }
+                                    else { <span>Verify</span> }
                                 </button>
                             </div>
-                            <button class="config-validate-btn @(_patVerified == true ? "config-validate-success" : "")"
-                                    @onclick="VerifyPatAsync" disabled="@(_patVerifying || string.IsNullOrWhiteSpace(_patInput))">
-                                @if (_patVerifying) { <span class="config-spinner-sm"></span> }
-                                else { <span>Verify</span> }
-                            </button>
-                        </div>
-                        @if (_patVerified == true)
-                        {
-                            <div class="config-pat-result config-pat-success">✓ PAT is valid</div>
+                            @if (_patVerified == true)
+                            {
+                                <div class="config-pat-result config-pat-success">✓ PAT is valid</div>
+                            }
+                            else if (_patVerified == false)
+                            {
+                                <div class="config-pat-result config-pat-error">✕ @(_patError ?? "PAT validation failed")</div>
+                            }
+                            @if (_overridePat)
+                            {
+                                <p class="config-hint">
+                                    <button class="config-btn-inline" @onclick="() => { _overridePat = false; _patInput = string.Empty; _patVerified = null; }" type="button">
+                                        ← Keep using User Secrets
+                                    </button>
+                                </p>
+                            }
+                            else
+                            {
+                                <p class="config-hint">
+                                    💡 Prefer User Secrets over pasting here:
+                                    <code>dotnet user-secrets set "AgentSquad:DevPlatform:@(_settings.Platform):Pat" "your-pat"</code>
+                                </p>
+                            }
                         }
-                        else if (_patVerified == false)
-                        {
-                            <div class="config-pat-result config-pat-error">✕ @(_patError ?? "PAT validation failed")</div>
-                        }
-                        <p class="config-hint">
-                            💡 Prefer User Secrets over pasting here:
-                            <code>dotnet user-secrets set "AgentSquad:DevPlatform:@(_settings.Platform):Pat" "your-pat"</code>
-                        </p>
                     </div>
                 </div>
             </div>
@@ -360,9 +389,9 @@ else
                     {
                         <div class="wizard-warning">⚠ Description is empty — agents need to know what to build.</div>
                     }
-                    @if (_patVerified != true && string.IsNullOrWhiteSpace(_patInput))
+                    @if (_patVerified != true && string.IsNullOrWhiteSpace(_patInput) && !_hasUserSecretsPat)
                     {
-                        <div class="wizard-warning">⚠ No PAT verified — agents may not be able to access the repository.</div>
+                        <div class="wizard-warning">⚠ No PAT configured — agents may not be able to access the repository.</div>
                     }
                     @if (!_settings.CreateNewRepo && !_repoCreated && _repoVerified != true)
                     {
@@ -414,7 +443,8 @@ else
                                 <span class="wizard-summary-value">
                                     @if (_patVerified == true) { <span style="color:var(--accent-green);">✓ PAT verified</span> }
                                     else if (!string.IsNullOrWhiteSpace(_patInput)) { <span style="color:#f0c674;">PAT entered (not verified)</span> }
-                                    else { <span style="color:var(--text-secondary);">Not configured (using User Secrets?)</span> }
+                                    else if (_hasUserSecretsPat) { <span style="color:var(--accent-green);">✓ Configured via User Secrets</span> }
+                                    else { <span style="color:var(--text-secondary);">Not configured</span> }
                                 </span>
                             </div>
                         </div>
@@ -514,6 +544,8 @@ else
     private bool _patVerifying;
     private bool? _patVerified;
     private string? _patError;
+    private bool _hasUserSecretsPat;
+    private bool _overridePat;
     private bool _repoVerifying;
     private bool? _repoVerified;
     private string? _repoError;
@@ -556,6 +588,22 @@ else
             if (_settings.ParentWorkItemId.HasValue)
             {
                 _ = LoadLinkedWorkItemAsync(_settings.ParentWorkItemId.Value);
+            }
+
+            // Check if a PAT is already configured via User Secrets / runtime config
+            try
+            {
+                var config = ConfigService.GetCurrentConfig();
+                _hasUserSecretsPat = _settings.Platform switch
+                {
+                    "AzureDevOps" => !string.IsNullOrWhiteSpace(config.DevPlatform?.AzureDevOps?.Pat),
+                    "GitHub" => !string.IsNullOrWhiteSpace(config.Project?.GitHubToken),
+                    _ => false
+                };
+            }
+            catch
+            {
+                _hasUserSecretsPat = false;
             }
         }
         catch (Exception ex)
