@@ -248,13 +248,16 @@ public class AgentTaskTracker : IAgentTaskTracker
 
         // Dynamic patterns
         if (taskId.StartsWith("te-pr-", StringComparison.OrdinalIgnoreCase))
-            return $"PR #{taskId[6..]} Testing";
+            return $"Test PR #{taskId[6..]}";
+
+        if (taskId.StartsWith("te-rework-pr-", StringComparison.OrdinalIgnoreCase))
+            return $"Test Rework PR #{taskId[13..]}";
 
         if (taskId.StartsWith("issue-", StringComparison.OrdinalIgnoreCase))
             return $"Issue #{taskId[6..]}";
 
         if (taskId.StartsWith("research-", StringComparison.OrdinalIgnoreCase))
-            return "Research";
+            return "Research & Analysis";
 
         if (taskId.StartsWith("arch-", StringComparison.OrdinalIgnoreCase))
             return "Architecture Design";
@@ -266,6 +269,7 @@ public class AgentTaskTracker : IAgentTaskTracker
 
     private static readonly Dictionary<string, string> WellKnownTaskNames = new(StringComparer.OrdinalIgnoreCase)
     {
+        // Program Manager
         ["pm-kickoff"] = "Project Kickoff",
         ["pm-spec"] = "PM Specification",
         ["pm-stories"] = "User Story Issues",
@@ -276,11 +280,22 @@ public class AgentTaskTracker : IAgentTaskTracker
         ["pm-support"] = "Clarification Support",
         ["pm-tracking"] = "Project Tracking",
         ["pm-monitoring"] = "Team Monitoring",
+
+        // Principal Engineer
         ["pe-planning"] = "Engineering Planning",
         ["pe-orchestration"] = "Engineer Orchestration",
         ["pe-review"] = "Code Review",
+        ["pe-integration"] = "Integration & Validation",
+
+        // Test Engineer
         ["te-loop"] = "Test Monitoring",
         ["te-review"] = "Test Review",
+        ["te-rework"] = "Test Rework",
+        ["te-recovery"] = "Test PR Recovery",
+
+        // Software Engineer / Engineer Base
+        ["se-waiting"] = "Awaiting Assignment",
+        ["se-rework"] = "Code Rework",
     };
 
     /// <inheritdoc />

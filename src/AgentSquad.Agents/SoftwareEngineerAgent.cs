@@ -4752,6 +4752,8 @@ public class SoftwareEngineerAgent : EngineerAgentBase
 
     private async Task CreateIntegrationPRAsync(CancellationToken ct)
     {
+        var integrationStepId = _taskTracker.BeginStep(Identity.Id, "pe-integration", "Final integration review",
+            "Reviewing merged work for integration gaps (missing wiring, imports, config)", Identity.ModelTier);
         try
         {
             UpdateStatus(AgentStatus.Working, "Creating integration PR");
@@ -4799,6 +4801,7 @@ public class SoftwareEngineerAgent : EngineerAgentBase
                 "Generate any missing integration files (config, wiring, startup registration, etc.).");
 
             var response = await chat.GetChatMessageContentAsync(history, cancellationToken: ct);
+            _taskTracker.RecordLlmCall(integrationStepId);
             var integrationContent = response.Content?.Trim() ?? "";
 
             var codeFiles = AgentSquad.Core.AI.CodeFileParser.ParseFiles(integrationContent);
@@ -4809,6 +4812,7 @@ public class SoftwareEngineerAgent : EngineerAgentBase
                 Logger.LogInformation("No integration fixes needed — all tasks cleanly integrated");
                 LogActivity("task", "✅ No integration fixes needed — signaling completion");
                 _integrationPrCreated = true;
+                _taskTracker.CompleteStep(integrationStepId);
 
                 // Close the integration issue — validation passed with no fixes needed
                 await CloseIntegrationIssueAsync("✅ No integration fixes needed — all tasks cleanly integrated.", ct);
@@ -4894,11 +4898,13 @@ public class SoftwareEngineerAgent : EngineerAgentBase
 
             await RememberAsync(MemoryType.Action,
                 $"Created integration PR #{pr.Number} with {codeFiles.Count} integration fixes", ct: ct);
+            _taskTracker.CompleteStep(integrationStepId);
         }
         catch (Exception ex)
         {
             Logger.LogError(ex, "Failed to create integration PR");
             RecordError($"Integration PR failed: {ex.Message}", Microsoft.Extensions.Logging.LogLevel.Error, ex);
+            _taskTracker.FailStep(integrationStepId, ex.Message);
             // Signal completion anyway so the pipeline doesn't get stuck
             _integrationPrCreated = true;
             await SignalEngineeringCompleteAsync(ct);

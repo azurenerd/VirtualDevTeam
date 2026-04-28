@@ -340,10 +340,10 @@ public class AgentTaskTrackerTests : IDisposable
     [InlineData("pe-planning", "Engineering Planning")]
     [InlineData("pe-orchestration", "Engineer Orchestration")]
     [InlineData("te-loop", "Test Monitoring")]
-    [InlineData("te-pr-42", "PR #42 Testing")]
-    [InlineData("te-pr-1357", "PR #1357 Testing")]
+    [InlineData("te-pr-42", "Test PR #42")]
+    [InlineData("te-pr-1357", "Test PR #1357")]
     [InlineData("issue-99", "Issue #99")]
-    [InlineData("research-abc123", "Research")]
+    [InlineData("research-abc123", "Research & Analysis")]
     [InlineData("arch-design", "Architecture Design")]
     [InlineData("some-unknown-task", "Some Unknown Task")]
     public void GetTaskDisplayName_MapsCorrectly(string taskId, string expected)

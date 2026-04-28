@@ -4141,6 +4141,11 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
             Logger.LogInformation("TestEngineer reworking PR #{PrNumber} based on feedback from {Reviewer} (attempt {Attempt})",
                 rework.PrNumber, rework.Reviewer, attempts);
 
+            var reworkStepId = _taskTracker.BeginStep(Identity.Id, "te-rework",
+                $"Address feedback on PR #{rework.PrNumber}",
+                $"Rework attempt {attempts}/{_config.Limits.MaxReworkCycles} based on {rework.Reviewer}'s review",
+                Identity.ModelTier);
+
             // Resume the CLI session used to create these tests
             ActivateTestPrSession(rework.PrNumber);
 
@@ -4202,6 +4207,7 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
                 history.AddUserMessage(reworkUserMsg);
 
                 var response = await chat.GetChatMessageContentAsync(history, cancellationToken: ct);
+                _taskTracker.RecordLlmCall(reworkStepId);
                 var updatedContent = response.Content?.Trim() ?? "";
 
                 if (!string.IsNullOrWhiteSpace(updatedContent))
@@ -4251,10 +4257,12 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
                             $"This rework attempt counted toward the limit ({attempts}/{_config.Limits.MaxReworkCycles}).", ct);
                     }
                 }
+                _taskTracker.CompleteStep(reworkStepId);
             }
             catch (Exception ex)
             {
                 Logger.LogError(ex, "TestEngineer failed rework on PR #{PrNumber}", rework.PrNumber);
+                _taskTracker.FailStep(reworkStepId, ex.Message);
                 _reworkQueue.Enqueue(rework);
             }
         }
