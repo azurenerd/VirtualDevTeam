@@ -27,16 +27,31 @@ public sealed class AdoPullRequestService : AdoHttpClientBase, IPullRequestServi
         _runStartedUtc = stateStore?.RunStartedUtc;
     }
 
+    // ADO PR descriptions have a hard 4000-character limit; list endpoints truncate to 400.
+    // When the body exceeds this, we store the full content as the first PR comment and
+    // place a marker in the description so readers can hydrate the full body transparently.
+    private const int MaxDescriptionLength = 4000;
+    private const string OverflowMarker = "<!-- overflow-body: true -->";
+    private const int OverflowDescriptionBudget = MaxDescriptionLength - 100; // leave room for marker + suffix
+
     public async Task<PlatformPullRequest> CreateAsync(
         string title, string body, string headBranch, string baseBranch,
         IReadOnlyList<string> labels, CancellationToken ct = default)
     {
-        // ADO PR descriptions have a 4000-character limit
-        const int maxDescriptionLength = 4000;
-        const string truncationSuffix = "\n\n---\n*Description truncated (ADO 4000 char limit)*";
-        var truncatedBody = body.Length > maxDescriptionLength
-            ? body[..(maxDescriptionLength - truncationSuffix.Length)] + truncationSuffix
-            : body;
+        string description;
+        bool needsOverflow = body.Length > MaxDescriptionLength;
+
+        if (needsOverflow)
+        {
+            // Truncate at a newline boundary for cleaner output
+            var cutPoint = body.LastIndexOf('\n', OverflowDescriptionBudget);
+            if (cutPoint <= 0) cutPoint = OverflowDescriptionBudget;
+            description = body[..cutPoint] + $"\n\n---\n{OverflowMarker}\n*Full description in first comment (ADO 4000 char limit)*";
+        }
+        else
+        {
+            description = body;
+        }
 
         var url = BuildUrl($"{Project}/_apis/git/repositories/{Repository}/pullrequests");
         var payload = new
@@ -44,7 +59,7 @@ public sealed class AdoPullRequestService : AdoHttpClientBase, IPullRequestServi
             sourceRefName = $"refs/heads/{headBranch}",
             targetRefName = $"refs/heads/{baseBranch}",
             title,
-            description = truncatedBody
+            description
         };
 
         var result = await PostAsync<AdoPullRequest>(url, payload, ct)
@@ -53,15 +68,26 @@ public sealed class AdoPullRequestService : AdoHttpClientBase, IPullRequestServi
         if (labels.Count > 0)
             await AddLabelsInternalAsync(result.PullRequestId, labels, ct);
 
-        _logger.LogInformation("Created ADO PR #{Id}: {Title}", result.PullRequestId, title);
-        return AdoModelMapper.ToPlatform(result, Organization, Project);
+        // Post full body as the first comment so agents can retrieve the complete context
+        if (needsOverflow)
+            await PostOverflowCommentAsync(result.PullRequestId, body, ct);
+
+        _logger.LogInformation("Created ADO PR #{Id}: {Title} (overflow={Overflow})",
+            result.PullRequestId, title, needsOverflow);
+        return AdoModelMapper.ToPlatform(result with { Description = body }, Organization, Project);
     }
 
     public async Task<PlatformPullRequest?> GetAsync(int id, CancellationToken ct = default)
     {
         var url = BuildUrl($"{Project}/_apis/git/repositories/{Repository}/pullrequests/{id}");
         var pr = await GetAsync<AdoPullRequest>(url, ct);
-        return pr is not null ? AdoModelMapper.ToPlatform(pr, Organization, Project) : null;
+        if (pr is null) return null;
+
+        // ADO doesn't include labels in the main PR response — fetch separately.
+        pr = await HydrateLabelsAsync(pr, ct);
+        // If description was overflow-truncated, hydrate full body from first comment.
+        pr = await HydrateOverflowBodyAsync(pr, ct);
+        return AdoModelMapper.ToPlatform(pr, Organization, Project);
     }
 
     public async Task<IReadOnlyList<PlatformPullRequest>> ListOpenAsync(CancellationToken ct = default)
@@ -69,12 +95,25 @@ public sealed class AdoPullRequestService : AdoHttpClientBase, IPullRequestServi
         var url = BuildUrl($"{Project}/_apis/git/repositories/{Repository}/pullrequests",
             "searchCriteria.status=active");
         var response = await GetAsync<AdoListResponse<AdoPullRequest>>(url, ct);
-        var prs = response?.Value.Select(p => AdoModelMapper.ToPlatform(p, Organization, Project)).ToList()
-            ?? new List<PlatformPullRequest>();
+        var adoPrs = response?.Value ?? new List<AdoPullRequest>();
+
+        // ADO list endpoint truncates descriptions to 400 chars and excludes labels.
+        // Fetch each PR individually to get full 4000-char description, then hydrate labels + overflow body.
+        var results = new List<PlatformPullRequest>();
+        foreach (var listPr in adoPrs)
+        {
+            var fullPr = await GetAsync<AdoPullRequest>(
+                BuildUrl($"{Project}/_apis/git/repositories/{Repository}/pullrequests/{listPr.PullRequestId}"), ct)
+                ?? listPr;
+            fullPr = await HydrateLabelsAsync(fullPr, ct);
+            fullPr = await HydrateOverflowBodyAsync(fullPr, ct);
+            results.Add(AdoModelMapper.ToPlatform(fullPr, Organization, Project));
+        }
+
         // Scope to current run to exclude stale PRs from previous runs
         if (_runStartedUtc.HasValue)
-            prs = prs.Where(p => p.CreatedAt >= _runStartedUtc.Value).ToList();
-        return prs;
+            results = results.Where(p => p.CreatedAt >= _runStartedUtc.Value).ToList();
+        return results;
     }
 
     public async Task<IReadOnlyList<PlatformPullRequest>> ListAllAsync(CancellationToken ct = default)
@@ -82,7 +121,7 @@ public sealed class AdoPullRequestService : AdoHttpClientBase, IPullRequestServi
         var url = BuildUrl($"{Project}/_apis/git/repositories/{Repository}/pullrequests",
             "searchCriteria.status=all&$top=200");
         var response = await GetAsync<AdoListResponse<AdoPullRequest>>(url, ct);
-        return response?.Value.Select(p => AdoModelMapper.ToPlatform(p, Organization, Project)).ToList()
+        return response?.Value?.Select(p => AdoModelMapper.ToPlatform(p, Organization, Project)).ToList()
             ?? new List<PlatformPullRequest>();
     }
 
@@ -118,7 +157,24 @@ public sealed class AdoPullRequestService : AdoHttpClientBase, IPullRequestServi
         var url = BuildUrl($"{Project}/_apis/git/repositories/{Repository}/pullrequests/{id}");
         var payload = new Dictionary<string, object?>();
         if (title is not null) payload["title"] = title;
-        if (body is not null) payload["description"] = body;
+
+        if (body is not null)
+        {
+            bool needsOverflow = body.Length > MaxDescriptionLength;
+            if (needsOverflow)
+            {
+                var cutPoint = body.LastIndexOf('\n', OverflowDescriptionBudget);
+                if (cutPoint <= 0) cutPoint = OverflowDescriptionBudget;
+                payload["description"] = body[..cutPoint] +
+                    $"\n\n---\n{OverflowMarker}\n*Full description in first comment (ADO 4000 char limit)*";
+                // Update or create overflow comment
+                await PostOverflowCommentAsync(id, body, ct);
+            }
+            else
+            {
+                payload["description"] = body;
+            }
+        }
 
         if (payload.Count > 0)
             await PatchAsync<AdoPullRequest>(url, payload, ct);
@@ -289,6 +345,90 @@ public sealed class AdoPullRequestService : AdoHttpClientBase, IPullRequestServi
                 ids.Add(id);
         }
         return ids;
+    }
+
+    /// <summary>
+    /// ADO's PR GET/list endpoints do NOT return labels in the response body.
+    /// Labels are a separate sub-resource that must be fetched via the /labels endpoint.
+    /// This hydrates the AdoPullRequest model with the actual labels.
+    /// </summary>
+    private async Task<AdoPullRequest> HydrateLabelsAsync(AdoPullRequest pr, CancellationToken ct)
+    {
+        try
+        {
+            var labelsUrl = BuildUrl(
+                $"{Project}/_apis/git/repositories/{Repository}/pullrequests/{pr.PullRequestId}/labels");
+            var labelsResponse = await GetAsync<AdoListResponse<AdoPrLabel>>(labelsUrl, ct);
+            if (labelsResponse?.Value is { Count: > 0 })
+            {
+                return pr with { Labels = labelsResponse.Value };
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to fetch labels for PR #{PrId} — continuing without labels", pr.PullRequestId);
+        }
+        return pr;
+    }
+
+    /// <summary>
+    /// If the PR description contains the overflow marker, fetch the first PR comment
+    /// (which holds the full body) and replace the truncated description.
+    /// </summary>
+    private async Task<AdoPullRequest> HydrateOverflowBodyAsync(AdoPullRequest pr, CancellationToken ct)
+    {
+        if (pr.Description is null || !pr.Description.Contains(OverflowMarker))
+            return pr;
+
+        try
+        {
+            var threadsUrl = BuildUrl(
+                $"{Project}/_apis/git/repositories/{Repository}/pullrequests/{pr.PullRequestId}/threads");
+            var threads = await GetAsync<AdoListResponse<AdoPrThread>>(threadsUrl, ct);
+            if (threads?.Value is null) return pr;
+
+            // Find the overflow thread — it's the one whose first comment starts with our marker prefix
+            const string overflowPrefix = "<!-- pr-overflow-body -->";
+            foreach (var thread in threads.Value)
+            {
+                var first = thread.Comments.FirstOrDefault(c => c.CommentType != "system");
+                if (first?.Content is not null && first.Content.StartsWith(overflowPrefix))
+                {
+                    // Strip the marker prefix and return the full body
+                    var fullBody = first.Content[overflowPrefix.Length..].TrimStart('\n');
+                    return pr with { Description = fullBody };
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to hydrate overflow body for PR #{PrId}", pr.PullRequestId);
+        }
+        return pr;
+    }
+
+    /// <summary>
+    /// Post (or update) the overflow comment containing the full PR body.
+    /// The comment is prefixed with a marker so we can find it on read.
+    /// </summary>
+    private async Task PostOverflowCommentAsync(int prId, string fullBody, CancellationToken ct)
+    {
+        const string overflowPrefix = "<!-- pr-overflow-body -->\n";
+        var commentContent = overflowPrefix + fullBody;
+
+        var threadsUrl = BuildUrl(
+            $"{Project}/_apis/git/repositories/{Repository}/pullrequests/{prId}/threads");
+        var payload = new
+        {
+            comments = new[]
+            {
+                new { parentCommentId = 0, content = commentContent, commentType = 1 }
+            },
+            status = "closed" // Closed so it doesn't clutter the review UI
+        };
+
+        await PostAsync<AdoPrThread>(threadsUrl, payload, ct);
+        _logger.LogDebug("Posted overflow body comment on PR #{PrId} ({Len} chars)", prId, fullBody.Length);
     }
 
     private async Task AddLabelsInternalAsync(int prNumber, IReadOnlyList<string> labels, CancellationToken ct)

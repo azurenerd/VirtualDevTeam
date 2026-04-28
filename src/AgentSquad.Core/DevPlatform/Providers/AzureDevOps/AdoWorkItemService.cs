@@ -33,10 +33,11 @@ public sealed class AdoWorkItemService : AdoHttpClientBase, IWorkItemService
 
     private string DefaultWorkItemType => _platformConfig.AzureDevOps?.DefaultWorkItemType ?? "Task";
 
-    /// <summary>WIQL date clause to scope queries to the current run (excludes stale items from prior runs).</summary>
+    /// <summary>WIQL date clause to scope queries to the current run (excludes stale items from prior runs).
+    /// ADO WIQL requires date-only format (no time component) for CreatedDate comparisons.</summary>
     private string RunScopeDateClause =>
         _runStartedUtc.HasValue
-            ? $" AND [System.CreatedDate] >= '{_runStartedUtc.Value:yyyy-MM-ddTHH:mm:ssZ}'"
+            ? $" AND [System.CreatedDate] >= '{_runStartedUtc.Value:yyyy-MM-dd}'"
             : "";
 
     private static readonly MarkdownPipeline MarkdownPipeline = new MarkdownPipelineBuilder()
