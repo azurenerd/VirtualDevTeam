@@ -84,6 +84,12 @@ public class ProjectConfig
     /// conversations and context gathering for rapid startup during testing.
     /// </summary>
     public bool QuickDocumentCreation { get; set; } = false;
+
+    /// <summary>
+    /// Optional ADO parent work item ID. When set, all agent-created work items
+    /// are linked as children under this parent (System.LinkTypes.Hierarchy-Reverse).
+    /// </summary>
+    public int? ParentWorkItemId { get; set; }
 }
 
 public class ModelConfig

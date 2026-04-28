@@ -16,6 +16,7 @@ public sealed class AdoWorkItemService : AdoHttpClientBase, IWorkItemService
 {
     private readonly ILogger<AdoWorkItemService> _logger;
     private readonly DevPlatformConfig _platformConfig;
+    private readonly int? _parentWorkItemId;
     private readonly DateTime? _runStartedUtc;
 
     public AdoWorkItemService(
@@ -28,6 +29,7 @@ public sealed class AdoWorkItemService : AdoHttpClientBase, IWorkItemService
     {
         _logger = logger;
         _platformConfig = config.Value.DevPlatform ?? new DevPlatformConfig();
+        _parentWorkItemId = config.Value.Project.ParentWorkItemId;
         _runStartedUtc = stateStore?.RunStartedUtc;
     }
 
@@ -71,6 +73,21 @@ public sealed class AdoWorkItemService : AdoHttpClientBase, IWorkItemService
 
         if (labels.Count > 0)
             patchDoc.Add(new { op = "add", path = "/fields/System.Tags", value = string.Join("; ", labels) });
+
+        // Link as child of the configured parent work item (Hierarchy-Reverse = child→parent)
+        if (_parentWorkItemId.HasValue)
+        {
+            patchDoc.Add(new
+            {
+                op = "add",
+                path = "/relations/-",
+                value = new
+                {
+                    rel = "System.LinkTypes.Hierarchy-Reverse",
+                    url = $"{BaseUrl}{Project}/_apis/wit/workitems/{_parentWorkItemId.Value}"
+                }
+            });
+        }
 
         var result = await PatchAsync<AdoWorkItemCreateResult>(url, patchDoc, ct, "application/json-patch+json")
             ?? throw new InvalidOperationException("ADO returned null for work item creation");

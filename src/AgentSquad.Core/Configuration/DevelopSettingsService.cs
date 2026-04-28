@@ -121,6 +121,8 @@ public sealed class DevelopSettingsService : IDisposable
         if (!string.IsNullOrWhiteSpace(settings.ExecutiveUsername))
             config.Project.ExecutiveGitHubUsername = settings.ExecutiveUsername;
 
+        config.Project.ParentWorkItemId = settings.ParentWorkItemId;
+
         // Platform-specific repo settings
         if (string.Equals(settings.Platform, "GitHub", StringComparison.OrdinalIgnoreCase))
         {
@@ -200,6 +202,7 @@ public sealed class DevelopSettingsService : IDisposable
         settings.Description = config.Project.Description;
         settings.TechStack = config.Project.TechStack;
         settings.ExecutiveUsername = config.Project.ExecutiveGitHubUsername;
+        settings.ParentWorkItemId = config.Project.ParentWorkItemId;
 
         return settings;
     }

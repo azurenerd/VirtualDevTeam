@@ -1,6 +1,8 @@
+using AgentSquad.Core.Configuration;
 using AgentSquad.Core.DevPlatform.Capabilities;
 using AgentSquad.Core.DevPlatform.Models;
 using AgentSquad.Core.GitHub;
+using Microsoft.Extensions.Options;
 
 namespace AgentSquad.Core.DevPlatform.Providers.GitHub;
 
@@ -10,11 +12,13 @@ namespace AgentSquad.Core.DevPlatform.Providers.GitHub;
 public sealed class GitHubWorkItemAdapter : IWorkItemService
 {
     private readonly IGitHubService _github;
+    private readonly int? _parentWorkItemId;
 
-    public GitHubWorkItemAdapter(IGitHubService github)
+    public GitHubWorkItemAdapter(IGitHubService github, IOptions<AgentSquadConfig> config)
     {
         ArgumentNullException.ThrowIfNull(github);
         _github = github;
+        _parentWorkItemId = config.Value.Project.ParentWorkItemId;
     }
 
     public async Task<PlatformWorkItem> CreateAsync(
@@ -22,7 +26,13 @@ public sealed class GitHubWorkItemAdapter : IWorkItemService
         CancellationToken ct = default)
     {
         var issue = await _github.CreateIssueAsync(title, body, labels.ToArray(), ct);
-        return GitHubModelMapper.ToPlatform(issue);
+        var workItem = GitHubModelMapper.ToPlatform(issue);
+
+        // Link as sub-issue of the configured parent work item
+        if (_parentWorkItemId.HasValue)
+            await _github.AddSubIssueAsync(_parentWorkItemId.Value, workItem.PlatformId, ct);
+
+        return workItem;
     }
 
     public async Task<PlatformWorkItem?> GetAsync(int id, CancellationToken ct = default)
