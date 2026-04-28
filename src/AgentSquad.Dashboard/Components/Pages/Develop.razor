@@ -964,6 +964,40 @@ else
     /* ── Wizard Body ── */
     .wizard-body {
         min-height: 350px;
+        animation: wizard-fade-in 0.25s ease-out;
+    }
+
+    @@keyframes wizard-fade-in {
+        from { opacity: 0; transform: translateY(8px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* ── Responsive ── */
+    @@media (max-width: 768px) {
+        .wizard-steps {
+            gap: 0.25rem;
+        }
+
+        .wizard-step-label {
+            display: none;
+        }
+
+        .wizard-step-line {
+            min-width: 16px;
+        }
+
+        .wizard-radio-group {
+            flex-direction: column;
+        }
+
+        .wizard-summary-row {
+            flex-direction: column;
+            gap: 0.25rem;
+        }
+
+        .wizard-summary-label {
+            min-width: unset;
+        }
     }
 
     /* ── Wizard Navigation ── */
