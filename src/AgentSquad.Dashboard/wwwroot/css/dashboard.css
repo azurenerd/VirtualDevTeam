@@ -727,6 +727,11 @@ main {
 .agent-detail .detail-value.step-active {
     color: var(--accent-purple, #a78bfa);
     font-size: 0.82rem;
+    font-weight: 500;
+}
+
+.agent-card-body > .step-compact-bar {
+    margin: -2px 0 4px 0;
 }
 
 .agent-detail .detail-value.task-idle {

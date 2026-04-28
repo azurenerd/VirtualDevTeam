@@ -265,12 +265,23 @@ else
                             <span class="detail-value task-idle">Idle</span>
                         }
                     </div>
+                    @{
+                        var stepInfo = GetAgentStepInfo(agent.Id);
+                    }
                     @if (!string.IsNullOrEmpty(stepName))
                     {
+                        var stepLabel = stepInfo.total > 0 ? $"⚡ Step {stepInfo.completed}/{stepInfo.total}" : "⚡ Step";
                         <div class="agent-detail">
-                            <span class="detail-label">⚡ Step</span>
+                            <span class="detail-label">@stepLabel</span>
                             <span class="detail-value step-active" title="@stepDescription">@TruncateTask(stepName)</span>
                         </div>
+                        @if (stepInfo.total > 0)
+                        {
+                            var stepPct = (int)(100.0 * stepInfo.completed / stepInfo.total);
+                            <div class="step-compact-bar">
+                                <div class="step-compact-fill" style="width: @(stepPct)%"></div>
+                            </div>
+                        }
                     }
 
                     @* Work item link (PR or Issue) *@
@@ -350,22 +361,6 @@ else
                         <div class="agent-detail">
                             <span class="detail-label">Duration</span>
                             <span class="detail-value task-active">@FormatDuration(DateTime.UtcNow - agent.LastStatusChange)</span>
-                        </div>
-                    }
-                    @{ var stepInfo = GetAgentStepInfo(agent.Id); }
-                    @if (stepInfo.total > 0)
-                    {
-                        var stepPct = (int)(100.0 * stepInfo.completed / stepInfo.total);
-                        <div class="agent-detail">
-                            <span class="detail-label">Steps</span>
-                            <span class="detail-value">
-                                <div class="step-compact" title="@stepInfo.tooltip">
-                                    <span class="step-compact-text">Step @(stepInfo.completed)/@(stepInfo.total): @(stepInfo.currentName ?? "—")</span>
-                                    <div class="step-compact-bar">
-                                        <div class="step-compact-fill" style="width: @(stepPct)%"></div>
-                                    </div>
-                                </div>
-                            </span>
                         </div>
                     }
                     @if (agent.ErrorCount > 0)

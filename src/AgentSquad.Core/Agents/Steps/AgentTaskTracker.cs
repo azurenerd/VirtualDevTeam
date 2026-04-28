@@ -259,7 +259,9 @@ public class AgentTaskTracker : IAgentTaskTracker
         if (taskId.StartsWith("research-", StringComparison.OrdinalIgnoreCase))
             return "Research & Analysis";
 
-        if (taskId.StartsWith("arch-", StringComparison.OrdinalIgnoreCase))
+        if (taskId.StartsWith("arch", StringComparison.OrdinalIgnoreCase) &&
+            (taskId.StartsWith("arch-", StringComparison.OrdinalIgnoreCase) ||
+             taskId.StartsWith("architecture-", StringComparison.OrdinalIgnoreCase)))
             return "Architecture Design";
 
         // Fallback: titlecase the taskId
