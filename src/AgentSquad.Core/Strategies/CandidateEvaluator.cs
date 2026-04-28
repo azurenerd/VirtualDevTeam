@@ -27,6 +27,9 @@ public class CandidateEvaluator
     private readonly PlaywrightRunner? _screenshotRunner;
     private readonly IOptionsMonitor<AgentSquadConfig>? _appCfg;
 
+    /// <summary>Exposed for the orchestrator's revision round to call the judge directly.</summary>
+    public ILlmJudge? Judge => _judge;
+
     public CandidateEvaluator(
         ILogger<CandidateEvaluator> logger,
         GitWorktreeManager worktree,

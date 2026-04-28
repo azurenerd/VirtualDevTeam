@@ -29,6 +29,7 @@ public class StrategyOrchestrator
     private readonly StrategySamplingPolicy? _sampling;
     private readonly RunBudgetTracker? _budget;
     private readonly AgentUsageTracker? _usage;
+    private readonly RevisionFeedbackGenerator? _revisionFeedback;
 
     public StrategyOrchestrator(
         ILogger<StrategyOrchestrator> logger,
@@ -42,7 +43,8 @@ public class StrategyOrchestrator
         StrategySamplingPolicy? sampling = null,
         RunBudgetTracker? budget = null,
         AgentUsageTracker? usage = null,
-        IEnumerable<IAgenticFrameworkAdapter>? adapters = null)
+        IEnumerable<IAgenticFrameworkAdapter>? adapters = null,
+        RevisionFeedbackGenerator? revisionFeedback = null)
     {
         _logger = logger;
         _worktree = worktree;
@@ -63,6 +65,7 @@ public class StrategyOrchestrator
         _sampling = sampling;
         _budget = budget;
         _usage = usage;
+        _revisionFeedback = revisionFeedback;
     }
 
     /// <summary>All known framework/strategy IDs (built-in + external adapters).</summary>
@@ -124,15 +127,28 @@ public class StrategyOrchestrator
             enabled.Count, task.TaskId, string.Join(",", enabled));
 
         // Launch each strategy in its own worktree, bounded by the global gate.
-        var tasks = enabled.Select(id => RunOneAsync(task, id, cfg, ct)).ToList();
-        var outputs = await Task.WhenAll(tasks);
+        var runTasks = enabled.Select(id => RunOneAsync(task, id, cfg, ct)).ToList();
+        var outputs = await Task.WhenAll(runTasks);
 
         // Evaluate survivors.
         var evalInput = outputs
             .Where(o => o.exec is not null)
             .Select(o => (o.exec!, o.patch))
             .ToList();
-        var evalResult = await _evaluator.EvaluateAsync(task, evalInput, ct);
+
+        EvaluationResult evalResult;
+        var revCfg = cfg.RevisionRound;
+
+        if (revCfg.Enabled && evalInput.Count > 1)
+        {
+            // ── Revision Round: gates-only → judge with feedback → revise → final judge ──
+            evalResult = await RunWithRevisionAsync(task, evalInput, outputs, enabled, cfg, ct);
+        }
+        else
+        {
+            // ── Standard path (unchanged) ──
+            evalResult = await _evaluator.EvaluateAsync(task, evalInput, ct);
+        }
 
         // Determine judge-skipped reason for surviving candidates.
         var survivorCount = evalResult.Candidates.Count(c => c.Survived);
@@ -222,6 +238,330 @@ public class StrategyOrchestrator
         LogOrchestrationSummary(task.TaskId, runSw, evalResult);
 
         return new OrchestrationOutcome(task, evalResult);
+    }
+
+    // ── Revision Round ──
+
+    private async Task<EvaluationResult> RunWithRevisionAsync(
+        TaskContext task,
+        IReadOnlyList<(StrategyExecutionResult exec, string patch)> evalInput,
+        (StrategyExecutionResult? exec, string patch)[] outputs,
+        List<string> enabled,
+        StrategyFrameworkConfig cfg,
+        CancellationToken ct)
+    {
+        // Step 1: Run gates + screenshots only (no LLM judge, no winner pick)
+        var initialEval = await _evaluator.EvaluateAsync(task, evalInput, ct);
+        var survivors = initialEval.Candidates.Where(c => c.Survived).ToList();
+
+        if (survivors.Count <= 1)
+        {
+            _logger.LogInformation(
+                "Revision round skipped for task {Task}: only {Count} survivor(s)",
+                task.TaskId, survivors.Count);
+            return initialEval;
+        }
+
+        // Step 2: Judge scores survivors with feedback (single call)
+        var ecfg = cfg.Evaluator;
+        var sanitized = survivors.ToDictionary(
+            c => c.StrategyId,
+            c => JudgeInputSanitizer.SanitizePatch(c.Patch, ecfg.MaxJudgePatchChars));
+
+        JudgeResult? judgeResult = null;
+        if (_evaluator.Judge is not null)
+        {
+            judgeResult = await _evaluator.Judge.ScoreAsync(new JudgeInput
+            {
+                TaskId = task.TaskId,
+                TaskTitle = task.TaskTitle,
+                TaskDescription = task.TaskDescription,
+                CandidatePatches = sanitized,
+                MaxPatchChars = ecfg.MaxJudgePatchChars,
+            }, ct);
+        }
+
+        // Step 3: Build RevisionContext per survivor + generate rubber-duck feedback
+        var revisionContexts = new Dictionary<string, RevisionContext>(StringComparer.Ordinal);
+        foreach (var survivor in survivors)
+        {
+            var score = judgeResult?.Scores.TryGetValue(survivor.StrategyId, out var s) == true ? s : null;
+            if (score is null)
+            {
+                _logger.LogDebug("No judge score for {Strategy} — skipping revision", survivor.StrategyId);
+                continue;
+            }
+
+            var initialScores = new Dictionary<string, int>
+            {
+                ["ac"] = score.AcceptanceCriteriaScore,
+                ["design"] = score.DesignScore,
+                ["readability"] = score.ReadabilityScore,
+            };
+
+            // Emit initial-scored event
+            var screenshotBase64 = survivor.ScreenshotBytes is { Length: > 0 }
+                ? Convert.ToBase64String(survivor.ScreenshotBytes) : null;
+            await _events.EmitAsync(StrategyEvents.CandidateInitialScored,
+                new CandidateInitialScoredEvent(
+                    task.RunId, task.TaskId, survivor.StrategyId,
+                    score.AcceptanceCriteriaScore, score.DesignScore, score.ReadabilityScore,
+                    score.VisualsScore,
+                    score.Feedback,
+                    screenshotBase64), ct);
+
+            // Generate rubber-duck feedback (different model tier for diversity)
+            var rubberDuck = "";
+            if (_revisionFeedback is not null)
+            {
+                rubberDuck = await _revisionFeedback.GenerateFeedbackAsync(
+                    task.TaskTitle, task.TaskDescription,
+                    survivor.StrategyId, survivor.Patch, score, ct);
+            }
+
+            revisionContexts[survivor.StrategyId] = new RevisionContext
+            {
+                InitialScores = initialScores,
+                JudgeFeedback = score.Feedback,
+                RubberDuckFeedback = rubberDuck,
+                OriginalPatch = survivor.Patch,
+            };
+        }
+
+        if (revisionContexts.Count == 0)
+        {
+            _logger.LogInformation("No revision contexts built — returning initial evaluation");
+            return initialEval;
+        }
+
+        // Step 4: Run revision in fresh worktrees (shorter timeout)
+        var revisionTimeout = TimeSpan.FromSeconds(cfg.RevisionRound.MaxRevisionSeconds);
+        var revisionTasks = new List<Task<(StrategyExecutionResult? exec, string patch)>>();
+        var revisionStrategies = new List<string>();
+
+        foreach (var (strategyId, revCtx) in revisionContexts)
+        {
+            var originalOutput = outputs.FirstOrDefault(o =>
+                o.exec?.StrategyId.Equals(strategyId, StringComparison.OrdinalIgnoreCase) == true);
+            if (originalOutput.exec is null) continue;
+
+            await _events.EmitAsync(StrategyEvents.CandidateRevisionStarted,
+                new CandidateRevisionStartedEvent(task.RunId, task.TaskId, strategyId, DateTimeOffset.UtcNow), ct);
+
+            revisionStrategies.Add(strategyId);
+            revisionTasks.Add(RunRevisionAsync(task, strategyId, revCtx, revisionTimeout, cfg, ct));
+        }
+
+        var revisionOutputs = await Task.WhenAll(revisionTasks);
+
+        // Emit revision-completed events
+        for (int i = 0; i < revisionStrategies.Count; i++)
+        {
+            var revOut = revisionOutputs[i];
+            await _events.EmitAsync(StrategyEvents.CandidateRevisionCompleted,
+                new CandidateRevisionCompletedEvent(
+                    task.RunId, task.TaskId, revisionStrategies[i],
+                    revOut.exec?.Succeeded ?? false, revOut.exec?.FailureReason,
+                    revOut.exec?.Elapsed.TotalSeconds ?? 0, revOut.exec?.TokensUsed), ct);
+        }
+
+        // Step 5: Final evaluation with revised patches
+        var finalInput = revisionOutputs
+            .Where(o => o.exec is not null)
+            .Select(o => (o.exec!, o.patch))
+            .ToList();
+
+        // If some revisions failed, include original outputs for those candidates
+        foreach (var survivor in survivors)
+        {
+            if (!finalInput.Any(f => f.Item1.StrategyId.Equals(survivor.StrategyId, StringComparison.OrdinalIgnoreCase)))
+            {
+                var origOutput = evalInput.FirstOrDefault(o =>
+                    o.exec.StrategyId.Equals(survivor.StrategyId, StringComparison.OrdinalIgnoreCase));
+                if (origOutput.exec is not null)
+                    finalInput.Add(origOutput);
+            }
+        }
+
+        var finalEval = await _evaluator.EvaluateAsync(task, finalInput, ct);
+
+        // Step 6: Best-of-two — for each candidate, keep the better total score
+        var bestResults = new List<CandidateResult>();
+        foreach (var finalCandidate in finalEval.Candidates)
+        {
+            var initialCandidate = initialEval.Candidates
+                .FirstOrDefault(c => c.StrategyId.Equals(finalCandidate.StrategyId, StringComparison.OrdinalIgnoreCase));
+
+            if (initialCandidate?.Score is not null && finalCandidate.Score is not null)
+            {
+                var initialScore = judgeResult?.Scores.TryGetValue(finalCandidate.StrategyId, out var iScore) == true ? iScore : null;
+                var initialTotal = (initialScore?.AcceptanceCriteriaScore ?? 0) + (initialScore?.DesignScore ?? 0) + (initialScore?.ReadabilityScore ?? 0);
+                var finalTotal = finalCandidate.Score.AcceptanceCriteriaScore + finalCandidate.Score.DesignScore + finalCandidate.Score.ReadabilityScore;
+
+                if (initialTotal > finalTotal)
+                {
+                    _logger.LogInformation(
+                        "Revision worsened {Strategy} ({Initial} → {Final}); keeping initial scores",
+                        finalCandidate.StrategyId, initialTotal, finalTotal);
+                    bestResults.Add(finalCandidate with { Score = initialCandidate.Score with
+                    {
+                        AcceptanceCriteriaScore = initialScore!.AcceptanceCriteriaScore,
+                        DesignScore = initialScore.DesignScore,
+                        ReadabilityScore = initialScore.ReadabilityScore,
+                    }});
+                    continue;
+                }
+            }
+            bestResults.Add(finalCandidate);
+        }
+
+        // Re-pick winner from best-of-two results
+        var bestSurvivors = bestResults.Where(c => c.Survived && c.Score is not null).ToList();
+        CandidateResult? winner = null;
+        string? tieBreak = null;
+
+        if (bestSurvivors.Count > 0)
+        {
+            var ordered = bestSurvivors
+                .OrderByDescending(c => c.Score!.AcceptanceCriteriaScore)
+                .ThenByDescending(c => c.Score!.DesignScore)
+                .ThenByDescending(c => c.Score!.ReadabilityScore)
+                .ThenByDescending(c => c.Score!.VisualsScore ?? -1)
+                .ThenBy(c => c.Execution.TokensUsed ?? long.MaxValue)
+                .ThenBy(c => c.Execution.Elapsed)
+                .ThenBy(c => c.StrategyId, StringComparer.Ordinal)
+                .ToList();
+            winner = ordered[0];
+            tieBreak = "revision-round-rank";
+        }
+
+        return new EvaluationResult
+        {
+            Candidates = bestResults,
+            Winner = winner,
+            TieBreakReason = tieBreak,
+            EvaluationElapsed = finalEval.EvaluationElapsed,
+        };
+    }
+
+    /// <summary>
+    /// Runs a revision attempt for a single strategy. Creates a fresh worktree
+    /// and applies the initial patch, then invokes the strategy with RevisionContext
+    /// containing judge feedback for targeted fixes.
+    /// </summary>
+    private async Task<(StrategyExecutionResult? exec, string patch)> RunRevisionAsync(
+        TaskContext task, string strategyId, RevisionContext revCtx,
+        TimeSpan timeout, StrategyFrameworkConfig cfg, CancellationToken ct)
+    {
+        var isExternal = _externalAdapters.ContainsKey(strategyId);
+        var strategy = isExternal ? null : _strategies.GetValueOrDefault(strategyId);
+        var adapter = isExternal ? _externalAdapters[strategyId] : null;
+
+        if (strategy is null && adapter is null)
+        {
+            _logger.LogWarning("No strategy/adapter found for revision of {Id}", strategyId);
+            return (new StrategyExecutionResult
+            {
+                StrategyId = strategyId,
+                Succeeded = false,
+                FailureReason = "revision-no-strategy",
+                Elapsed = TimeSpan.Zero,
+            }, "");
+        }
+
+        WorktreeHandle? handle = null;
+        var sw = Stopwatch.StartNew();
+        try
+        {
+            handle = await _worktree.CreateAsync(
+                task.AgentRepoPath, cfg.CandidateDirectoryName,
+                task.TaskId, strategyId + "-rev", task.BaseSha, ct);
+
+            // Apply the original patch so the revision starts from initial code
+            var applyOk = await _worktree.ApplyPatchAsync(handle.Path, revCtx.OriginalPatch, ct);
+            if (!applyOk)
+            {
+                _logger.LogWarning("Failed to apply initial patch for revision of {Strategy}", strategyId);
+                return (new StrategyExecutionResult
+                {
+                    StrategyId = strategyId,
+                    Succeeded = false,
+                    FailureReason = "revision-patch-apply-failed",
+                    Elapsed = sw.Elapsed,
+                }, "");
+            }
+
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeoutCts.CancelAfter(timeout);
+
+            var invocation = new StrategyInvocation
+            {
+                Task = task,
+                WorktreePath = handle.Path,
+                StrategyId = strategyId,
+                Timeout = timeout,
+                Revision = revCtx,
+            };
+
+            StrategyExecutionResult exec;
+            string patch = "";
+            try
+            {
+                if (strategy is not null)
+                {
+                    exec = await strategy.ExecuteAsync(invocation, timeoutCts.Token);
+                }
+                else
+                {
+                    var fwInvocation = ToFrameworkInvocation(invocation);
+                    var fwResult = await adapter!.ExecuteAsync(fwInvocation, timeoutCts.Token);
+                    exec = FromFrameworkResult(fwResult);
+                }
+
+                if (exec.Succeeded)
+                {
+                    patch = await _worktree.ExtractPatchAsync(handle.Path, handle.BaseSha, ct);
+                }
+            }
+            catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !ct.IsCancellationRequested)
+            {
+                exec = new StrategyExecutionResult
+                {
+                    StrategyId = strategyId,
+                    Succeeded = false,
+                    FailureReason = $"revision-timeout after {timeout.TotalSeconds}s",
+                    Elapsed = sw.Elapsed,
+                };
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Revision threw for strategy {S} task {T}", strategyId, task.TaskId);
+                exec = new StrategyExecutionResult
+                {
+                    StrategyId = strategyId,
+                    Succeeded = false,
+                    FailureReason = $"revision-exception: {ex.GetType().Name}: {ex.Message}",
+                    Elapsed = sw.Elapsed,
+                };
+            }
+
+            return (exec, patch);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogError(ex, "Revision worktree setup failed for {S}", strategyId);
+            return (new StrategyExecutionResult
+            {
+                StrategyId = strategyId,
+                Succeeded = false,
+                FailureReason = $"revision-worktree: {ex.GetType().Name}: {ex.Message}",
+                Elapsed = sw.Elapsed,
+            }, "");
+        }
+        finally
+        {
+            if (handle is not null) await handle.DisposeAsync();
+        }
     }
 
     private void LogOrchestrationSummary(string taskId, Stopwatch runSw, EvaluationResult evalResult)

@@ -426,6 +426,31 @@ public class GitWorktreeManager
         throw last ?? new InvalidOperationException("git config retry exhausted");
     }
 
+    /// <summary>Applies a unified diff patch to the worktree. Returns true on success.</summary>
+    public async Task<bool> ApplyPatchAsync(string worktreePath, string patch, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(patch)) return false;
+        try
+        {
+            var patchFile = Path.Combine(worktreePath, ".revision-patch.diff");
+            await File.WriteAllTextAsync(patchFile, patch, ct);
+            try
+            {
+                await RunGitAsync(worktreePath, new[] { "apply", "--3way", patchFile }, ct);
+                return true;
+            }
+            finally
+            {
+                try { File.Delete(patchFile); } catch { }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "ApplyPatchAsync failed in {Path}", worktreePath);
+            return false;
+        }
+    }
+
     private static Task RunGitAsync(string cwd, string[] args, CancellationToken ct)
         => RunGitCaptureAsync(cwd, args, ct);
 
