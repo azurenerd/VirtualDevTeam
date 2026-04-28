@@ -138,11 +138,11 @@ Most recent E2E runs used SinglePRMode. The multi-PR mode with parallel SE worke
 
 ### Problem
 
-Clicking a PR on the Timeline dashboard navigates to GitHub instead of showing an inline details panel. The panel should show PR metadata, review status, and a candidate screenshot gallery (once #4 is implemented).
+Clicking a PR on the Timeline dashboard navigates to the platform (GitHub/Azure DevOps) instead of showing an inline details panel. The panel should show PR metadata, review status, and a candidate screenshot gallery (once #4 is implemented).
 
 ### What Needs to Change
 
-1. PR click → opens bottom details popup (not GitHub navigation)
+1. PR click → opens bottom details popup (not external navigation)
 2. Show PR metadata: title, branch, reviewers, labels, status
 3. Show winner screenshot with green border
 4. Show all candidate screenshots (requires #4 backend)

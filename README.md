@@ -40,7 +40,7 @@ AgentSquad is a .NET 8 multi-agent AI system that manages a full software develo
 - **Per-Reviewer Rework Limits** — Rework cycles tracked per (PR, reviewer) pair. Each reviewer (Architect, SE, PM, TE) gets 1 cycle independently, so a PR with 3 reviewers gets up to 3 rounds total
 - **Visual Scaffold Placeholders** — Foundation tasks for web/UI projects create components with colored backgrounds, dashed borders, and bold labels. Playwright screenshots show a clear grid of sections, never blank white
 - **Crash-Resilient Sessions** — CLI session IDs persist to SQLite so agents resume the same Copilot conversation after runner restarts. SE agents recover in-memory state flags (`_allTasksComplete`, `_integrationPrCreated`, `_engineeringSignaled`) from GitHub on restart, preventing duplicate task/PR creation
-- **16-Page Real-Time Dashboard** — Blazor Server UI with agent overview, project timeline, features management, agentic frameworks, metrics, health monitor, PR/issue browsers, engineering plan graph, team visualization, director CLI terminal, and approval management. Standalone mode (port 5051) provides full data via HTTP polling to the Runner API
+- **16-Page Real-Time Dashboard** — Blazor Server UI with agent overview, project timeline, features management, agentic frameworks, metrics, health monitor, PR/issue browsers, engineering plan graph, team visualization, director CLI terminal, approval management, and a **Develop wizard** for guided project setup. Standalone mode (port 5051) provides full data via HTTP polling to the Runner API
 - **Run-Scoped Task Management** — All GitHub queries (merged PRs, open PRs, open issues) are scoped to the current run via `_runStartedUtc` to prevent stale data from previous runs interfering with task assignment or overlap detection
 - **Decision Impact Classification & Gating** — Agents classify decisions by impact level (XS–XL) using AI. High-impact decisions are gated for human approval before agents proceed. Configurable threshold levels, structured implementation plans for gated decisions, and a rich dashboard UI for reviewing and approving decisions
 - **Agent Task Steps** — Real-time workflow visibility: all 7 agents report step-by-step progress (BeginStep/CompleteStep/RecordSubStep) with per-step timing, LLM call counts, and cost. Dashboard shows live step timelines with progress bars, expected-step templates per role, and rich tooltips with detailed context on mouseover — zero LLM overhead, pure observability
@@ -50,7 +50,7 @@ AgentSquad is a .NET 8 multi-agent AI system that manages a full software develo
 - **Phase-Gated Workflow** — State machine enforces linear progression: Initialization → Research → Architecture → Planning → Development → Testing → Review → Finalization
 - **Multi-Platform Support** — Works with GitHub (default) or Azure DevOps. ADO support includes PAT and Azure CLI bearer token auth, Work Items (Task/Bug/User Story), WIQL queries, Git Pushes API, PR threads, and native PR-to-task linking in the Development section. Switch platforms via the dashboard dropdown — no code changes needed. See [docs/AzureDevOpsSetup.md](docs/AzureDevOpsSetup.md)
 - **SinglePRMode** — When enabled, the entire project is delivered through a single engineering task and PR, simplifying the workflow for smaller projects. PM correctly gates issue closure on positive merge evidence (at least one merged PR must exist), preventing premature closure after resets
-- **GitHub-Native Coordination** — Dual-layer communication: in-process message bus (<1ms, real-time) + GitHub API (durable PRs/Issues, human-visible). All work products are real GitHub artifacts
+- **GitHub-Native Coordination** — Dual-layer communication: in-process message bus (<1ms, real-time) + platform API (durable PRs/Work Items, human-visible). All work products are real platform artifacts on GitHub or Azure DevOps
 - **Multi-Model Support** — Anthropic Claude, OpenAI GPT, Azure OpenAI, and local Ollama with four configurable tiers (premium / standard / budget / local) assigned per agent role
 - **Operational Resilience** — 60s TTL API cache (~90% reduction in GitHub calls), deadlock detection via wait-for graph analysis, health monitoring with stuck-agent detection, graceful shutdown with state persistence
 - **Robust Review Workflow** — Duplicate `ready-for-review` comment guard across Architect and PM reviews, inline review comments always use COMMENT event type with path hardening to land correctly on the Files-changed tab, per-reviewer rework iteration counts surfaced in review threads, and AI screenshot descriptions rendered on dashboard cards for at-a-glance review
@@ -88,18 +88,18 @@ flowchart TB
 
         subgraph Infra["⚙️ Shared Infrastructure"]
             direction LR
-            GHS["GitHubService<br/>60s TTL · REST"] ~~~ CCS["CopilotCli<br/>MCP Servers"]
+            DVP["DevPlatform<br/>GitHub · ADO"] ~~~ CCS["CopilotCli<br/>MCP Servers"]
             DB["StateStore<br/>MemoryStore<br/>SQLite"] ~~~ WK["Workspace<br/>Build · Test"] ~~~ PW["Playwright<br/>HealthService"]
         end
     end
 
-    GH["🐙 GitHub — Remote<br/>PRs · Issues · Code · Docs"]
-    DASH["📊 Dashboard — port 5051<br/>Blazor Server · 16 pages"]
+    PLT["🔀 Dev Platform — Remote<br/>GitHub or Azure DevOps<br/>PRs · Work Items · Code"]
+    DASH["📊 Dashboard — port 5051<br/>Blazor Server · 18 pages"]
 
     Orch -->|coordinates| Bus
     Bus -->|routes messages| Team
     Team -->|uses| Infra
-    Infra -->|artifacts| GH
+    Infra -->|artifacts| PLT
     Infra -->|feeds data| DASH
 
     classDef purple fill:#6a0dad,stroke:#bf00ff,stroke-width:2px,color:#fff
@@ -113,8 +113,8 @@ flowchart TB
     class W1,W2,W3,W4,W5,W6,W7,W8 phase
     class M1,M2,M3,M4,M5,M6 pink
     class PM,RS,ARC,SE,SEW,TE,SME blue
-    class GHS,CCS,DB,WK,PW deepPurple
-    class GH,DASH cyan
+    class DVP,CCS,DB,WK,PW deepPurple
+    class PLT,DASH cyan
 ```
 
 ## Quick Start
@@ -165,23 +165,29 @@ cd AgentSquad
 dotnet build
 ```
 
-### 3. Configure GitHub PAT (Required)
+### 3. Configure via Develop Wizard (Recommended)
 
-AgentSquad needs a [GitHub Personal Access Token](https://github.com/settings/tokens) with **`repo`** scope to create PRs, Issues, and manage branches on your behalf.
+The **Develop wizard** in the dashboard provides a guided setup experience. Start the Runner, then navigate to **http://localhost:5050/develop** (or **http://localhost:5051/develop** for standalone). The wizard walks through:
 
-**Create a PAT:**
-1. Go to [github.com/settings/tokens](https://github.com/settings/tokens) → **Generate new token (classic)**
-2. Give it a descriptive name (e.g., "AgentSquad")
-3. Select the **`repo`** scope (full control of private repositories)
-4. Click **Generate token** and copy the value (starts with `github_pat_` or `ghp_`)
+1. **What to Build** — Project name and description
+2. **Repo & Auth** — Platform selection (GitHub or Azure DevOps), PAT configuration, repository setup
+3. **Work Items** — Search and select a parent work item to scope the run
+4. **Review** — Confirm settings and launch the agent team
 
-**Store the PAT securely using .NET User Secrets** (never committed to git):
+#### Manual PAT Setup (Alternative)
 
+If you prefer manual configuration, store credentials via .NET User Secrets (never committed to git):
+
+**For GitHub:**
 ```powershell
 cd src/AgentSquad.Runner
-
-# Required: GitHub PAT — this is the most important secret
 dotnet user-secrets set "AgentSquad:Project:GitHubToken" "github_pat_YOUR_TOKEN_HERE"
+```
+
+**For Azure DevOps:**
+```powershell
+cd src/AgentSquad.Runner
+dotnet user-secrets set "AgentSquad:DevPlatform:AzureDevOps:Pat" "YOUR_ADO_PAT_HERE"
 ```
 
 > **How User Secrets work:** Secrets are stored locally at `%APPDATA%\Microsoft\UserSecrets\` (Windows) or `~/.microsoft/usersecrets/` (macOS/Linux) — completely outside the git repo. You must run this on each machine. Alternatively, set environment variables with `__` as separator: `AGENTSQUAD__PROJECT__GITHUBTOKEN=github_pat_...`
@@ -194,9 +200,9 @@ dotnet user-secrets set "AgentSquad:Models:standard:ApiKey" "sk-ant-..."   # Ant
 dotnet user-secrets set "AgentSquad:Models:budget:ApiKey" "sk-..."         # OpenAI
 ```
 
-### 4. Configure Project Settings
+### 4. Configure Project Settings (Optional — Develop wizard handles this)
 
-Edit `src/AgentSquad.Runner/appsettings.json` with your project settings (non-secret values — committed to git):
+If not using the Develop wizard, edit `src/AgentSquad.Runner/appsettings.json` with your project settings (non-secret values — committed to git):
 
 ```json
 {
@@ -252,6 +258,8 @@ The dashboard runs embedded at `http://localhost:5050`, or standalone:
 cd src/AgentSquad.Dashboard.Host
 dotnet run    # → http://localhost:5051
 ```
+
+Navigate to the **Develop** page (`/develop`) for guided project setup and run initiation, or the **Overview** page (`/`) for real-time agent monitoring.
 
 Standalone mode lets you restart the dashboard without disrupting running agents.
 
@@ -505,7 +513,8 @@ Configuration lives in `src/AgentSquad.Runner/appsettings.json` under the `Agent
 
 | Section | Description |
 |---------|-------------|
-| `Project` | GitHub repo, PAT, project name/description, default branch, executive username |
+| `Project` | Project name/description, executive username |
+| `DevPlatform` | Platform selection (GitHub or AzureDevOps), per-platform auth and repo settings |
 | `CopilotCli` | Enable/disable Copilot CLI provider, max concurrent requests |
 | `Models` | Model tier definitions — provider, model name, API key, endpoint, temperature, max tokens |
 | `Agents` | Per-role model tier assignments, MCP servers, knowledge links, custom prompts |
@@ -538,26 +547,28 @@ See [docs/setup-guide.md](docs/setup-guide.md) for a detailed walkthrough of eve
 
 ## Dashboard
 
-The Blazor Server dashboard provides real-time visibility into the agent team with 16 pages. Runs embedded in the Runner or as a standalone process. The Frameworks page shows expandable candidate detail cards with scores, progress pipelines, metrics, and preview screenshots for each strategy candidate.
+The Blazor Server dashboard provides real-time visibility into the agent team with 18 pages. Runs embedded in the Runner or as a standalone process. The Frameworks page shows expandable candidate detail cards with scores, progress pipelines, metrics, and preview screenshots for each strategy candidate.
 
 | Page | Route | Description |
 |------|-------|-------------|
-| **Agent Overview** | `/` | Grid of all agents with status badges, model selectors, chat, error tracking, deadlock alerts, and Project Control card with Start/Stop buttons |
+| **Agent Overview** | `/` | Grid of all agents with status badges, model selectors, chat, error tracking, deadlock alerts, and Project Control card with Start/Stop buttons. Cards show "Task" (parent task name) and "⚡ Step" (current activity), falling back to StatusReason for monitoring/waiting states |
+| **Develop** | `/develop` | Multi-step wizard guiding project setup: What to Build → Repo & Auth (GitHub or ADO) → Work Item selection → Review & Launch. Primary onboarding flow for new runs |
 | **Features** | `/features` | Define, manage, and launch feature builds against existing repos with acceptance criteria and tech stack overrides |
-| **Configuration** | `/configuration` | Settings editor, gate presets, SME management, GitHub cleanup |
+| **Configuration** | `/configuration` | Settings editor, gate presets, SME management, platform cleanup |
 | **Frameworks** | `/strategies` | Live strategy framework experiment data with expandable candidate detail cards showing scores, metrics, progress pipeline, and preview screenshots |
-| **Project Timeline** | `/timeline` | Visual workflow timeline with PM/Engineering views, phase grouping, PR/Issue type indicators |
+| **Project Timeline** | `/timeline` | Visual workflow timeline with PM/Engineering views, phase grouping, platform-agnostic PR/Work Item type indicators |
 | **Metrics** | `/metrics` | System health, utilization ring chart, status breakdown, longest-running tasks |
 | **Health Monitor** | `/health` | Real-time health checks, stuck agent detection, system diagnostics |
-| **Pull Requests** | `/pullrequests` | GitHub PR browser with state filters, labels, and branch info |
-| **Issues** | `/issues` | GitHub issue browser with label/assignee filters and sorting |
+| **Pull Requests** | `/pullrequests` | PR browser with state filters, labels, and branch info (GitHub or ADO) |
+| **Issues** | `/issues` | Work item browser with label/assignee filters and sorting (GitHub Issues or ADO Work Items) |
 | **Engineering Plan** | `/engineering-plan` | Interactive Cytoscape.js dependency graph of engineering tasks |
 | **Team View** | `/team` | Visual office-metaphor layout with agent desks and connection lines |
 | **Director CLI** | `/director-cli` | Terminal interface for issuing executive directives to agents |
 | **Approvals** | `/approvals` | Human gate approval management with filter buttons |
+| **Pipelines** | `/pipelines` | CI/CD pipeline status for the target repository |
 | **Agent Detail** | `/agent/{id}` | Deep dive into a single agent with pause/resume/terminate controls |
 | **Agent Reasoning** | `/reasoning` | View agent decision-making chains, AI conversation history, and step-by-step task progress |
-| **GitHub Feed** | `/github-feed` | Live feed of GitHub activity across the project |
+| **GitHub Feed** | `/github-feed` | Live feed of platform activity across the project |
 | **Repository** | `/repository` | Browse repository file tree and content |
 
 ## Project Structure
@@ -573,7 +584,13 @@ AgentSquad/
 │   │   ├── Configuration/              # Config models, SME definitions, MCP server defs,
 │   │   │                               #   WorkModels (ActiveRun, FeatureDefinition),
 │   │   │                               #   WorkflowProfile (Project/Feature mode profiles)
-│   │   ├── GitHub/                     # GitHubService, rate limiting, PR/Issue workflows
+│   │   ├── DevPlatform/                # Platform abstraction layer
+│   │   │   ├── Capabilities/           # IPullRequestService, IWorkItemService,
+│   │   │   │                           #   IBranchService, IReviewService,
+│   │   │   │                           #   IPlatformInfoService, IRepositoryContentService
+│   │   │   ├── Providers/GitHub/       # GitHub adapter implementations
+│   │   │   └── Providers/AzureDevOps/  # ADO implementations (PAT + Bearer auth)
+│   │   ├── GitHub/                     # Legacy GitHubService (direct Octokit access)
 │   │   ├── Messaging/                  # IMessageBus, InProcessMessageBus (Channels)
 │   │   ├── Persistence/                # AgentStateStore, AgentMemoryStore (SQLite)
 │   │   └── Services/                   # McpServerRegistry, TeamComposer, SmeDefinitions
@@ -604,9 +621,11 @@ AgentSquad/
 │   │   └── RunCoordinator.cs          # Run lifecycle management, single-run enforcement
 │   │
 │   ├── AgentSquad.Dashboard/           # Real-time monitoring UI (shared library)
-│   │   ├── Components/Pages/           # 16 Blazor pages (incl. Features, Frameworks, decision UI)
+│   │   ├── Components/Pages/           # 18 Blazor pages (incl. Develop wizard, Features,
+│   │   │                               #   Frameworks, Pipelines, decision UI)
 │   │   ├── Hubs/AgentHub.cs            # SignalR hub for push updates
-│   │   └── Services/                   # IDashboardDataService, HttpDashboardDataService
+│   │   └── Services/                   # IDashboardDataService, HttpDashboardDataService,
+│   │                                   #   DevelopSettingsService, ConfigurationService
 │   │       # Dashboard decision UI: Reasoning tab filters, Approvals tab decision view,
 │   │       # Overview stat card for pending/approved/rejected decisions
 │   │
@@ -652,11 +671,12 @@ AgentSquad/
     ├── agent-behaviors.md              # Detailed per-agent behavior documentation
     ├── architecture.md                 # System architecture documentation
     ├── setup-guide.md                  # Configuration walkthrough
+    ├── AzureDevOpsSetup.md             # Azure DevOps platform setup guide
     ├── PromptExternalizationPlan.md    # Plan for externalizing AI prompts to templates
     ├── PEParallelismEnhancements.md    # Fleet-style parallelism enhancements
     ├── MonitorPrompt.md                # Dashboard monitoring expectations
     ├── Research.md                     # Technical research findings
-    └── LessonsLearned.md              # Operational lessons from 100+ runs (60 lessons)
+    └── LessonsLearned.md              # Operational lessons from 100+ runs (60+ lessons)
 ```
 
 ## Development
@@ -733,6 +753,11 @@ The Runner exposes lightweight health endpoints for monitoring and debugging:
 
 ### Recent Changes (2025–2026)
 
+- **Develop Wizard** — New multi-step guided setup at `/develop`: project description → platform/auth configuration (GitHub or ADO) → work item selection → review & launch. Replaces manual `appsettings.json` editing as the primary onboarding flow. Project settings moved from Configuration page to Develop wizard
+- **Platform Abstraction Layer** — Agents now use `IPullRequestService`, `IWorkItemService`, `IPlatformInfoService` and 4 other capability interfaces instead of direct `IGitHubService`. Supports GitHub and Azure DevOps interchangeably. Platform selection via dashboard dropdown or config — no agent code changes needed
+- **Agent Card Task/Step Display** — Overview cards show "Task" (parent task name from task tracker groups) and "⚡ Step" (specific activity). Falls back to StatusReason for monitoring/waiting states. Expanded `WellKnownTaskNames` covering PM, PE, TE, and SE lifecycle phases
+- **Platform-Agnostic Timeline** — Project Timeline uses `IPullRequestService`/`IWorkItemService` instead of GitHub-specific APIs for PR/work item display
+- **Pipelines Page** — New `/pipelines` dashboard page showing CI/CD pipeline status for the target repository
 - **LLM Judge for Strategy Framework** — Real `LlmJudge` (in `AgentSquad.Agents.AI`) scores candidates on Acceptance Criteria, Design, and Readability (0-10 each). Critical rule: apps that reference data files without including them score AC ≤ 3. Falls back to token/time tiebreaker on LLM failure. Registered via `Program.cs` override.
 - **ADO PR-to-Task Native Linking** — PRs created in Azure DevOps are now linked to their parent work items in the Development section (via `GitPullRequestToWorkItem` artifact link), enabling native ADO traceability.
 - **ADO 404 Log Noise Suppressed** — `GetFileContentAsync` uses `suppressNotFound: true` to silently return null on 404, eliminating ERROR-level noise for expected missing files.
@@ -757,6 +782,7 @@ The Runner exposes lightweight health endpoints for monitoring and debugging:
 | AI Providers | GitHub Copilot CLI (default), Anthropic Claude, OpenAI GPT, Azure OpenAI, Ollama |
 | Tool Integration | Model Context Protocol (MCP) servers via Copilot CLI |
 | GitHub Integration | Octokit.net |
+| Azure DevOps Integration | Azure DevOps REST API (PAT + Azure CLI bearer auth) |
 | Dashboard | Blazor Server + SignalR (embedded or standalone) |
 | Persistence | SQLite via Microsoft.Data.Sqlite |
 | Agent Memory | SQLite-backed persistent recall (decisions, learnings, instructions) |

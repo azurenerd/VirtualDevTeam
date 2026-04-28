@@ -71,6 +71,10 @@
 61. [Standalone Dashboard DI Must Mirror Runner Registrations](#62-standalone-dashboard-di-must-mirror-runner-registrations)
 62. [NEVER Put Secrets in Tracked Config Files](#63-never-put-secrets-in-tracked-config-files)
 63. [Strategy Results Must Survive Process Restarts — Persist to SQLite](#63-strategy-results-must-survive-process-restarts--persist-to-sqlite)
+64. [Capability-Based Interfaces Beat Monolithic Abstractions for Platform Providers](#64-capability-based-interfaces-beat-monolithic-abstractions-for-platform-providers)
+65. [Never Use IGitHubService Directly for Agent Work Artifacts](#65-never-use-igithubservice-directly-for-agent-work-artifacts)
+66. [DI Dual-Registration Pattern — Runner and StandaloneServiceRegistration Must Stay in Sync](#66-di-dual-registration-pattern--runner-and-standaloneserviceregistration-must-stay-in-sync)
+67. [Task/Step Tracking Hierarchy — Tasks Are Groups, Steps Are Atomic](#67-taskstep-tracking-hierarchy--tasks-are-groups-steps-are-atomic)
 
 ---
 
@@ -1449,3 +1453,53 @@ No persistence layer existed for strategy/framework results. The `AgentStateStor
 - **GitHub adapters wrap, not replace**: The existing `IGitHubService` (97KB) stays untouched. GitHub adapters are thin wrappers that delegate to it, preserving all existing behavior.
 - **ADO config is nested**: `DevPlatformConfig.AzureDevOps` is a separate class so GitHub config and ADO config coexist independently — switching platforms doesn't lose the other config.
 - **Bearer token support**: For enterprises like Microsoft where PATs are restricted, `AzureCliBearerProvider` uses `az account get-access-token` with auto-refresh 5 minutes before expiry.
+
+---
+
+## 65. Never Use IGitHubService Directly for Agent Work Artifacts
+
+**Lesson:** When agents create PRs, work items, or commit files, they must use the platform abstraction interfaces (`IPullRequestService`, `IWorkItemService`, `IRepositoryContentService`), never `IGitHubService` directly. Direct GitHub calls bypass ADO support entirely and create invisible platform lock-in.
+
+### What happened:
+1. Early agent code called `IGitHubService.CreatePullRequestAsync()` directly from `EngineerAgentBase`, `ProgramManagerAgent`, and `TestEngineerAgent`.
+2. When ADO support was added, every direct `IGitHubService` call was a hard-coded dependency that had to be found and migrated to the capability interface equivalent.
+3. Some paths were missed initially (review thread replies, screenshot URLs using `raw.githubusercontent.com`), causing subtle failures only visible during ADO end-to-end runs.
+
+### Rule:
+- **Agent-facing code** (anything in `AgentSquad.Agents` or `AgentSquad.Orchestrator`) must only use the 7 capability interfaces from `DevPlatform/Capabilities/`.
+- **`IGitHubService`** is an implementation detail — only the GitHub adapter classes in `DevPlatform/Providers/GitHub/` should reference it.
+- When adding new agent behaviors that touch PRs/work items/files, always code against the interface, not the concrete GitHub service.
+
+---
+
+## 66. DI Dual-Registration Pattern — Runner and StandaloneServiceRegistration Must Stay in Sync
+
+**Lesson:** The Runner (`Program.cs`) and the standalone Dashboard (`StandaloneServiceRegistration.cs`) have independent DI registrations. When a new service is added to the Runner, it must also be registered in `StandaloneServiceRegistration` or the standalone dashboard will crash at runtime with missing service exceptions.
+
+### What happened:
+1. `DevelopSettingsService` was added to the Runner's DI container for the new Develop wizard page.
+2. The standalone dashboard crashed on `/develop` because `StandaloneServiceRegistration` didn't register the service.
+3. Similar issues occurred with `IWorkItemSearchService`, `IRepositoryManagementService`, and `IConfigurationService` — all needed by the Develop wizard.
+
+### Rule:
+- Every new service registered in `Program.cs` that is consumed by any Dashboard page must also be registered in `StandaloneServiceRegistration.cs`.
+- The standalone dashboard uses `HttpDashboardDataService` (HTTP polling) instead of `DashboardDataService` (in-process). Some services need HTTP-proxied equivalents.
+- When in doubt, search for `StandaloneServiceRegistration` after adding any new DI registration.
+
+---
+
+## 67. Task/Step Tracking Hierarchy — Tasks Are Groups, Steps Are Atomic
+
+**Lesson:** The agent card display uses a two-level hierarchy: **Tasks** (named groups from `WellKnownTaskNames` or dynamically registered names) represent high-level activities, while **Steps** (individual `BeginStep`/`CompleteStep` calls) represent atomic operations within a task. The dashboard shows "Task: {name}" and "⚡ Step: {description}" separately.
+
+### What happened:
+1. Initially, only steps were tracked. The dashboard showed "Working: Building project…" which gave no context about *what* the agent was doing at a higher level.
+2. Adding task-level grouping (e.g., "PM Specification", "Engineering Planning", "Code Review") gave the overview cards meaningful context.
+3. The `WellKnownTaskNames` dictionary maps task IDs (like `pm-spec`, `pe-planning`, `te-rework`) to human-readable names for all core agent lifecycle phases.
+4. When no step is active within a task, the card falls back to `StatusReason` for monitoring/waiting states.
+
+### Design:
+- `BeginTask(taskId)` / `CompleteTask(taskId)` — container-level tracking
+- `BeginStep(name)` / `CompleteStep(name)` — leaf-level tracking with timing
+- `RegisterTaskDisplayName(taskId, displayName)` — dynamic registration for PR-specific or work-item-specific task names
+- Dynamic patterns: task IDs starting with `te-pr-` auto-format to "Test PR #N"; `se-task-` to "Engineering Task"

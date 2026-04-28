@@ -3,7 +3,7 @@
 > **Purpose:** Comprehensive plan for enabling AgentSquad agents to dynamically create new specialized agents ("SME Agents") with configurable MCP server toolsets, external knowledge sources, and custom role definitions. This plan builds on the existing AgentSquad architecture and extends it to support runtime agent composition.
 >
 > **Author:** Ben Humphrey (@azurenerd) with Copilot CLI
-> **Status:** PLAN — Not yet implemented
+> **Status:** ✅ IMPLEMENTED — SME agents, MCP server registry, knowledge pipeline, and PM-driven team composition are all live in the current codebase. This document is retained as historical design reference.
 > **Last Updated:** 2026-04-15
 
 ---

@@ -1,6 +1,6 @@
 # AgentSquad Workflow Monitoring Checklist
 
-> **Rule: Never assume — always verify.** Every phase must be confirmed via GitHub labels, PR comments, runner logs, and agent status. If an agent goes Idle with open work, that's a bug.
+> **Rule: Never assume — always verify.** Every phase must be confirmed via platform labels/tags, PR comments, runner logs, and agent status. If an agent goes Idle with open work, that's a bug.
 
 ---
 
@@ -8,28 +8,30 @@
 
 Before starting a workflow run, confirm:
 
-- [ ] All previous Issues are closed (query GitHub API, don't assume)
-- [ ] All previous PRs are closed (query GitHub API, don't assume)
+- [ ] All previous Issues/Work Items are closed (query platform API, don't assume)
+- [ ] All previous PRs are closed (query platform API, don't assume)
 - [ ] Repository files are clean (only preserved files like `.gitignore`, `README.md`)
 - [ ] No stale branches remain (only `main`)
 - [ ] SQLite DB deleted (if fresh reset)
 - [ ] Agent workspaces deleted (if fresh reset)
 - [ ] Re-check all of the above after cleanup script runs — **do not proceed until verified**
-- [ ] GitHub API rate limit checked — must have >100 remaining
+- [ ] API rate limit checked — GitHub: must have >100 remaining; ADO: per-user limits are higher but still verify
 
-### Reset commands
+### Reset commands (GitHub example)
 ```powershell
 # Read PAT from appsettings.json
 $settings = Get-Content src\AgentSquad.Runner\appsettings.json | ConvertFrom-Json
 $pat = $settings.AgentSquad.Project.GitHubToken
 
-# Full reset (stops runner, cleans GitHub, deletes local state)
+# Full reset (stops runner, cleans platform, deletes local state)
 .\scripts\fresh-reset.ps1 -GitHubToken $pat
 
-# Check rate limit
+# Check rate limit (GitHub)
 $headers = @{ Authorization = "token $pat"; Accept = "application/vnd.github+json" }
 (Invoke-RestMethod "https://api.github.com/rate_limit" -Headers $headers).rate
 ```
+
+> **ADO users**: Reset scripts target GitHub. For ADO cleanup, use the Dashboard Configuration page's "Cleanup" action or manually close work items/PRs in Azure DevOps.
 
 ### Starting after reset
 ```powershell
@@ -190,7 +192,7 @@ Get-Content runner-output-runXX.log | Select-String "ChangesRequested|ReviewRequ
 ```
 
 ```powershell
-# GitHub API verification
+# GitHub API verification (for GitHub projects — ADO users: use the Dashboard Repository page or Azure DevOps portal)
 $headers = @{ Authorization = "token $token"; Accept = "application/vnd.github.v3+json" }
 
 # Check PR labels

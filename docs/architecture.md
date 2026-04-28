@@ -42,7 +42,7 @@ AgentSquad is a multi-agent orchestration system built on .NET 8 that coordinate
 
 ## Design Principles
 
-1. **GitHub as Source of Truth** — All coordination artifacts (PRs, issues, shared documents) live in the target GitHub repository, enabling human observability and intervention at any point.
+1. **Platform as Source of Truth** — All coordination artifacts (PRs, work items, shared documents) live in the target platform (GitHub or Azure DevOps), enabling human observability and intervention at any point. Agents use `IPullRequestService`, `IWorkItemService`, and other capability interfaces from the `DevPlatform` abstraction layer — never `IGitHubService` directly.
 
 2. **Loose Coupling via Message Bus** — Agents communicate through an in-process message bus using typed messages. No agent directly references another agent's implementation.
 
@@ -62,7 +62,8 @@ The shared foundation layer containing abstractions, infrastructure services, an
 |-----------|-----------|---------|
 | `Agents` | `IAgent`, `AgentBase`, `AgentIdentity`, `AgentRole`, `AgentStatus`, `AgentMessage` | Agent contracts, lifecycle base class, role/status enums, typed message hierarchy |
 | `Configuration` | `AgentSquadConfig`, `ConfigValidator`, `ConfigWizard`, `ModelRegistry` | Configuration models, validation, first-run wizard, Semantic Kernel factory |
-| `GitHub` | `IGitHubService`, `GitHubService`, `IssueWorkflow`, `PullRequestWorkflow`, `RateLimitManager`, `ConflictResolver` | GitHub API abstraction, structured PR/issue patterns, rate limit management |
+| `DevPlatform` | `IPullRequestService`, `IWorkItemService`, `IBranchService`, `IReviewService`, `IPlatformInfoService`, `IPlatformHostContext` | Platform-agnostic capability interfaces (GitHub and Azure DevOps implementations) |
+| `GitHub` | `IGitHubService`, `GitHubService`, `IssueWorkflow`, `PullRequestWorkflow`, `RateLimitManager` | GitHub API adapter (wrapped by DevPlatform for agent use) |
 | `Messaging` | `IMessageBus`, `InProcessMessageBus` | Async pub/sub using `System.Threading.Channels` |
 | `Persistence` | `AgentStateStore`, `ProjectFileManager` | SQLite checkpoints/activity logs, shared markdown file management |
 

@@ -19,7 +19,7 @@ Detailed documentation of each agent's behavior, communication patterns, and art
 
 ## Overview
 
-AgentSquad deploys 7 specialized agent roles, each implemented as a class extending `AgentBase`. Every agent runs an independent async loop (`RunAgentLoopAsync`) and communicates through the message bus and GitHub.
+AgentSquad deploys 7 specialized agent roles, each implemented as a class extending `AgentBase`. Every agent runs an independent async loop (`RunAgentLoopAsync`) and communicates through the message bus and the dev platform (GitHub or Azure DevOps, via `IPullRequestService`, `IWorkItemService`, etc.).
 
 | Role | Singleton? | Model Tier | Primary Output |
 |------|-----------|------------|----------------|
@@ -55,6 +55,8 @@ agent/{agent-name-slug}/{task-slug}
 Example: `agent/software-engineer-1/implement-user-auth`
 
 ### Labels
+
+Labels are applied to PRs and work items on the target platform (GitHub Issues/PRs or Azure DevOps Work Items). The same label names are used regardless of platform — on ADO they are stored as work item tags.
 
 | Label | Used On | Purpose |
 |-------|---------|---------|

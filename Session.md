@@ -13,16 +13,16 @@ Read C:\Git\AgentSquad\Session.md           (this file — session setup)
 Read C:\Git\AgentSquad\docs\MonitorPrompt.md (monitoring checklist & failure modes)
 Read C:\Git\AgentSquad\docs\Requirements.md  (project requirements)
 Read C:\Git\AgentSquad\LessonsLearned.md     (hard-won operational knowledge)
-Read C:\Git\AgentSquad\docs\AzureDevOpsSetup.md (if using ADO instead of GitHub)
+Read C:\Git\AgentSquad\docs\AzureDevOpsSetup.md (ADO platform setup — required for ADO runs)
 ```
 
 Also read the `.github/copilot-instructions.md` (auto-loaded) for architecture, conventions, and build/test commands.
 
 ---
 
-## 2. GitHub Reset (Fresh Run)
+## 2. Reset (Fresh Run)
 
-Before starting a new agent workflow run, fully reset the target GitHub repo.
+Before starting a new agent workflow run, fully reset the target repository (GitHub or ADO).
 
 > 🚨 **CRITICAL: NEVER PUT SECRETS/TOKENS IN `appsettings.json` — IT IS TRACKED BY GIT.**
 >
@@ -146,9 +146,11 @@ The system runs as two independent processes:
 | **Runner** | 5050 | Agent orchestration + REST API + embedded dashboard |
 | **Dashboard.Host** | 5051 | Standalone dashboard — **ALWAYS start alongside Runner** |
 
-The **Runner** hosts an embedded Blazor dashboard at port 5050 that has full functionality (including Configuration page and cleanup).
+The **Runner** hosts an embedded Blazor dashboard at port 5050 that has full functionality (including Configuration page, Develop wizard, and cleanup).
 
 The **Dashboard.Host** is an optional standalone process that connects to the Runner's REST API via `HttpDashboardDataService`. It retrieves ALL data (agents, activity, cost, status) via HTTP polling — no in-process access needed. It can be restarted independently without disrupting running agents. Only the Configuration settings editor and Engineering Plan page require embedded mode (port 5050).
+
+**Primary onboarding flow:** Navigate to the **Develop** page (`/develop`) in the dashboard for a guided multi-step wizard: What to Build → Repo & Auth → Work Item selection → Review & Launch.
 
 ### Starting the Runner
 
@@ -236,18 +238,20 @@ Read `docs/MonitorPrompt.md` for the full checklist. Key points:
 1. **Phase progression**: Research → PM Spec → Architecture → Engineering Planning → Development → Testing → Review → Complete
 2. **Agent status cycles**: Idle → Working → Idle is normal. Idle → Idle → Idle with open work = stuck.
 3. **PR pipeline per engineering PR**: created → `ready-for-review` → Architect review → `architect-approved` → TE tests → `tests-added` → PM review → `pm-approved` → SE merge
-4. **Rate limiting**: GitHub API limit is 5000/hr. Runner has 30s TTL shared cache (~90% reduction). Watch for `Rate limit exceeded` in logs.
+4. **Rate limiting**: GitHub API limit is 5000/hr (ADO limits are per-user, higher). Runner has 30s TTL shared cache (~90% reduction). Watch for `Rate limit exceeded` in logs.
 5. **Human gates**: If FinalPRApproval gate is enabled, PRs will pause with `awaiting-human-review` label. Check the Approvals page or PR comments to approve/reject.
 
 ### Dashboard pages
 | Page | URL | Key Features |
 |------|-----|-------------|
-| Overview | `/` | Agent cards, status, activity logs, agent visibility filter |
+| Overview | `/` | Agent cards (Task + Step display), status, activity logs, agent visibility filter |
+| Develop | `/develop` | Multi-step wizard: project setup, platform/auth, work item selection, launch |
 | Project Timeline | `/timeline` | Phase-grouped issues/PRs, PM/Engineering toggle, auto-refresh |
 | Metrics | `/metrics` | Build/test metrics, agent performance |
 | Health Monitor | `/health` | Deadlock detection, health checks |
 | Repository | `/repository` | Combined PR + Issue tabs |
-| Configuration | `/configuration` | Settings editor, GitHub cleanup (embedded mode only) |
+| Pipelines | `/pipelines` | CI/CD pipeline status |
+| Configuration | `/configuration` | Settings editor, platform cleanup (embedded mode only) |
 | Agent Reasoning | `/reasoning` | Agent decision logs, reasoning events, step tracking |
 | Approvals | `/approvals` | Human gate approval queue (decisions require in-process access, not available in standalone) |
 
@@ -282,7 +286,7 @@ CREATE TABLE IF NOT EXISTS run_monitor (
 ## 5. Dashboard Features
 
 ### Embedded Dashboard (http://localhost:5050)
-Full-featured dashboard hosted by the Runner process. Includes all pages and Configuration/cleanup functionality.
+Full-featured dashboard hosted by the Runner process. Includes all 18 pages, Configuration/cleanup functionality, and the Develop wizard.
 
 ### Standalone Dashboard (http://localhost:5051)
 Optional independent process. Connects to Runner REST API at `/api/dashboard/*`.
@@ -291,14 +295,16 @@ Optional independent process. Connects to Runner REST API at `/api/dashboard/*`.
 - **All other pages** work identically via HTTP proxy
 
 ### Key features
-- **Project Timeline**: Phase-grouped view with PM/Engineering toggle, node type indicators (PR vs Issue), clickable GitHub links, 30s auto-refresh (background, no overlay)
-- **Agent Overview**: Real-time agent cards with visibility filter (hide/show agents)
+- **Develop Wizard** (`/develop`): Multi-step guided setup — project description, platform/auth (GitHub or ADO), work item selection, review & launch. Primary onboarding flow
+- **Project Timeline**: Phase-grouped view with PM/Engineering toggle, node type indicators (PR vs Work Item), clickable platform links, 30s auto-refresh (background, no overlay)
+- **Agent Overview**: Real-time agent cards with visibility filter (hide/show agents). Cards display "Task" (parent group name) and "⚡ Step" (current activity), falling back to StatusReason for monitoring/waiting states
 - **Repository**: Combined Pull Requests + Issues view with tab navigation
+- **Pipelines** (`/pipelines`): CI/CD pipeline status for the target repository
 - **Force refresh**: SVG refresh button on Timeline and Overview pages
 - **Strategy Gallery**: When the agentic frameworks pipeline is enabled, shows per-candidate screenshots for all approaches (baseline, mcp-enhanced, copilot-cli, squad). External frameworks (🔌) display a purple right-border. Winner tile displays the live screenshot or "Capturing..." while the upload is in progress. Non-winner tiles show "No preview" text (not a spinner). Winner identification reads the `<!-- winner-strategy: {key} -->` HTML comment from the PR body.
 
 ### Timeline data flow
-- Issues/PRs fetched via `DashboardDataService` (30s TTL cache, shared with GitHubService)
+- Issues/PRs fetched via `DashboardDataService` using platform-agnostic `IPullRequestService` and `IWorkItemService` (30s TTL cache)
 - `BuildTimeline()` pipeline: run detection → filter → dedup → synthetic doc PRs → parent-child → phase grouping
 - Doc phases (Research, PM Spec, Architecture) appear as synthetic nodes from PRs
 - Engineering tasks filtered to latest burst (30-min window from newest)
@@ -351,9 +357,9 @@ Key settings:
 14. **Copilot CLI reports 0 tokens**: The `copilot` binary doesn't emit usage counts, so per-strategy cost attribution is always `$0` with the default provider. Cost budget enforcement only kicks in when using an API-key fallback (Anthropic/OpenAI/Azure OpenAI direct). Not a bug — documented limitation.
 15. **`.screenshots/` directory in target repo**: The strategy framework commits per-candidate screenshots to `.screenshots/pr-{N}-{strategyId}.png` on PR branches. These are lightweight artifacts (~50–200KB PNGs) that persist after merge into the target repo. Reset scripts do not clean them (they live in the target repo, not the agent workspace). Harmless but accumulate over runs — delete manually from the target repo if desired.
 16. **Winner-strategy marker in PR bodies**: PR bodies contain a `<!-- winner-strategy: {key} -->` HTML comment used by the dashboard for winner identification. If the dashboard misidentifies the winner, inspect the PR body for a missing or malformed marker.
-17. **Azure DevOps platform support**: ADO provider is implemented but not yet live-tested against a real ADO organization. The 7 capability interfaces (PR, Work Item, Branch, File, Review, Info, HostContext) have full implementations but edge cases (custom process templates, non-default state names, large repos) may surface issues. If using ADO, configure via the dashboard Dev Platform dropdown or `appsettings.json` → `DevPlatform` section. See `docs/AzureDevOpsSetup.md`.
+17. **Azure DevOps platform support**: ADO provider is implemented and live-tested against Azure DevOps. The 7 capability interfaces (PR, Work Item, Branch, File, Review, Info, HostContext) have full implementations. Known platform differences documented in `docs/AzureDevOpsSetup.md`. Configure via the Develop wizard, dashboard Dev Platform dropdown, or `appsettings.json` → `DevPlatform` section.
 
 Note: Don't do any long pauses that are more than 1 minute long in the Copilot chat, as that makes it so you ignore me for X minutes--always keep checking back no more than a minute so the chat
 thread isn't blocked to get instructions from me. 
 
-*Last updated: 2026-04-24 (ADO platform provider Phases 4-6 complete, dashboard platform selector, AzureDevOpsSetup.md added, 848 tests passing. Strategy persistence to SQLite, dashboard tooltips, duration/timestamp fixes, screenshot lightbox, standalone CandidateStateStore DI fix. Rename agentic-delegation → copilot-cli complete.)*
+*Last updated: 2026-05 (Develop wizard, platform abstraction layer, task/step card display, Pipelines page, 18 dashboard pages. ADO end-to-end validated.)*

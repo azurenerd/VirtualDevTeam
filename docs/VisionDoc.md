@@ -2,7 +2,7 @@
 
 ## Executive Summary
 
-AgentSquad today is a fully autonomous multi-agent AI system — 7 specialized agents collaborate through GitHub PRs/Issues to build software end-to-end without human intervention. The next evolution transforms AgentSquad from an **autonomous pipeline** into a **collaborative development platform** where human developers and AI agents work as true teammates, each playing to their strengths.
+AgentSquad today is a fully autonomous multi-agent AI system — 7 specialized agents collaborate through platform PRs/Work Items (GitHub or Azure DevOps) to build software end-to-end without human intervention. The next evolution transforms AgentSquad from an **autonomous pipeline** into a **collaborative development platform** where human developers and AI agents work as true teammates, each playing to their strengths.
 
 The core insight: **the future of software development is not humans OR agents — it's humans WITH agents**. Every developer on a team is paired with a virtual agent counterpart that handles 90%+ of the execution, while the human provides judgment, creativity, domain expertise, and strategic direction. This document lays out the complete analysis and implementation plan for this transformation.
 
@@ -779,7 +779,7 @@ AgentSquad's vision is unique in several critical ways:
 
 3. **Graduated autonomy with learning**: The permission matrix isn't static. The system learns from human feedback and suggests autonomy adjustments over time.
 
-4. **GitHub-native**: All artifacts (PRs, Issues, reviews) live in GitHub — the system of record that teams already use. No vendor lock-in to a proprietary platform.
+4. **Platform-native**: All artifacts (PRs, Work Items, reviews) live in the target platform (GitHub or Azure DevOps) — the system of record that teams already use. No vendor lock-in to a proprietary platform.
 
 5. **The "Director" pattern**: One human can orchestrate an entire virtual dev team, scaling their impact by 10x+ while maintaining quality through strategic intervention.
 

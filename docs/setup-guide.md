@@ -279,9 +279,20 @@ Assign model tiers to each agent role:
 
 ## First Run
 
-### Option A: Interactive Configuration Wizard
+### Option A: Dashboard Develop Wizard (Recommended)
 
-If `appsettings.json` is not configured, the first run launches an interactive wizard:
+The Develop page (`/develop`) in the Dashboard provides a visual 4-step wizard:
+
+1. **What to Build** — project name and description
+2. **Repo & Auth** — select platform (GitHub or Azure DevOps), configure PAT/organization, choose repository
+3. **Work Items** — search and select work items from the chosen platform
+4. **Review** — review settings and launch the agent squad
+
+Start the dashboard standalone (`cd src/AgentSquad.Dashboard && dotnet run`) and navigate to `/develop`.
+
+### Option B: CLI Configuration Wizard
+
+If `appsettings.json` is not configured, the Runner's first launch triggers a CLI wizard:
 
 ```bash
 cd src/AgentSquad.Runner
@@ -289,10 +300,12 @@ dotnet run
 ```
 
 The wizard walks through:
-1. **Project settings** — name, description, GitHub repo URL, token
+1. **Project settings** — name, description, platform, repo URL, token
 2. **Model selection** — which providers and models to use
 3. **Resource limits** — max engineers, token budgets
 4. **Summary** — review and confirm
+
+> **Azure DevOps users**: See [Azure DevOps Setup](AzureDevOpsSetup.md) for PAT scope requirements and organization configuration.
 
 ### Option B: Manual Configuration
 
