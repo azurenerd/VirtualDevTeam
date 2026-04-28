@@ -5801,7 +5801,32 @@ public class SoftwareEngineerAgent : EngineerAgentBase
             {
                 var issue = await WorkItemService.GetAsync(task.IssueNumber.Value, ct);
                 if (issue is not null)
-                    issueContext = $"\n\n## Source Issue #{issue.Number}\n{issue.Body}";
+                    issueContext = $"\n\n## Source Issue #{issue.Number}: {issue.Title}\n{issue.Body}";
+            }
+
+            // In SinglePRMode, fetch ALL related user story bodies so the SE has full context
+            if (task.RelatedEnhancementNumbers.Count > 0)
+            {
+                var storyDetails = new StringBuilder();
+                storyDetails.AppendLine("\n\n## Related User Stories (Full Details)");
+                foreach (var storyNum in task.RelatedEnhancementNumbers)
+                {
+                    if (storyNum == task.IssueNumber) continue; // Already fetched above
+                    try
+                    {
+                        var story = await WorkItemService.GetAsync(storyNum, ct);
+                        if (story is not null)
+                        {
+                            storyDetails.AppendLine($"\n### Issue #{story.Number}: {story.Title}");
+                            storyDetails.AppendLine(story.Body ?? "(no description)");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.LogDebug(ex, "Could not fetch related story #{Number} for task context", storyNum);
+                    }
+                }
+                issueContext += storyDetails.ToString();
             }
 
             var history = CreateChatHistory();

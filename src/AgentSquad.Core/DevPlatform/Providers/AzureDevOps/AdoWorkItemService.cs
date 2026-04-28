@@ -181,8 +181,10 @@ public sealed class AdoWorkItemService : AdoHttpClientBase, IWorkItemService
 
     public async Task AddCommentAsync(int id, string comment, CancellationToken ct = default)
     {
+        // ADO work item comments render HTML, not markdown. Convert before posting.
+        var htmlComment = Markdown.ToHtml(comment, MarkdownPipeline);
         var url = BuildPreviewUrl($"{Project}/_apis/wit/workitems/{id}/comments");
-        await PostAsync<object>(url, new { text = comment }, ct);
+        await PostAsync<object>(url, new { text = htmlComment }, ct);
     }
 
     public async Task<IReadOnlyList<PlatformComment>> GetCommentsAsync(int id, CancellationToken ct = default)
