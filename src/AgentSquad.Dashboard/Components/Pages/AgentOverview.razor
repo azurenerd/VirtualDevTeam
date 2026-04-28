@@ -270,10 +270,10 @@ else
                     }
                     @if (!string.IsNullOrEmpty(stepName))
                     {
-                        var stepLabel = stepInfo.total > 0 ? $"⚡ Step {stepInfo.completed}/{stepInfo.total}" : "⚡ Step";
+                        var stepText = stepInfo.total > 0 ? $"Step {stepInfo.completed}/{stepInfo.total}: {TruncateTask(stepName)}" : TruncateTask(stepName);
                         <div class="agent-detail">
-                            <span class="detail-label">@stepLabel</span>
-                            <span class="detail-value step-active" title="@stepDescription">@TruncateTask(stepName)</span>
+                            <span class="detail-label">⚡ Step</span>
+                            <span class="detail-value step-active" title="@stepDescription">@stepText</span>
                         </div>
                         @if (stepInfo.total > 0)
                         {
