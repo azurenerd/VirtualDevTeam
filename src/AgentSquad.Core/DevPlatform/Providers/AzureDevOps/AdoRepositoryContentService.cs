@@ -33,15 +33,8 @@ public sealed class AdoRepositoryContentService : AdoHttpClientBase, IRepository
             $"path={Uri.EscapeDataString(normalizedPath)}&includeContent=true&$format=json" +
             (branch is not null ? $"&versionDescriptor.version={Uri.EscapeDataString(branch)}&versionDescriptor.versionType=branch" : ""));
 
-        try
-        {
-            var item = await GetAsync<AdoGitItem>(url, ct);
-            return item?.Content;
-        }
-        catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
-        {
-            return null;
-        }
+        var item = await GetAsync<AdoGitItem>(url, ct, suppressNotFound: true);
+        return item?.Content;
     }
 
     public async Task<byte[]?> GetFileBytesAsync(string path, string? branch = null, CancellationToken ct = default)

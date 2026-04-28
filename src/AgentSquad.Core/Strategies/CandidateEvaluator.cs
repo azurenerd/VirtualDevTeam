@@ -257,9 +257,9 @@ public class CandidateEvaluator
         try
         {
             await File.WriteAllTextAsync(patchFile, patch, ct);
-            var check = await RunProcAsync("git", new[] { "apply", "--check", "--3way", patchFile }, worktreePath, ct);
+            var check = await RunProcAsync("git", new[] { "apply", "--check", "--3way", "--whitespace=fix", patchFile }, worktreePath, ct);
             if (check.exit != 0) return (false, check.stderr.Trim());
-            var apply = await RunProcAsync("git", new[] { "apply", "--3way", patchFile }, worktreePath, ct);
+            var apply = await RunProcAsync("git", new[] { "apply", "--3way", "--whitespace=fix", patchFile }, worktreePath, ct);
             if (apply.exit != 0) return (false, apply.stderr.Trim());
             return (true, "");
         }

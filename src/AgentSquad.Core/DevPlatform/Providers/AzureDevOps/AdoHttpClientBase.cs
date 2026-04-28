@@ -97,9 +97,11 @@ public class AdoHttpClientBase : IDisposable
     }
 
     /// <summary>Send a GET request with authentication and retry logic.</summary>
-    protected async Task<T?> GetAsync<T>(string url, CancellationToken ct = default)
+    protected async Task<T?> GetAsync<T>(string url, CancellationToken ct = default, bool suppressNotFound = false)
     {
         var response = await SendWithRetryAsync(HttpMethod.Get, url, null, ct);
+        if (suppressNotFound && response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            return default;
         await EnsureSuccessOrLogBodyAsync(response, url);
         return await response.Content.ReadFromJsonAsync<T>(JsonOptions, ct);
     }
