@@ -2327,7 +2327,11 @@ public class SoftwareEngineerAgent : EngineerAgentBase
 
             // Mark task in-progress via the task manager
             if (task.IssueNumber.HasValue)
+            {
                 await _taskManager.MarkInProgressAsync(task.IssueNumber.Value, pr.Number, ct);
+                // Create native platform link (ADO: Development section artifact link, GitHub: "Closes #X" in body)
+                await PrService.LinkWorkItemAsync(pr.Number, task.IssueNumber.Value, ct);
+            }
 
             // Track this PR so PE doesn't start another task concurrently
             CurrentPrNumber = pr.Number;
