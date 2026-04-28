@@ -1471,12 +1471,31 @@ public class ProgramManagerAgent : AgentBase
                 if (subIssues.Count == 0)
                 {
                     // In SinglePRMode, enhancement issues won't have sub-issues.
-                    // Close them once all PRs are merged (no open code PRs remain).
+                    // Close them only when ALL engineering tasks are done AND no open code PRs remain.
                     if (_config.Limits.SinglePRMode)
                     {
+                        // Guard: don't close if any engineering tasks are still in progress
+                        var engineeringTasks = await _workItemService!.ListByLabelAsync(
+                            EngineeringTaskIssueManager.TaskLabel, "open", ct);
+                        if (engineeringTasks.Count > 0)
+                        {
+                            Logger.LogDebug(
+                                "SinglePRMode: {Count} engineering tasks still open — deferring closure of #{Number}",
+                                engineeringTasks.Count, issue.Number);
+                            continue;
+                        }
+
                         var openPRs = await _prService.ListOpenAsync(ct);
+                        if (openPRs.Count > 0)
+                        {
+                            Logger.LogDebug(
+                                "SinglePRMode: {Count} PRs still open — deferring closure of #{Number}",
+                                openPRs.Count, issue.Number);
+                            continue;
+                        }
+
                         var mergedPRs = await _prService.ListMergedAsync(ct);
-                        if (openPRs.Count == 0 && mergedPRs.Count > 0)
+                        if (mergedPRs.Count > 0)
                         {
                             // Close linked work items for all merged PRs (ADO parity)
                             if (_mergeCloseout is not null)
@@ -1486,10 +1505,10 @@ public class ProgramManagerAgent : AgentBase
                             }
                             await _workItemService!.AddCommentAsync(issue.Number,
                                 $"✅ **PM Final Review — APPROVED (SinglePRMode)**\n\n" +
-                                "All engineering work has been merged. Closing as complete.", ct);
+                                "All engineering tasks are complete and all PRs have been merged. Closing as complete.", ct);
                             await _workItemService!.CloseAsync(issue.Number, ct);
                             _reviewedEnhancementIssues.Add(issue.Number);
-                            Logger.LogInformation("PM closed enhancement issue #{Number} (SinglePRMode, all merged): {Title}",
+                            Logger.LogInformation("PM closed enhancement issue #{Number} (SinglePRMode, all tasks done + merged): {Title}",
                                 issue.Number, issue.Title);
                             LogActivity("review", $"✅ Closed user story #{issue.Number}: {issue.Title}");
                         }

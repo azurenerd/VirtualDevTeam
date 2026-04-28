@@ -304,6 +304,15 @@ public static class RoleExpectations
                     "Per Scenario A step 7, SE assigns tasks to engineers.",
                     "Scenario A step 7");
 
+            if (reasonLower.Contains("implementing"))
+                return Compliant(
+                    assignedPr is not null
+                        ? $"Generating code on PR #{assignedPr}"
+                        : "Generating code for assigned task",
+                    $"Software Engineer is actively generating code via AI. " +
+                    $"Per Scenario A step 10, SE implements tasks with incremental commits. Current: {reason}",
+                    "Scenario A step 10");
+
             if (reasonLower.Contains("rework") || reasonLower.Contains("feedback"))
                 return Compliant(
                     "Working — addressing review feedback",
@@ -329,8 +338,15 @@ public static class RoleExpectations
                     "Scenario B");
         }
 
+        // Fallback: provide a role-aware explanation instead of echoing the status
+        var fallbackSummary = status switch
+        {
+            AgentStatus.Working when assignedPr is not null => $"Active on PR #{assignedPr}",
+            AgentStatus.Working => "Executing engineering work",
+            _ => $"{status} — awaiting next action"
+        };
         return Compliant(
-            $"{status} — {Truncate(reason, 50)}",
+            fallbackSummary,
             $"Software Engineer is in {status} state: {reason}.",
             "§7 Engineer Requirements");
     }
