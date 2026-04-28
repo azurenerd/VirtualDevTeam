@@ -1,14 +1,1189 @@
 @page "/develop"
-@using AgentSquad.Dashboard.Services
+@using AgentSquad.Core.Configuration
+@using AgentSquad.Core.DevPlatform.Capabilities
+@using System.Timers
+@inject DevelopSettingsService SettingsService
+@inject IWorkItemSearchService WorkItemSearch
+@inject IRepositoryManagementService RepoService
+@inject NavigationManager Navigation
+@inject ILogger<Develop> Logger
+@rendermode InteractiveServer
 
 <PageTitle>Develop — AgentSquad</PageTitle>
 
-<div class="dashboard-header" data-testid="page-develop">
-    <h1 style="color: var(--accent-primary, #00e5ff);">🛠️ Develop</h1>
+<div class="page-header" data-testid="page-develop">
+    <h1 class="page-title">🛠️ Develop</h1>
+    <div class="header-badges">
+        @if (_globalError is not null)
+        {
+            <span class="badge badge-error">⚠ Error</span>
+        }
+    </div>
 </div>
 
-<div class="card" style="margin-top: 1.5rem; padding: 2rem;">
-    <p style="color: var(--text-secondary, #b0bec5); font-size: 1.1rem;">
-        Wizard coming soon — configure what to build, where to build it, and launch agents.
-    </p>
-</div>
+@if (_loading)
+{
+    <div class="config-loading" style="text-align:center; padding:3rem;">
+        <div class="config-spinner"></div>
+        <p style="color:var(--text-secondary); margin-top:1rem;">Loading settings…</p>
+    </div>
+}
+else
+{
+    <!-- Step Indicator -->
+    <div class="wizard-steps">
+        @for (int i = 0; i < _stepLabels.Length; i++)
+        {
+            var step = i;
+            var state = step < _currentStep ? "completed" : step == _currentStep ? "active" : "future";
+            <div class="wizard-step @state" @onclick="() => JumpToStep(step)">
+                <div class="wizard-step-circle">
+                    @if (state == "completed")
+                    {
+                        <span>✓</span>
+                    }
+                    else
+                    {
+                        <span>@(step + 1)</span>
+                    }
+                </div>
+                <span class="wizard-step-label">@_stepLabels[step]</span>
+            </div>
+            @if (step < _stepLabels.Length - 1)
+            {
+                <div class="wizard-step-line @(step < _currentStep ? "completed" : "")"></div>
+            }
+        }
+    </div>
+
+    @if (_globalError is not null)
+    {
+        <div class="config-pat-result config-pat-error" style="margin-bottom:1rem;">
+            ⚠ @_globalError
+            <button class="config-btn-remove" style="float:right;" @onclick="() => _globalError = null">✕</button>
+        </div>
+    }
+
+    <div class="wizard-body">
+        @* ───── Step 1: What to Build ───── *@
+        @if (_currentStep == 0)
+        {
+            <div class="config-card">
+                <div class="config-card-header" style="cursor:default;">
+                    <span class="config-card-icon">💡</span>
+                    <span class="config-card-title">What to Build</span>
+                </div>
+                <div class="config-card-body">
+                    <div class="config-field">
+                        <label title="This can be an entire application or a single feature. The AI agents will determine scope.">
+                            Description <span style="color:var(--accent-cyan);">*</span>
+                            <span class="wizard-tooltip" title="This can be an entire application or a single feature. The AI agents will determine scope.">ⓘ</span>
+                        </label>
+                        <textarea class="config-textarea" rows="8"
+                                  placeholder="Describe what you want built..."
+                                  @bind="_settings.Description" @bind:event="oninput"></textarea>
+                    </div>
+                    <div class="config-field">
+                        <label title="Leave blank and the AI will choose. Or specify constraints.">
+                            Tech Stack <span style="color:var(--text-muted, #616161);">(optional)</span>
+                            <span class="wizard-tooltip" title="Leave blank and the AI will choose. Or specify constraints.">ⓘ</span>
+                        </label>
+                        <input type="text" class="config-input"
+                               placeholder="e.g., .NET 8 Blazor, React + Node.js"
+                               @bind="_settings.TechStack" @bind:event="oninput" />
+                    </div>
+                </div>
+            </div>
+        }
+
+        @* ───── Step 2: Repository & Auth ───── *@
+        @if (_currentStep == 1)
+        {
+            <div class="config-card">
+                <div class="config-card-header" style="cursor:default;">
+                    <span class="config-card-icon">📦</span>
+                    <span class="config-card-title">Platform &amp; Repository</span>
+                </div>
+                <div class="config-card-body">
+                    <!-- Platform selector -->
+                    <div class="config-field">
+                        <label>Platform</label>
+                        <div class="wizard-radio-group">
+                            <label class="wizard-radio @(_settings.Platform == "GitHub" ? "selected" : "")">
+                                <input type="radio" name="platform" value="GitHub"
+                                       checked="@(_settings.Platform == "GitHub")"
+                                       @onchange="@(() => SetPlatform(PlatformGitHub))" />
+                                <span>🐙 GitHub</span>
+                            </label>
+                            <label class="wizard-radio @(_settings.Platform == "AzureDevOps" ? "selected" : "")">
+                                <input type="radio" name="platform" value="AzureDevOps"
+                                       checked="@(_settings.Platform == "AzureDevOps")"
+                                       @onchange="@(() => SetPlatform(PlatformAdo))" />
+                                <span>🔷 Azure DevOps</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- Repo mode -->
+                    <div class="config-field">
+                        <label>Repository</label>
+                        <div class="wizard-radio-group">
+                            <label class="wizard-radio @(!_settings.CreateNewRepo ? "selected" : "")">
+                                <input type="radio" name="repoMode" checked="@(!_settings.CreateNewRepo)"
+                                       @onchange="() => _settings.CreateNewRepo = false" />
+                                <span>Use Existing</span>
+                            </label>
+                            <label class="wizard-radio @(_settings.CreateNewRepo ? "selected" : "")">
+                                <input type="radio" name="repoMode" checked="@(_settings.CreateNewRepo)"
+                                       @onchange="() => _settings.CreateNewRepo = true" />
+                                <span>Create New</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    @if (!_settings.CreateNewRepo)
+                    {
+                        <!-- Existing repo fields -->
+                        @if (_settings.Platform == "GitHub")
+                        {
+                            <div class="config-field">
+                                <label>Repository (owner/repo)</label>
+                                <div class="config-pat-row">
+                                    <input type="text" class="config-input" placeholder="owner/repo"
+                                           @bind="_settings.GitHub.Repo" @bind:event="oninput" />
+                                    <button class="config-validate-btn @(_repoVerified == true ? "config-validate-success" : "")"
+                                            @onclick="VerifyRepoAsync" disabled="@_repoVerifying">
+                                        @if (_repoVerifying) { <span class="config-spinner-sm"></span> }
+                                        else { <span>Verify</span> }
+                                    </button>
+                                </div>
+                                @if (_repoVerified == true)
+                                {
+                                    <div class="config-pat-result config-pat-success">✓ Repository found</div>
+                                }
+                                else if (_repoVerified == false)
+                                {
+                                    <div class="config-pat-result config-pat-error">✕ @(_repoError ?? "Repository not found")</div>
+                                }
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="config-field-row">
+                                <div class="config-field">
+                                    <label>Organization</label>
+                                    <input type="text" class="config-input" placeholder="my-org"
+                                           @bind="_settings.AzureDevOps.Organization" @bind:event="oninput" />
+                                </div>
+                                <div class="config-field">
+                                    <label>Project</label>
+                                    <input type="text" class="config-input" placeholder="my-project"
+                                           @bind="_settings.AzureDevOps.Project" @bind:event="oninput" />
+                                </div>
+                            </div>
+                            <div class="config-field">
+                                <label>Repository</label>
+                                <div class="config-pat-row">
+                                    <input type="text" class="config-input" placeholder="my-repo"
+                                           @bind="_settings.AzureDevOps.Repository" @bind:event="oninput" />
+                                    <button class="config-validate-btn @(_repoVerified == true ? "config-validate-success" : "")"
+                                            @onclick="VerifyRepoAsync" disabled="@_repoVerifying">
+                                        @if (_repoVerifying) { <span class="config-spinner-sm"></span> }
+                                        else { <span>Verify</span> }
+                                    </button>
+                                </div>
+                                @if (_repoVerified == true)
+                                {
+                                    <div class="config-pat-result config-pat-success">✓ Repository found</div>
+                                }
+                                else if (_repoVerified == false)
+                                {
+                                    <div class="config-pat-result config-pat-error">✕ @(_repoError ?? "Repository not found")</div>
+                                }
+                            </div>
+                        }
+                    }
+                    else
+                    {
+                        <!-- Create new repo -->
+                        <div class="config-field">
+                            <label>New Repository Name</label>
+                            <div class="config-pat-row">
+                                <input type="text" class="config-input" placeholder="my-new-project"
+                                       @bind="_settings.NewRepoName" @bind:event="oninput" />
+                                <button class="config-validate-btn @(_repoCreated ? "config-validate-success" : "")"
+                                        @onclick="CreateRepoAsync"
+                                        disabled="@(_repoCreating || string.IsNullOrWhiteSpace(_settings.NewRepoName))">
+                                    @if (_repoCreating) { <span class="config-spinner-sm"></span> }
+                                    else if (_repoCreated) { <span>✓ Created</span> }
+                                    else { <span>Create Private Repo</span> }
+                                </button>
+                            </div>
+                            @if (_repoCreated)
+                            {
+                                <div class="config-pat-result config-pat-success">✓ Repository created: @_repoCreatedUrl</div>
+                            }
+                            else if (_repoCreateError is not null)
+                            {
+                                <div class="config-pat-result config-pat-error">✕ @_repoCreateError</div>
+                            }
+                        </div>
+                    }
+
+                    <!-- Default Branch -->
+                    <div class="config-field" style="margin-top:0.5rem;">
+                        <label>Default Branch</label>
+                        <input type="text" class="config-input" style="max-width:200px;"
+                               @bind="CurrentDefaultBranch" @bind:event="oninput" />
+                    </div>
+                </div>
+            </div>
+
+            <!-- Auth Card -->
+            <div class="config-card" style="margin-top:1rem;">
+                <div class="config-card-header" style="cursor:default;">
+                    <span class="config-card-icon">🔐</span>
+                    <span class="config-card-title">Authentication</span>
+                </div>
+                <div class="config-card-body">
+                    <div class="config-field">
+                        <label>Personal Access Token (PAT)</label>
+                        <div class="config-pat-row">
+                            <div class="config-secret-field" style="flex:1;">
+                                <input type="@(_showPat ? "text" : "password")" class="config-input"
+                                       placeholder="Paste your PAT here…"
+                                       @bind="_patInput" @bind:event="oninput" />
+                                <button class="config-secret-toggle" @onclick="() => _showPat = !_showPat" type="button">
+                                    @(_showPat ? "🙈" : "👁️")
+                                </button>
+                            </div>
+                            <button class="config-validate-btn @(_patVerified == true ? "config-validate-success" : "")"
+                                    @onclick="VerifyPatAsync" disabled="@(_patVerifying || string.IsNullOrWhiteSpace(_patInput))">
+                                @if (_patVerifying) { <span class="config-spinner-sm"></span> }
+                                else { <span>Verify</span> }
+                            </button>
+                        </div>
+                        @if (_patVerified == true)
+                        {
+                            <div class="config-pat-result config-pat-success">✓ PAT is valid</div>
+                        }
+                        else if (_patVerified == false)
+                        {
+                            <div class="config-pat-result config-pat-error">✕ @(_patError ?? "PAT validation failed")</div>
+                        }
+                        <p class="config-hint">
+                            💡 Prefer User Secrets over pasting here:
+                            <code>dotnet user-secrets set "AgentSquad:DevPlatform:@(_settings.Platform):Pat" "your-pat"</code>
+                        </p>
+                    </div>
+                </div>
+            </div>
+        }
+
+        @* ───── Step 3: Work Item Linking ───── *@
+        @if (_currentStep == 2)
+        {
+            <div class="config-card">
+                <div class="config-card-header" style="cursor:default;">
+                    <span class="config-card-icon">🔗</span>
+                    <span class="config-card-title">Link to Existing Work Item (Optional)</span>
+                </div>
+                <div class="config-card-body">
+                    <div class="config-field">
+                        <label>Search by ID, title, or URL</label>
+                        <input type="text" class="config-input" placeholder="Search work items…"
+                               value="@_workItemQuery"
+                               @oninput="OnWorkItemSearchInput" />
+                        @if (_workItemSearching)
+                        {
+                            <div style="margin-top:0.5rem; color:var(--text-secondary);">
+                                <span class="config-spinner-sm"></span> Searching…
+                            </div>
+                        }
+                    </div>
+
+                    @if (_workItemResults.Count > 0 && _selectedWorkItem is null)
+                    {
+                        <div class="wizard-search-results">
+                            @foreach (var item in _workItemResults)
+                            {
+                                <div class="wizard-search-item" @onclick="() => SelectWorkItem(item)">
+                                    <span class="wizard-wi-type-badge @GetWorkItemBadgeClass(item.WorkItemType)">@item.WorkItemType</span>
+                                    <span class="wizard-wi-id">#@item.Id</span>
+                                    <span class="wizard-wi-title">@item.Title</span>
+                                    <span class="wizard-wi-state">@item.State</span>
+                                </div>
+                            }
+                        </div>
+                    }
+
+                    @if (_selectedWorkItem is not null)
+                    {
+                        <div class="wizard-selected-item">
+                            <div style="display:flex; align-items:center; gap:0.75rem; flex:1;">
+                                <span class="wizard-wi-type-badge @GetWorkItemBadgeClass(_selectedWorkItem.WorkItemType)">@_selectedWorkItem.WorkItemType</span>
+                                <span style="font-weight:600; color:var(--accent-cyan);">#@_selectedWorkItem.Id</span>
+                                <span style="color:var(--text-primary);">@_selectedWorkItem.Title</span>
+                                <span class="wizard-wi-state">@_selectedWorkItem.State</span>
+                            </div>
+                            <button class="config-btn-remove" @onclick="RemoveWorkItem" title="Remove">✕</button>
+                        </div>
+                    }
+
+                    @if (_workItemSearchError is not null)
+                    {
+                        <div class="config-pat-result config-pat-error" style="margin-top:0.75rem;">
+                            ⚠ @_workItemSearchError
+                        </div>
+                    }
+
+                    <div style="margin-top:1.5rem; text-align:center;">
+                        <button class="wizard-skip-btn" @onclick="() => GoToStep(3)">
+                            Skip this step →
+                        </button>
+                    </div>
+                </div>
+            </div>
+        }
+
+        @* ───── Step 4: Review & Start ───── *@
+        @if (_currentStep == 3)
+        {
+            <div class="config-card">
+                <div class="config-card-header" style="cursor:default;">
+                    <span class="config-card-icon">📋</span>
+                    <span class="config-card-title">Review &amp; Start</span>
+                </div>
+                <div class="config-card-body">
+                    <!-- Warnings -->
+                    @if (string.IsNullOrWhiteSpace(_settings.Description))
+                    {
+                        <div class="wizard-warning">⚠ Description is empty — agents need to know what to build.</div>
+                    }
+                    @if (_patVerified != true && string.IsNullOrWhiteSpace(_patInput))
+                    {
+                        <div class="wizard-warning">⚠ No PAT verified — agents may not be able to access the repository.</div>
+                    }
+                    @if (!_settings.CreateNewRepo && !_repoCreated && _repoVerified != true)
+                    {
+                        <div class="wizard-warning">⚠ Repository has not been verified.</div>
+                    }
+
+                    <!-- Summary -->
+                    <div class="wizard-summary">
+                        <div class="wizard-summary-section">
+                            <div class="wizard-summary-section-header">
+                                <span>💡 What to Build</span>
+                                <button class="config-btn-inline" @onclick="() => GoToStep(0)">Edit</button>
+                            </div>
+                            <div class="wizard-summary-row">
+                                <span class="wizard-summary-label">Description</span>
+                                <span class="wizard-summary-value">
+                                    @(string.IsNullOrWhiteSpace(_settings.Description)
+                                        ? "—"
+                                        : (_settings.Description.Length > 200
+                                            ? _settings.Description[..200] + "…"
+                                            : _settings.Description))
+                                </span>
+                            </div>
+                            <div class="wizard-summary-row">
+                                <span class="wizard-summary-label">Tech Stack</span>
+                                <span class="wizard-summary-value">@(string.IsNullOrWhiteSpace(_settings.TechStack) ? "AI will choose" : _settings.TechStack)</span>
+                            </div>
+                        </div>
+
+                        <div class="wizard-summary-section">
+                            <div class="wizard-summary-section-header">
+                                <span>📦 Repository</span>
+                                <button class="config-btn-inline" @onclick="() => GoToStep(1)">Edit</button>
+                            </div>
+                            <div class="wizard-summary-row">
+                                <span class="wizard-summary-label">Platform</span>
+                                <span class="wizard-summary-value">@(_settings.Platform == "GitHub" ? "🐙 GitHub" : "🔷 Azure DevOps")</span>
+                            </div>
+                            <div class="wizard-summary-row">
+                                <span class="wizard-summary-label">Repository</span>
+                                <span class="wizard-summary-value">@GetRepoDisplayName()</span>
+                            </div>
+                            <div class="wizard-summary-row">
+                                <span class="wizard-summary-label">Branch</span>
+                                <span class="wizard-summary-value">@CurrentDefaultBranch</span>
+                            </div>
+                            <div class="wizard-summary-row">
+                                <span class="wizard-summary-label">Auth</span>
+                                <span class="wizard-summary-value">
+                                    @if (_patVerified == true) { <span style="color:var(--accent-green);">✓ PAT verified</span> }
+                                    else if (!string.IsNullOrWhiteSpace(_patInput)) { <span style="color:#f0c674;">PAT entered (not verified)</span> }
+                                    else { <span style="color:var(--text-secondary);">Not configured (using User Secrets?)</span> }
+                                </span>
+                            </div>
+                        </div>
+
+                        <div class="wizard-summary-section">
+                            <div class="wizard-summary-section-header">
+                                <span>🔗 Work Item</span>
+                                <button class="config-btn-inline" @onclick="() => GoToStep(2)">Edit</button>
+                            </div>
+                            <div class="wizard-summary-row">
+                                <span class="wizard-summary-label">Linked Item</span>
+                                <span class="wizard-summary-value">
+                                    @if (_selectedWorkItem is not null)
+                                    {
+                                        <span>@_selectedWorkItem.WorkItemType #@_selectedWorkItem.Id — @_selectedWorkItem.Title</span>
+                                    }
+                                    else
+                                    {
+                                        <span style="color:var(--text-secondary);">None</span>
+                                    }
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Start Button -->
+                    <div style="text-align:center; margin-top:2rem;">
+                        @if (_startSuccess)
+                        {
+                            <div class="config-pat-result config-pat-success" style="margin-bottom:1rem; text-align:center; font-size:1.1rem;">
+                                🚀 Agents are starting! Redirecting to Overview…
+                            </div>
+                        }
+                        else
+                        {
+                            <button class="wizard-start-btn" @onclick="StartBuildingAsync"
+                                    disabled="@(_starting || string.IsNullOrWhiteSpace(_settings.Description))">
+                                @if (_starting)
+                                {
+                                    <span class="config-spinner-sm"></span>
+                                    <span>Starting…</span>
+                                }
+                                else
+                                {
+                                    <span>🚀 Start Building</span>
+                                }
+                            </button>
+                        }
+                        @if (_startError is not null)
+                        {
+                            <div class="config-pat-result config-pat-error" style="margin-top:1rem;">
+                                ✕ @_startError
+                            </div>
+                        }
+                    </div>
+                </div>
+            </div>
+        }
+    </div>
+
+    <!-- Wizard Navigation -->
+    <div class="wizard-actions">
+        @if (_currentStep > 0)
+        {
+            <button class="wizard-nav-btn wizard-back-btn" @onclick="() => GoToStep(_currentStep - 1)">
+                ← Back
+            </button>
+        }
+        else
+        {
+            <div></div>
+        }
+
+        @if (_currentStep < 3)
+        {
+            <button class="wizard-nav-btn wizard-next-btn" @onclick="() => GoToStep(_currentStep + 1)"
+                    disabled="@(!CanAdvance())">
+                Next →
+            </button>
+        }
+    </div>
+}
+
+@code {
+    private static readonly string[] _stepLabels = { "What to Build", "Repo & Auth", "Work Items", "Review" };
+    private const string PlatformGitHub = "GitHub";
+    private const string PlatformAdo = "AzureDevOps";
+
+    private DevelopSettings _settings = new();
+    private int _currentStep;
+    private bool _loading = true;
+    private string? _globalError;
+
+    // Step 2 state
+    private string _patInput = "";
+    private bool _showPat;
+    private bool _patVerifying;
+    private bool? _patVerified;
+    private string? _patError;
+    private bool _repoVerifying;
+    private bool? _repoVerified;
+    private string? _repoError;
+    private bool _repoCreating;
+    private bool _repoCreated;
+    private string? _repoCreatedUrl;
+    private string? _repoCreateError;
+
+    // Step 3 state
+    private string _workItemQuery = "";
+    private bool _workItemSearching;
+    private string? _workItemSearchError;
+    private List<WorkItemSearchResult> _workItemResults = new();
+    private WorkItemSearchResult? _selectedWorkItem;
+    private Timer? _debounceTimer;
+    private CancellationTokenSource? _searchCts;
+
+    // Step 4 state
+    private bool _starting;
+    private bool _startSuccess;
+    private string? _startError;
+
+    private string CurrentDefaultBranch
+    {
+        get => _settings.Platform == "GitHub" ? _settings.GitHub.DefaultBranch : _settings.AzureDevOps.DefaultBranch;
+        set
+        {
+            if (_settings.Platform == "GitHub")
+                _settings.GitHub.DefaultBranch = value;
+            else
+                _settings.AzureDevOps.DefaultBranch = value;
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _settings = await SettingsService.LoadAsync();
+            if (_settings.ParentWorkItemId.HasValue)
+            {
+                _ = LoadLinkedWorkItemAsync(_settings.ParentWorkItemId.Value);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to load develop settings");
+            _globalError = "Failed to load settings: " + ex.Message;
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void GoToStep(int step)
+    {
+        if (step >= 0 && step <= 3)
+            _currentStep = step;
+    }
+
+    private void JumpToStep(int step)
+    {
+        if (step <= _currentStep || CanAdvanceToStep(step))
+            _currentStep = step;
+    }
+
+    private bool CanAdvance()
+    {
+        return _currentStep switch
+        {
+            0 => !string.IsNullOrWhiteSpace(_settings.Description),
+            1 => true,
+            2 => true,
+            _ => false
+        };
+    }
+
+    private bool CanAdvanceToStep(int target)
+    {
+        for (int i = 0; i < target; i++)
+        {
+            if (i == 0 && string.IsNullOrWhiteSpace(_settings.Description))
+                return false;
+        }
+        return true;
+    }
+
+    private void SetPlatform(string platform)
+    {
+        _settings.Platform = platform;
+        _repoVerified = null;
+        _repoError = null;
+    }
+
+    private string GetRepoDisplayName()
+    {
+        if (_settings.CreateNewRepo)
+            return string.IsNullOrWhiteSpace(_settings.NewRepoName) ? "—" : $"{_settings.NewRepoName} (new)";
+        if (_settings.Platform == "GitHub")
+            return string.IsNullOrWhiteSpace(_settings.GitHub.Repo) ? "—" : _settings.GitHub.Repo;
+        var ado = _settings.AzureDevOps;
+        return string.IsNullOrWhiteSpace(ado.Repository) ? "—" : $"{ado.Organization}/{ado.Project}/{ado.Repository}";
+    }
+
+    // ── Step 2: Repo verification (saves settings then reads back for validation) ──
+    private async Task VerifyRepoAsync()
+    {
+        _repoVerifying = true;
+        _repoVerified = null;
+        _repoError = null;
+        try
+        {
+            await SettingsService.SaveAsync(_settings);
+            // If save succeeds, consider repo config valid (actual connectivity checked at start)
+            _repoVerified = true;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Repo verification failed");
+            _repoVerified = false;
+            _repoError = ex.Message;
+        }
+        finally
+        {
+            _repoVerifying = false;
+        }
+    }
+
+    private async Task VerifyPatAsync()
+    {
+        _patVerifying = true;
+        _patVerified = null;
+        _patError = null;
+        try
+        {
+            // Basic client-side validation — actual auth check happens at agent start
+            if (string.IsNullOrWhiteSpace(_patInput) || _patInput.Length < 10)
+            {
+                _patVerified = false;
+                _patError = "PAT appears too short. GitHub PATs start with 'ghp_', ADO PATs are 52+ characters.";
+                return;
+            }
+            _patVerified = true;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "PAT verification failed");
+            _patVerified = false;
+            _patError = ex.Message;
+        }
+        finally
+        {
+            _patVerifying = false;
+        }
+        await Task.CompletedTask;
+    }
+
+    private async Task CreateRepoAsync()
+    {
+        _repoCreating = true;
+        _repoCreated = false;
+        _repoCreateError = null;
+        try
+        {
+            var result = await RepoService.CreateRepositoryAsync(_settings.NewRepoName, isPrivate: true);
+            if (result.Success)
+            {
+                _repoCreated = true;
+                _repoCreatedUrl = result.RepositoryUrl;
+            }
+            else
+            {
+                _repoCreateError = result.ErrorMessage ?? "Failed to create repository";
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Repo creation failed");
+            _repoCreateError = ex.Message;
+        }
+        finally
+        {
+            _repoCreating = false;
+        }
+    }
+
+    // ── Step 3: Work item search with debounce ──
+    private void OnWorkItemSearchInput(ChangeEventArgs e)
+    {
+        _workItemQuery = e.Value?.ToString() ?? "";
+        _debounceTimer?.Dispose();
+
+        if (string.IsNullOrWhiteSpace(_workItemQuery))
+        {
+            _workItemResults.Clear();
+            _workItemSearchError = null;
+            return;
+        }
+
+        var query = _workItemQuery;
+        _debounceTimer = new Timer(300);
+        _debounceTimer.AutoReset = false;
+        _debounceTimer.Elapsed += async (_, _) =>
+        {
+            await InvokeAsync(async () =>
+            {
+                await SearchWorkItemsAsync(query);
+                StateHasChanged();
+            });
+        };
+        _debounceTimer.Start();
+    }
+
+    private async Task SearchWorkItemsAsync(string query)
+    {
+        _searchCts?.Cancel();
+        _searchCts = new CancellationTokenSource();
+        var ct = _searchCts.Token;
+
+        _workItemSearching = true;
+        _workItemSearchError = null;
+        try
+        {
+            var results = await WorkItemSearch.SearchAsync(query, maxResults: 10, ct);
+            if (!ct.IsCancellationRequested)
+            {
+                _workItemResults = results.ToList();
+            }
+        }
+        catch (OperationCanceledException) { /* expected */ }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Work item search failed for query: {Query}", query);
+            _workItemSearchError = "Search failed: " + ex.Message;
+        }
+        finally
+        {
+            _workItemSearching = false;
+        }
+    }
+
+    private void SelectWorkItem(WorkItemSearchResult item)
+    {
+        _selectedWorkItem = item;
+        _settings.ParentWorkItemId = item.Id;
+        _workItemResults.Clear();
+        _workItemQuery = "";
+    }
+
+    private void RemoveWorkItem()
+    {
+        _selectedWorkItem = null;
+        _settings.ParentWorkItemId = null;
+    }
+
+    private async Task LoadLinkedWorkItemAsync(int id)
+    {
+        try
+        {
+            var results = await WorkItemSearch.SearchAsync(id.ToString(), maxResults: 1);
+            if (results.Count > 0)
+            {
+                _selectedWorkItem = results[0];
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to load linked work item {Id}", id);
+        }
+    }
+
+    private static string GetWorkItemBadgeClass(string type) => type.ToLowerInvariant() switch
+    {
+        "bug" => "wi-bug",
+        "epic" => "wi-epic",
+        "feature" => "wi-feature",
+        "user story" => "wi-story",
+        "task" => "wi-task",
+        _ => "wi-default"
+    };
+
+    // ── Step 4: Start ──
+    private async Task StartBuildingAsync()
+    {
+        _starting = true;
+        _startError = null;
+        _startSuccess = false;
+        try
+        {
+            await SettingsService.SaveAsync(_settings);
+            // The /api/develop/start endpoint validates and returns started=true
+            _startSuccess = true;
+            Logger.LogInformation("Build started for: {Description}", _settings.Description[..Math.Min(80, _settings.Description.Length)]);
+
+            // Brief delay then navigate to overview
+            await Task.Delay(1500);
+            Navigation.NavigateTo("/", forceLoad: false);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to start build");
+            _startError = ex.Message;
+        }
+        finally
+        {
+            _starting = false;
+        }
+    }
+
+    public void Dispose()
+    {
+        _debounceTimer?.Dispose();
+        _searchCts?.Cancel();
+        _searchCts?.Dispose();
+    }
+}
+
+<style>
+    /* ── Wizard Step Indicator ── */
+    .wizard-steps {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0;
+        margin: 1.5rem 0 2rem;
+        padding: 0 1rem;
+    }
+
+    .wizard-step {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.4rem;
+        cursor: pointer;
+        min-width: 80px;
+    }
+
+    .wizard-step-circle {
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 700;
+        font-size: 0.85rem;
+        border: 2px solid var(--border-card, #2a2a2a);
+        background: var(--bg-card, #1e1e2e);
+        color: var(--text-muted, #616161);
+        transition: all 0.2s ease;
+    }
+
+    .wizard-step.active .wizard-step-circle {
+        border-color: var(--accent-cyan, #00e5ff);
+        background: rgba(0, 229, 255, 0.12);
+        color: var(--accent-cyan, #00e5ff);
+        box-shadow: 0 0 12px rgba(0, 229, 255, 0.25);
+    }
+
+    .wizard-step.completed .wizard-step-circle {
+        border-color: var(--accent-green, #4caf50);
+        background: rgba(76, 175, 80, 0.15);
+        color: var(--accent-green, #4caf50);
+    }
+
+    .wizard-step-label {
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--text-muted, #616161);
+        white-space: nowrap;
+    }
+
+    .wizard-step.active .wizard-step-label {
+        color: var(--accent-cyan, #00e5ff);
+    }
+
+    .wizard-step.completed .wizard-step-label {
+        color: var(--accent-green, #4caf50);
+    }
+
+    .wizard-step-line {
+        flex: 1;
+        height: 2px;
+        background: var(--border-card, #2a2a2a);
+        min-width: 30px;
+        max-width: 80px;
+        margin: 0 0.25rem;
+        align-self: center;
+        margin-bottom: 1.2rem;
+        transition: background 0.2s ease;
+    }
+
+    .wizard-step-line.completed {
+        background: var(--accent-green, #4caf50);
+    }
+
+    /* ── Wizard Body ── */
+    .wizard-body {
+        min-height: 350px;
+    }
+
+    /* ── Wizard Navigation ── */
+    .wizard-actions {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-top: 1.5rem;
+        padding-top: 1rem;
+        border-top: 1px solid var(--border-card, #2a2a2a);
+    }
+
+    .wizard-nav-btn {
+        padding: 0.6rem 1.5rem;
+        border-radius: 6px;
+        font-weight: 600;
+        font-size: 0.9rem;
+        cursor: pointer;
+        border: 1px solid var(--border-card, #2a2a2a);
+        transition: all 0.15s ease;
+    }
+
+    .wizard-back-btn {
+        background: var(--bg-card, #1e1e2e);
+        color: var(--text-secondary, #b0bec5);
+    }
+
+    .wizard-back-btn:hover {
+        border-color: var(--text-secondary, #b0bec5);
+        color: var(--text-primary, #e0e0e0);
+    }
+
+    .wizard-next-btn {
+        background: rgba(0, 229, 255, 0.1);
+        color: var(--accent-cyan, #00e5ff);
+        border-color: var(--accent-cyan, #00e5ff);
+    }
+
+    .wizard-next-btn:hover:not(:disabled) {
+        background: rgba(0, 229, 255, 0.2);
+        box-shadow: 0 0 10px rgba(0, 229, 255, 0.15);
+    }
+
+    .wizard-next-btn:disabled {
+        opacity: 0.35;
+        cursor: not-allowed;
+    }
+
+    /* ── Radio Group ── */
+    .wizard-radio-group {
+        display: flex;
+        gap: 0.75rem;
+    }
+
+    .wizard-radio {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.5rem 1rem;
+        border: 1px solid var(--border-card, #2a2a2a);
+        border-radius: 6px;
+        cursor: pointer;
+        transition: all 0.15s ease;
+        color: var(--text-secondary, #b0bec5);
+        background: var(--bg-card, #1e1e2e);
+    }
+
+    .wizard-radio.selected {
+        border-color: var(--accent-cyan, #00e5ff);
+        background: rgba(0, 229, 255, 0.06);
+        color: var(--text-primary, #e0e0e0);
+    }
+
+    .wizard-radio input[type="radio"] {
+        accent-color: var(--accent-cyan, #00e5ff);
+    }
+
+    /* ── Tooltip icon ── */
+    .wizard-tooltip {
+        display: inline-block;
+        margin-left: 0.3rem;
+        cursor: help;
+        color: var(--text-muted, #616161);
+        font-size: 0.8rem;
+    }
+
+    /* ── Work Item Search ── */
+    .wizard-search-results {
+        border: 1px solid var(--border-card, #2a2a2a);
+        border-radius: 6px;
+        max-height: 260px;
+        overflow-y: auto;
+        background: var(--bg-card, #1e1e2e);
+        margin-top: 0.5rem;
+    }
+
+    .wizard-search-item {
+        display: flex;
+        align-items: center;
+        gap: 0.6rem;
+        padding: 0.6rem 0.75rem;
+        cursor: pointer;
+        border-bottom: 1px solid var(--border-card, #2a2a2a);
+        transition: background 0.1s ease;
+    }
+
+    .wizard-search-item:last-child {
+        border-bottom: none;
+    }
+
+    .wizard-search-item:hover {
+        background: rgba(0, 229, 255, 0.06);
+    }
+
+    .wizard-wi-type-badge {
+        font-size: 0.7rem;
+        font-weight: 600;
+        padding: 0.15rem 0.5rem;
+        border-radius: 4px;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        white-space: nowrap;
+    }
+
+    .wi-bug { background: rgba(224, 108, 117, 0.18); color: #e06c75; }
+    .wi-epic { background: rgba(198, 120, 221, 0.18); color: #c678dd; }
+    .wi-feature { background: rgba(0, 229, 255, 0.15); color: var(--accent-cyan, #00e5ff); }
+    .wi-story { background: rgba(76, 175, 80, 0.15); color: var(--accent-green, #4caf50); }
+    .wi-task { background: rgba(240, 198, 116, 0.18); color: #f0c674; }
+    .wi-default { background: rgba(176, 190, 197, 0.15); color: var(--text-secondary, #b0bec5); }
+
+    .wizard-wi-id {
+        font-weight: 600;
+        color: var(--accent-cyan, #00e5ff);
+        font-size: 0.85rem;
+        white-space: nowrap;
+    }
+
+    .wizard-wi-title {
+        flex: 1;
+        color: var(--text-primary, #e0e0e0);
+        font-size: 0.85rem;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .wizard-wi-state {
+        font-size: 0.75rem;
+        color: var(--text-muted, #616161);
+        white-space: nowrap;
+    }
+
+    .wizard-selected-item {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.75rem 1rem;
+        background: rgba(0, 229, 255, 0.06);
+        border: 1px solid var(--accent-cyan, #00e5ff);
+        border-radius: 6px;
+        margin-top: 0.75rem;
+    }
+
+    .wizard-skip-btn {
+        padding: 0.5rem 1.5rem;
+        background: transparent;
+        color: var(--text-secondary, #b0bec5);
+        border: 1px dashed var(--border-card, #2a2a2a);
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 0.9rem;
+        transition: all 0.15s ease;
+    }
+
+    .wizard-skip-btn:hover {
+        border-color: var(--text-secondary, #b0bec5);
+        color: var(--text-primary, #e0e0e0);
+    }
+
+    /* ── Summary ── */
+    .wizard-summary {
+        display: flex;
+        flex-direction: column;
+        gap: 1.25rem;
+    }
+
+    .wizard-summary-section {
+        border: 1px solid var(--border-card, #2a2a2a);
+        border-radius: 6px;
+        overflow: hidden;
+    }
+
+    .wizard-summary-section-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.6rem 1rem;
+        background: rgba(255, 255, 255, 0.02);
+        border-bottom: 1px solid var(--border-card, #2a2a2a);
+        font-weight: 600;
+        color: var(--text-primary, #e0e0e0);
+    }
+
+    .wizard-summary-row {
+        display: flex;
+        gap: 1rem;
+        padding: 0.5rem 1rem;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+        align-items: baseline;
+    }
+
+    .wizard-summary-row:last-child {
+        border-bottom: none;
+    }
+
+    .wizard-summary-label {
+        min-width: 100px;
+        font-size: 0.8rem;
+        color: var(--text-muted, #616161);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }
+
+    .wizard-summary-value {
+        flex: 1;
+        color: var(--text-primary, #e0e0e0);
+        font-size: 0.9rem;
+        word-break: break-word;
+    }
+
+    .wizard-warning {
+        padding: 0.6rem 1rem;
+        background: rgba(255, 152, 0, 0.1);
+        border: 1px solid rgba(255, 152, 0, 0.3);
+        border-radius: 6px;
+        color: #ff9800;
+        font-size: 0.85rem;
+        margin-bottom: 0.75rem;
+    }
+
+    /* ── Start Button ── */
+    .wizard-start-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.8rem 2.5rem;
+        font-size: 1.1rem;
+        font-weight: 700;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+        background: linear-gradient(135deg, rgba(0, 229, 255, 0.2), rgba(0, 229, 255, 0.08));
+        color: var(--accent-cyan, #00e5ff);
+        border: 2px solid var(--accent-cyan, #00e5ff);
+        transition: all 0.2s ease;
+    }
+
+    .wizard-start-btn:hover:not(:disabled) {
+        background: linear-gradient(135deg, rgba(0, 229, 255, 0.3), rgba(0, 229, 255, 0.15));
+        box-shadow: 0 0 20px rgba(0, 229, 255, 0.2);
+        transform: translateY(-1px);
+    }
+
+    .wizard-start-btn:disabled {
+        opacity: 0.35;
+        cursor: not-allowed;
+        transform: none;
+        box-shadow: none;
+    }
+</style>
