@@ -1488,16 +1488,38 @@ public class ProgramManagerAgent : AgentBase
                             continue;
                         }
 
+                        var mergedPRs = await _prService.ListMergedAsync(ct);
                         var openPRs = await _prService.ListOpenAsync(ct);
-                        if (openPRs.Count > 0)
+
+                        // If code has been merged but some PRs remain open (e.g., approved but
+                        // TE build failed so tests-added never applied), abandon the stale PRs
+                        // since the code was already delivered via another merged PR.
+                        if (mergedPRs.Count > 0 && openPRs.Count > 0)
                         {
+                            foreach (var stalePr in openPRs)
+                            {
+                                Logger.LogInformation(
+                                    "SinglePRMode: Abandoning stale open PR #{Number} — code already delivered via merged PRs",
+                                    stalePr.Number);
+                                try
+                                {
+                                    await _prService.CloseAsync(stalePr.Number, ct);
+                                }
+                                catch (Exception ex)
+                                {
+                                    Logger.LogWarning(ex, "Failed to abandon stale PR #{Number}", stalePr.Number);
+                                }
+                            }
+                        }
+                        else if (mergedPRs.Count == 0 && openPRs.Count > 0)
+                        {
+                            // No code merged yet but PRs are still open — wait
                             Logger.LogDebug(
-                                "SinglePRMode: {Count} PRs still open — deferring closure of #{Number}",
+                                "SinglePRMode: {Count} PRs still open with none merged — deferring closure of #{Number}",
                                 openPRs.Count, issue.Number);
                             continue;
                         }
 
-                        var mergedPRs = await _prService.ListMergedAsync(ct);
                         if (mergedPRs.Count > 0)
                         {
                             // Close linked work items for all merged PRs (ADO parity)
@@ -1537,6 +1559,47 @@ public class ProgramManagerAgent : AgentBase
                 var closedSummary = string.Join("\n", subIssues.Select(s =>
                     $"  - #{s.Number}: {s.Title} (closed)"));
 
+                // Gather actual evidence: repo file tree + merged PRs (prevents hallucination)
+                var repoTree = new List<string>();
+                var mergedPrSummary = "";
+                try
+                {
+                    repoTree = (await _repoContent.GetRepositoryTreeAsync("main", ct)).ToList();
+                    var mergedPRs = await _prService.ListMergedAsync(ct);
+                    var relevantMerged = mergedPRs
+                        .Where(p => p.HeadBranch.StartsWith("agent/", StringComparison.OrdinalIgnoreCase))
+                        .OrderByDescending(p => p.Number)
+                        .Take(10)
+                        .ToList();
+                    if (relevantMerged.Count > 0)
+                    {
+                        mergedPrSummary = string.Join("\n", relevantMerged.Select(p =>
+                            $"  - PR #{p.Number}: {p.Title} (merged, branch: {p.HeadBranch})"));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogWarning(ex, "Could not gather repo evidence for acceptance review");
+                }
+
+                var evidenceSection = "";
+                if (repoTree.Count > 0)
+                {
+                    // Show application files (exclude docs/markdown)
+                    var appFiles = repoTree
+                        .Where(f => !f.EndsWith(".md", StringComparison.OrdinalIgnoreCase) &&
+                                    !f.StartsWith(".agentsquad", StringComparison.OrdinalIgnoreCase))
+                        .Take(50)
+                        .ToList();
+                    evidenceSection = $"\n\n### Verified Repository State (files on main branch)\n" +
+                        $"Total files on main: {repoTree.Count}\n" +
+                        $"Application files (non-docs):\n{string.Join("\n", appFiles.Select(f => $"  - {f}"))}\n";
+                }
+                if (!string.IsNullOrEmpty(mergedPrSummary))
+                {
+                    evidenceSection += $"\n### Recently Merged PRs\n{mergedPrSummary}\n";
+                }
+
                 var kernel = _modelRegistry.GetKernel(Identity.ModelTier);
                 var chat = kernel.GetRequiredService<IChatCompletionService>();
                 var history = CreateChatHistory();
@@ -1544,9 +1607,11 @@ public class ProgramManagerAgent : AgentBase
                 history.AddSystemMessage(
                     await _promptService.RenderAsync("pm/story-review-system", new Dictionary<string, string>(), ct)
                     ?? "You are a Program Manager reviewing whether a user story has been fully delivered. " +
-                       "All engineering tasks have been completed and merged. Review the original acceptance " +
-                       "criteria and the completed tasks. If all criteria are met, respond with APPROVED and " +
-                       "a brief summary. If gaps remain, respond with NEEDS_MORE_WORK and describe what's missing.");
+                       "All engineering tasks have been completed and merged. Review the ACTUAL repository " +
+                       "state provided below — do NOT guess or invent PR numbers. If the repository contains " +
+                       "application files matching the acceptance criteria, respond with APPROVED and a brief " +
+                       "summary. If gaps remain, respond with NEEDS_MORE_WORK and describe what's missing. " +
+                       "IMPORTANT: Base your decision on the verified file tree and merged PRs, not assumptions.");
 
                 history.AddUserMessage(
                     await _promptService.RenderAsync("pm/story-review-user", new Dictionary<string, string>
@@ -1554,12 +1619,15 @@ public class ProgramManagerAgent : AgentBase
                         ["issue_number"] = issue.Number.ToString(),
                         ["issue_title"] = issue.Title,
                         ["issue_body"] = issue.Body ?? "",
-                        ["closed_summary"] = closedSummary
+                        ["closed_summary"] = closedSummary,
+                        ["evidence"] = evidenceSection
                     }, ct)
                     ?? $"## Enhancement Issue #{issue.Number}: {issue.Title}\n\n" +
                        $"### Original Specification\n{issue.Body}\n\n" +
-                       $"### Completed Engineering Tasks\n{closedSummary}\n\n" +
-                       "Review the acceptance criteria above. Are all criteria addressed by the completed tasks? " +
+                       $"### Completed Engineering Tasks\n{closedSummary}\n" +
+                       $"{evidenceSection}\n\n" +
+                       "Review the acceptance criteria against the ACTUAL verified repository state above. " +
+                       "Do NOT invent PR numbers or guess at repository contents — use only the evidence provided. " +
                        "Start your response with either APPROVED or NEEDS_MORE_WORK.");
 
                 var response = await chat.GetChatMessageContentAsync(history, cancellationToken: ct);
