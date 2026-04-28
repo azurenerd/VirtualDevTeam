@@ -13,15 +13,18 @@ namespace AgentSquad.Core.DevPlatform.Providers.AzureDevOps;
 public sealed class AdoPullRequestService : AdoHttpClientBase, IPullRequestService
 {
     private readonly ILogger<AdoPullRequestService> _logger;
+    private readonly DateTime? _runStartedUtc;
 
     public AdoPullRequestService(
         HttpClient http,
         IDevPlatformAuthProvider authProvider,
         IOptions<Configuration.AgentSquadConfig> config,
-        ILogger<AdoPullRequestService> logger)
+        ILogger<AdoPullRequestService> logger,
+        AgentSquad.Core.Persistence.AgentStateStore? stateStore = null)
         : base(http, authProvider, config, logger)
     {
         _logger = logger;
+        _runStartedUtc = stateStore?.RunStartedUtc;
     }
 
     public async Task<PlatformPullRequest> CreateAsync(
@@ -66,8 +69,12 @@ public sealed class AdoPullRequestService : AdoHttpClientBase, IPullRequestServi
         var url = BuildUrl($"{Project}/_apis/git/repositories/{Repository}/pullrequests",
             "searchCriteria.status=active");
         var response = await GetAsync<AdoListResponse<AdoPullRequest>>(url, ct);
-        return response?.Value.Select(p => AdoModelMapper.ToPlatform(p, Organization, Project)).ToList()
+        var prs = response?.Value.Select(p => AdoModelMapper.ToPlatform(p, Organization, Project)).ToList()
             ?? new List<PlatformPullRequest>();
+        // Scope to current run to exclude stale PRs from previous runs
+        if (_runStartedUtc.HasValue)
+            prs = prs.Where(p => p.CreatedAt >= _runStartedUtc.Value).ToList();
+        return prs;
     }
 
     public async Task<IReadOnlyList<PlatformPullRequest>> ListAllAsync(CancellationToken ct = default)
@@ -85,11 +92,14 @@ public sealed class AdoPullRequestService : AdoHttpClientBase, IPullRequestServi
             "searchCriteria.status=completed&$top=200");
         var response = await GetAsync<AdoListResponse<AdoPullRequest>>(url, ct);
         // Filter to agent-created PRs (branch prefix "agent/") to avoid stale completed PRs
-        // from prior runs after mini-reset. Only AgentSquad PRs use this convention.
-        return response?.Value
+        var prs = response?.Value
             .Where(p => p.SourceBranch.StartsWith("refs/heads/agent/", StringComparison.OrdinalIgnoreCase))
             .Select(p => AdoModelMapper.ToPlatform(p, Organization, Project)).ToList()
             ?? new List<PlatformPullRequest>();
+        // Scope to current run
+        if (_runStartedUtc.HasValue)
+            prs = prs.Where(p => p.CreatedAt >= _runStartedUtc.Value).ToList();
+        return prs;
     }
 
     public async Task<IReadOnlyList<PlatformPullRequest>> ListForAgentAsync(

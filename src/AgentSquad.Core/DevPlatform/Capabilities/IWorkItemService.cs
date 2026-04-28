@@ -26,7 +26,7 @@ public interface IWorkItemService
     Task CloseAsync(int id, CancellationToken ct = default);
 
     /// <summary>
-    /// Permanently delete a work item. GitHub: GraphQL deletion. ADO: closes instead (no hard delete).
+    /// Permanently delete a work item. GitHub: GraphQL deletion. ADO: DELETE with destroy=true (falls back to close).
     /// Returns true if deleted/closed successfully.
     /// </summary>
     Task<bool> DeleteAsync(int id, CancellationToken ct = default);

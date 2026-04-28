@@ -16,19 +16,28 @@ public sealed class AdoWorkItemService : AdoHttpClientBase, IWorkItemService
 {
     private readonly ILogger<AdoWorkItemService> _logger;
     private readonly DevPlatformConfig _platformConfig;
+    private readonly DateTime? _runStartedUtc;
 
     public AdoWorkItemService(
         HttpClient http,
         IDevPlatformAuthProvider authProvider,
         IOptions<Configuration.AgentSquadConfig> config,
-        ILogger<AdoWorkItemService> logger)
+        ILogger<AdoWorkItemService> logger,
+        AgentSquad.Core.Persistence.AgentStateStore? stateStore = null)
         : base(http, authProvider, config, logger)
     {
         _logger = logger;
         _platformConfig = config.Value.DevPlatform ?? new DevPlatformConfig();
+        _runStartedUtc = stateStore?.RunStartedUtc;
     }
 
     private string DefaultWorkItemType => _platformConfig.AzureDevOps?.DefaultWorkItemType ?? "Task";
+
+    /// <summary>WIQL date clause to scope queries to the current run (excludes stale items from prior runs).</summary>
+    private string RunScopeDateClause =>
+        _runStartedUtc.HasValue
+            ? $" AND [System.CreatedDate] >= '{_runStartedUtc.Value:yyyy-MM-ddTHH:mm:ssZ}'"
+            : "";
 
     private static readonly MarkdownPipeline MarkdownPipeline = new MarkdownPipelineBuilder()
         .UseAdvancedExtensions()
@@ -81,7 +90,7 @@ public sealed class AdoWorkItemService : AdoHttpClientBase, IWorkItemService
     public async Task<IReadOnlyList<PlatformWorkItem>> ListOpenAsync(CancellationToken ct = default)
     {
         return await QueryWorkItemsAsync(
-            $"SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '{Project}' AND [System.State] <> 'Closed' AND [System.State] <> 'Removed' AND [System.State] <> 'Done' ORDER BY [System.CreatedDate] DESC",
+            $"SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '{Project}' AND [System.State] <> 'Closed' AND [System.State] <> 'Removed' AND [System.State] <> 'Done'{RunScopeDateClause} ORDER BY [System.CreatedDate] DESC",
             ct);
     }
 
@@ -96,7 +105,7 @@ public sealed class AdoWorkItemService : AdoHttpClientBase, IWorkItemService
         string agentName, CancellationToken ct = default)
     {
         return await QueryWorkItemsAsync(
-            $"SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '{Project}' AND [System.AssignedTo] CONTAINS '{agentName}' ORDER BY [System.CreatedDate] DESC",
+            $"SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '{Project}' AND [System.AssignedTo] CONTAINS '{agentName}'{RunScopeDateClause} ORDER BY [System.CreatedDate] DESC",
             ct);
     }
 
@@ -108,6 +117,7 @@ public sealed class AdoWorkItemService : AdoHttpClientBase, IWorkItemService
             wiql += " AND [System.State] <> 'Closed' AND [System.State] <> 'Removed' AND [System.State] <> 'Done'";
         else if (state == "closed")
             wiql += " AND ([System.State] = 'Closed' OR [System.State] = 'Removed' OR [System.State] = 'Done')";
+        wiql += RunScopeDateClause;
         wiql += " ORDER BY [System.CreatedDate] DESC";
 
         return await QueryWorkItemsAsync(wiql, ct);
