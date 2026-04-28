@@ -276,6 +276,9 @@ public class ProgramManagerAgent : AgentBase
             // Ensure TeamMembers.md exists with core agents
             await EnsureTeamMembersDocAsync(ct);
 
+            // Ensure design/reference files mentioned in project description exist in the repo
+            await EnsureDesignInputsAsync(ct);
+
             // Restore any previously-spawned engineers from TeamMembers.md
             await RestoreEngineersFromTeamMembersAsync(ct);
 
@@ -532,6 +535,153 @@ public class ProgramManagerAgent : AgentBase
         {
             Logger.LogWarning(ex, "Failed to ensure TeamMembers.md exists");
         }
+    }
+
+    /// <summary>
+    /// Scans the project description for referenced design/input files (e.g., HTML templates,
+    /// PNG mockups) and ensures they exist in the repository. Reads from the local filesystem
+    /// if available, so the team has all required design inputs to work from.
+    /// </summary>
+    private async Task EnsureDesignInputsAsync(CancellationToken ct)
+    {
+        try
+        {
+            var description = _config.Project.Description;
+            if (string.IsNullOrWhiteSpace(description))
+                return;
+
+            var referencedFiles = ParseDesignFileReferences(description);
+            if (referencedFiles.Count == 0)
+                return;
+
+            // Check which files already exist in the repo
+            IReadOnlyList<string> repoTree;
+            try
+            {
+                repoTree = await _repoContent.GetRepositoryTreeAsync(null, ct);
+            }
+            catch
+            {
+                repoTree = Array.Empty<string>();
+            }
+
+            var repoFileNames = new HashSet<string>(
+                repoTree.Select(p => Path.GetFileName(p)),
+                StringComparer.OrdinalIgnoreCase);
+
+            foreach (var (fileName, localPath) in referencedFiles)
+            {
+                if (repoFileNames.Contains(fileName))
+                {
+                    Logger.LogDebug("Design input {FileName} already in repo, skipping", fileName);
+                    continue;
+                }
+
+                // Try to read from local filesystem
+                var resolvedPath = localPath ?? fileName;
+                if (!Path.IsPathFullyQualified(resolvedPath))
+                {
+                    // Try common locations: working dir, solution root, sibling project dirs
+                    var solutionRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", ".."));
+                    var gitRoot = Path.GetFullPath(Path.Combine(solutionRoot, ".."));
+                    var candidates = new[]
+                    {
+                        Path.Combine(Environment.CurrentDirectory, resolvedPath),
+                        Path.Combine(AppContext.BaseDirectory, resolvedPath),
+                        Path.Combine(solutionRoot, resolvedPath),
+                    };
+
+                    // Also check sibling directories under the git root (other checked-out repos)
+                    var siblingCandidates = Directory.Exists(gitRoot)
+                        ? Directory.GetDirectories(gitRoot)
+                            .Select(d => Path.Combine(d, resolvedPath))
+                            .Where(File.Exists)
+                        : Enumerable.Empty<string>();
+
+                    resolvedPath = candidates.FirstOrDefault(File.Exists)
+                        ?? siblingCandidates.FirstOrDefault()
+                        ?? resolvedPath;
+                }
+
+                if (!File.Exists(resolvedPath))
+                {
+                    Logger.LogWarning(
+                        "Design input {FileName} referenced in project description but not found locally at {Path}",
+                        fileName, resolvedPath);
+                    continue;
+                }
+
+                // Determine if binary or text and commit to repo root
+                var extension = Path.GetExtension(fileName).ToLowerInvariant();
+                var isBinary = extension is ".png" or ".jpg" or ".jpeg" or ".gif" or ".bmp" or ".ico" or ".webp" or ".svg";
+
+                if (isBinary)
+                {
+                    var bytes = await File.ReadAllBytesAsync(resolvedPath, ct);
+                    await _repoContent.CommitBinaryFileAsync(
+                        fileName, bytes,
+                        $"Add design input: {fileName}",
+                        _config.Project.DefaultBranch, ct);
+                }
+                else
+                {
+                    var content = await File.ReadAllTextAsync(resolvedPath, ct);
+                    await _repoContent.CreateOrUpdateFileAsync(
+                        fileName, content,
+                        $"Add design input: {fileName}",
+                        null, ct);
+                }
+
+                Logger.LogInformation("Added design input {FileName} to repository from {Path}", fileName, resolvedPath);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to ensure design inputs exist in repo");
+        }
+    }
+
+    /// <summary>
+    /// Parses the project description for file references — filenames with extensions
+    /// and local file paths. Returns (repoFileName, localPath?) tuples.
+    /// </summary>
+    private static List<(string FileName, string? LocalPath)> ParseDesignFileReferences(string description)
+    {
+        var results = new List<(string, string?)>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // Match local file paths like C:/Pics/File.png or D:\Docs\design.html
+        var pathRegex = new System.Text.RegularExpressions.Regex(
+            @"[A-Za-z]:[/\\][\w./\\-]+\.\w{2,5}",
+            System.Text.RegularExpressions.RegexOptions.None);
+
+        foreach (System.Text.RegularExpressions.Match match in pathRegex.Matches(description))
+        {
+            var fullPath = match.Value.Replace('/', '\\');
+            var fileName = Path.GetFileName(fullPath);
+            if (!seen.Contains(fileName))
+            {
+                seen.Add(fileName);
+                results.Add((fileName, fullPath));
+            }
+        }
+
+        // Match standalone filenames with common design extensions (html, htm, png, jpg, svg, pdf, figma)
+        var fileNameRegex = new System.Text.RegularExpressions.Regex(
+            @"\b([\w.-]+\.(?:html?|png|jpe?g|svg|gif|pdf|figma|sketch|xd|css))\b",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        foreach (System.Text.RegularExpressions.Match match in fileNameRegex.Matches(description))
+        {
+            var fileName = match.Groups[1].Value;
+            if (!seen.Contains(fileName))
+            {
+                seen.Add(fileName);
+                results.Add((fileName, null));
+            }
+        }
+
+        return results;
     }
 
     /// <summary>
