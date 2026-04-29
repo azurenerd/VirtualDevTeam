@@ -13,7 +13,10 @@ namespace AgentSquad.Core.DevPlatform.Providers.AzureDevOps;
 public sealed class AdoPullRequestService : AdoHttpClientBase, IPullRequestService
 {
     private readonly ILogger<AdoPullRequestService> _logger;
-    private readonly DateTime? _runStartedUtc;
+    private readonly AgentSquad.Core.Persistence.AgentStateStore? _stateStore;
+
+    // Read lazily — RunStartedUtc is null at DI construction, set later when wizard starts a run
+    private DateTime? _runStartedUtc => _stateStore?.RunStartedUtc;
 
     public AdoPullRequestService(
         HttpClient http,
@@ -24,7 +27,7 @@ public sealed class AdoPullRequestService : AdoHttpClientBase, IPullRequestServi
         : base(http, authProvider, config, logger)
     {
         _logger = logger;
-        _runStartedUtc = stateStore?.RunStartedUtc;
+        _stateStore = stateStore;
     }
 
     // ADO PR descriptions have a hard 4000-character limit; list endpoints truncate to 400.

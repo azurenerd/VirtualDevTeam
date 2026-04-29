@@ -17,7 +17,7 @@ public sealed class AdoWorkItemService : AdoHttpClientBase, IWorkItemService
     private readonly ILogger<AdoWorkItemService> _logger;
     private readonly DevPlatformConfig _platformConfig;
     private readonly Configuration.AgentSquadConfig _config;
-    private readonly DateTime? _runStartedUtc;
+    private readonly AgentSquad.Core.Persistence.AgentStateStore? _stateStore;
 
     public AdoWorkItemService(
         HttpClient http,
@@ -30,8 +30,11 @@ public sealed class AdoWorkItemService : AdoHttpClientBase, IWorkItemService
         _logger = logger;
         _platformConfig = config.Value.DevPlatform ?? new DevPlatformConfig();
         _config = config.Value;
-        _runStartedUtc = stateStore?.RunStartedUtc;
+        _stateStore = stateStore;
     }
+
+    // Read lazily — RunStartedUtc is null at DI construction, set later when wizard starts a run
+    private DateTime? _runStartedUtc => _stateStore?.RunStartedUtc;
 
     private string DefaultWorkItemType => _platformConfig.AzureDevOps?.DefaultWorkItemType ?? "Task";
 
