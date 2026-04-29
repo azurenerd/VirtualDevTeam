@@ -2157,6 +2157,7 @@ public class ProgramManagerAgent : AgentBase
 
                 // Create User Story Issues if not already done
                 await CreateUserStoryIssuesAsync(ct);
+                _taskTracker.CompleteStep(specStepId);
                 return;
             }
 

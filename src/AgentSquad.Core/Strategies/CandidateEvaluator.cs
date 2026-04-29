@@ -75,6 +75,29 @@ public class CandidateEvaluator
         {
             winner = survivors[0];
             tieBreak = "sole-survivor";
+
+            // Still score the sole survivor for experiment tracking and dashboard display
+            if (_judge is not null)
+            {
+                var ecfg = _cfg.CurrentValue;
+                var sanitized = survivors.ToDictionary(
+                    c => c.StrategyId,
+                    c => JudgeInputSanitizer.SanitizePatch(c.Patch, ecfg.Evaluator.MaxJudgePatchChars));
+                var judgeResult = await _judge.ScoreAsync(new JudgeInput
+                {
+                    TaskId = task.TaskId,
+                    TaskTitle = task.TaskTitle,
+                    TaskDescription = task.TaskDescription,
+                    CandidatePatches = sanitized,
+                    MaxPatchChars = ecfg.Evaluator.MaxJudgePatchChars,
+                }, ct);
+
+                if (judgeResult.Scores.TryGetValue(winner.StrategyId, out var score))
+                {
+                    winner = winner with { Score = score };
+                    results[results.IndexOf(survivors[0])] = winner;
+                }
+            }
         }
         else if (_judge is not null)
         {

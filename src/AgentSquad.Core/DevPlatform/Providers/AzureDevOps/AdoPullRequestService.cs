@@ -413,6 +413,7 @@ public sealed class AdoPullRequestService : AdoHttpClientBase, IPullRequestServi
     /// <summary>
     /// Post (or update) the overflow comment containing the full PR body.
     /// The comment is prefixed with a marker so we can find it on read.
+    /// If an overflow comment already exists, updates it in place to avoid duplicates.
     /// </summary>
     private async Task PostOverflowCommentAsync(int prId, string fullBody, CancellationToken ct)
     {
@@ -421,6 +422,28 @@ public sealed class AdoPullRequestService : AdoHttpClientBase, IPullRequestServi
 
         var threadsUrl = BuildUrl(
             $"{Project}/_apis/git/repositories/{Repository}/pullrequests/{prId}/threads");
+
+        // Check if an overflow comment already exists
+        var existingThreads = await GetAsync<AdoListResponse<AdoPrThread>>(threadsUrl, ct);
+        if (existingThreads?.Value is not null)
+        {
+            foreach (var thread in existingThreads.Value)
+            {
+                var first = thread.Comments.FirstOrDefault(c => c.CommentType != "system");
+                if (first?.Content is not null && first.Content.StartsWith("<!-- pr-overflow-body -->"))
+                {
+                    // Update existing overflow comment instead of creating a duplicate
+                    var updateUrl = BuildUrl(
+                        $"{Project}/_apis/git/repositories/{Repository}/pullrequests/{prId}/threads/{thread.Id}/comments/{first.Id}");
+                    await PatchAsync<object>(updateUrl, new { content = commentContent }, ct);
+                    _logger.LogDebug("Updated existing overflow comment on PR #{PrId} (thread {ThreadId}, {Len} chars)",
+                        prId, thread.Id, fullBody.Length);
+                    return;
+                }
+            }
+        }
+
+        // No existing overflow comment — create a new one
         var payload = new
         {
             comments = new[]
