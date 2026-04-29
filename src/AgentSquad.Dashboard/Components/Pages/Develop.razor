@@ -11,6 +11,7 @@
 @inject IConfigurationService ConfigService
 @inject NavigationManager Navigation
 @inject ILogger<Develop> Logger
+@inject IServiceProvider ServiceProvider
 @rendermode InteractiveServer
 
 <PageTitle>Develop — AgentSquad</PageTitle>
@@ -1083,7 +1084,19 @@ else
         try
         {
             await SettingsService.SaveAsync(_settings);
-            // The /api/develop/start endpoint validates and returns started=true
+
+            // Start the project run via RunCoordinator
+            var coordinator = ServiceProvider.GetService<AgentSquad.Orchestrator.RunCoordinator>();
+            if (coordinator is not null)
+            {
+                await coordinator.StartProjectAsync();
+                _ = Task.Run(async () =>
+                {
+                    try { await coordinator.SpawnAgentsForRunAsync(); }
+                    catch (Exception ex) { Logger.LogError(ex, "Failed to spawn agents after start"); }
+                });
+            }
+
             _startSuccess = true;
             Logger.LogInformation("Build started for: {Description}", _settings.Description[..Math.Min(80, _settings.Description.Length)]);
 
