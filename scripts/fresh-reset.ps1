@@ -17,7 +17,7 @@
       8. Close all open GitHub PRs (via gh CLI or API)
 
 .PARAMETER GitHubRepo
-    The GitHub repo in owner/repo format. Default: azurenerd/ReportingDashboard
+    The GitHub repo in owner/repo format. If not provided, reads from appsettings.json.
 
 .PARAMETER GitHubToken
     GitHub PAT for API access. If not provided, reads from dotnet user-secrets
@@ -35,7 +35,7 @@
 #>
 
 param(
-    [string]$GitHubRepo = "azurenerd/ReportingDashboard",
+    [string]$GitHubRepo = "",
     [string]$GitHubToken = "",
     [string]$PreserveFiles = "OriginalDesignConcept.html",
     [string]$WorkspaceRoot = "C:\Agents",
@@ -47,6 +47,19 @@ param(
 if (-not $RunnerDir) {
     $scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
     $RunnerDir = Join-Path (Join-Path (Join-Path $scriptDir "..") "src") "AgentSquad.Runner"
+}
+
+# Read GitHubRepo from appsettings.json if not explicitly provided
+if (-not $GitHubRepo) {
+    $settingsPath = Join-Path $RunnerDir "appsettings.json"
+    if (Test-Path $settingsPath) {
+        $settings = Get-Content $settingsPath -Raw | ConvertFrom-Json
+        $GitHubRepo = $settings.AgentSquad.Project.GitHubRepo
+    }
+    if (-not $GitHubRepo) {
+        Write-Host "  ⚠ No GitHubRepo found in appsettings.json and none provided via parameter" -ForegroundColor Red
+        exit 1
+    }
 }
 
 $ErrorActionPreference = "Continue"
