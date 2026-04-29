@@ -454,8 +454,11 @@ public class TestEngineerAgent : AgentBase
         {
             if (ct.IsCancellationRequested) break;
 
-            // Gate: must have 'architect-approved' label (Phase 1 complete — Architect reviewed)
-            if (!pr.Labels.Contains(PullRequestWorkflow.Labels.ArchitectApproved, StringComparer.OrdinalIgnoreCase))
+            // Gate: must have been reviewed — either architect-approved or pm-approved label
+            // PM approval implies the review cycle is complete even if architect didn't add its label
+            var hasArchitectApproved = pr.Labels.Contains(PullRequestWorkflow.Labels.ArchitectApproved, StringComparer.OrdinalIgnoreCase);
+            var hasPmApproved = pr.Labels.Contains(PullRequestWorkflow.Labels.PmApproved, StringComparer.OrdinalIgnoreCase);
+            if (!hasArchitectApproved && !hasPmApproved)
                 continue;
 
             // Gate: PE must have finished all rework. Check that the last PE review comment
