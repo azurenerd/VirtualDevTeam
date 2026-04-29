@@ -96,7 +96,7 @@ public sealed class AdoRepositoryContentService : AdoHttpClientBase, IRepository
         };
 
         var pushUrl = BuildUrl($"{Project}/_apis/git/repositories/{Repository}/pushes");
-        await PostAsync<object>(pushUrl, push, ct);
+        await PushWithConflictRetryAsync(push, branch, ct);
         _logger.LogInformation("Committed file {Path} to branch {Branch}", normalizedPath, branch);
     }
 
@@ -130,7 +130,7 @@ public sealed class AdoRepositoryContentService : AdoHttpClientBase, IRepository
         };
 
         var pushUrl = BuildUrl($"{Project}/_apis/git/repositories/{Repository}/pushes");
-        await PostAsync<object>(pushUrl, push, ct);
+        await PushWithConflictRetryAsync(push, branch, ct);
     }
 
     public async Task BatchCommitFilesAsync(
@@ -160,7 +160,7 @@ public sealed class AdoRepositoryContentService : AdoHttpClientBase, IRepository
         };
 
         var pushUrl = BuildUrl($"{Project}/_apis/git/repositories/{Repository}/pushes");
-        await PostAsync<object>(pushUrl, push, ct);
+        await PushWithConflictRetryAsync(push, branch, ct);
         _logger.LogInformation("Batch committed {Count} files to branch {Branch}", files.Count, branch);
     }
 
@@ -200,7 +200,7 @@ public sealed class AdoRepositoryContentService : AdoHttpClientBase, IRepository
         };
 
         var pushUrl = BuildUrl($"{Project}/_apis/git/repositories/{Repository}/pushes");
-        await PostAsync<object>(pushUrl, push, ct);
+        await PushWithConflictRetryAsync(push, branch, ct);
 
         // Return the raw file URL
         return $"https://dev.azure.com/{Organization}/{Project}/_apis/git/repositories/{Repository}/items?path={Uri.EscapeDataString(normalizedPath)}&versionDescriptor.version={Uri.EscapeDataString(branch)}&versionDescriptor.versionType=branch&api-version=7.1";
@@ -231,6 +231,45 @@ public sealed class AdoRepositoryContentService : AdoHttpClientBase, IRepository
             .Where(i => i.GitObjectType == "blob")
             .Select(i => i.Path)
             .ToList() ?? new List<string>();
+    }
+
+    /// <summary>
+    /// Push with automatic retry on 409 Conflict (stale oldObjectId).
+    /// Re-fetches the latest branch ref and retries the push up to 3 times.
+    /// </summary>
+    private async Task PushWithConflictRetryAsync(
+        AdoGitPushRequest push, string branch, CancellationToken ct, int maxRetries = 3)
+    {
+        var pushUrl = BuildUrl($"{Project}/_apis/git/repositories/{Repository}/pushes");
+
+        for (int attempt = 0; attempt <= maxRetries; attempt++)
+        {
+            try
+            {
+                await PostAsync<object>(pushUrl, push, ct);
+                return; // Success
+            }
+            catch (HttpRequestException ex) when (
+                attempt < maxRetries &&
+                (ex.StatusCode == System.Net.HttpStatusCode.Conflict || ex.Message.Contains("409")))
+            {
+                _logger.LogWarning(
+                    "Push to branch {Branch} got 409 Conflict (attempt {Attempt}/{Max}), re-fetching ref and retrying",
+                    branch, attempt + 1, maxRetries + 1);
+
+                // Small backoff before retry
+                await Task.Delay(TimeSpan.FromMilliseconds(500 * (attempt + 1)), ct);
+
+                // Re-fetch the latest ref
+                var refUrl = BuildUrl($"{Project}/_apis/git/repositories/{Repository}/refs", $"filter=heads/{branch}");
+                var refs = await GetAsync<AdoListResponse<AdoGitRefResponse>>(refUrl, ct);
+                var newObjectId = refs?.Value.FirstOrDefault()?.ObjectId ?? new string('0', 40);
+
+                // Update the push request with the new objectId
+                if (push.RefUpdates.Count > 0)
+                    push.RefUpdates[0].OldObjectId = newObjectId;
+            }
+        }
     }
 
     private static string NormalizePath(string path)

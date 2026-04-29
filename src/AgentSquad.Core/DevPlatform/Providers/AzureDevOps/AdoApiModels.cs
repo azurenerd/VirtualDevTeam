@@ -137,7 +137,7 @@ internal record AdoGitPushRequest
 internal record AdoGitRefUpdate
 {
     public string Name { get; init; } = "";
-    public string OldObjectId { get; init; } = "";
+    public string OldObjectId { get; set; } = "";
 }
 
 internal record AdoGitCommit
