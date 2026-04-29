@@ -482,7 +482,7 @@ public class ProgramManagerAgent : AgentBase
     {
         try
         {
-            var content = await _repoContent.GetFileContentAsync("TeamMembers.md", null, ct);
+            var content = await _projectFiles.GetTeamMembersAsync(ct);
 
             // Get all core agents that should be listed
             var coreAgents = _registry.GetAllAgents()
@@ -490,9 +490,12 @@ public class ProgramManagerAgent : AgentBase
                     or AgentRole.Architect or AgentRole.SoftwareEngineer or AgentRole.TestEngineer)
                 .ToList();
 
-            if (content is not null)
+            // Check if content is the empty template (no agents listed yet)
+            var isEmpty = !coreAgents.Any(a => content.Contains(a.Identity.DisplayName, StringComparison.OrdinalIgnoreCase));
+
+            if (!isEmpty)
             {
-                // Doc exists — add any core agents that are missing
+                // Doc exists with agents — add any core agents that are missing
                 var updated = content;
                 foreach (var agent in coreAgents)
                 {
@@ -507,8 +510,8 @@ public class ProgramManagerAgent : AgentBase
 
                 if (updated != content)
                 {
-                    await _repoContent.CreateOrUpdateFileAsync("TeamMembers.md", updated,
-                        "Add missing core agents to TeamMembers.md", null, ct);
+                    await _projectFiles.SaveFileAsync("TeamMembers.md", updated,
+                        "Add missing core agents to TeamMembers.md", ct);
                 }
                 return;
             }
@@ -529,7 +532,7 @@ public class ProgramManagerAgent : AgentBase
 
             doc += "\n";
 
-            await _repoContent.CreateOrUpdateFileAsync("TeamMembers.md", doc, "Initialize TeamMembers.md with core agents", null, ct);
+            await _projectFiles.SaveFileAsync("TeamMembers.md", doc, "Initialize TeamMembers.md with core agents", ct);
             Logger.LogInformation("Created TeamMembers.md with {Count} core agents", coreAgents.Count);
         }
         catch (Exception ex)
@@ -2816,6 +2819,13 @@ public class ProgramManagerAgent : AgentBase
             UpdateStatus(AgentStatus.Working, "Creating User Story Issues from PMSpec");
             LogActivity("planning", "📋 Reading PMSpec.md to extract user stories");
 
+            // Single-issue mode: create one Enhancement issue with doc links instead of N stories
+            if (_config.Limits.SingleIssueMode)
+            {
+                await CreateSingleEnhancementIssueAsync(ct);
+                return;
+            }
+
             var readSpecStepId = _taskTracker.BeginStep(Identity.Id, "pm-stories", "Read PMSpec",
                 "Reading PMSpec.md to extract user stories", Identity.ModelTier);
 
@@ -2947,6 +2957,111 @@ public class ProgramManagerAgent : AgentBase
             Logger.LogError(ex, "Failed to create User Story Issues from PMSpec");
             RecordError($"Issue creation failed: {ex.Message}", Microsoft.Extensions.Logging.LogLevel.Error, ex);
         }
+    }
+
+    /// <summary>
+    /// Single-issue mode: creates one Enhancement issue with an executive summary and links
+    /// to the agent-generated documents (PMSpec, Architecture, Research) instead of N user stories.
+    /// The SE agent reads this single issue and resolves the doc links for engineering planning.
+    /// </summary>
+    private async Task CreateSingleEnhancementIssueAsync(CancellationToken ct)
+    {
+        var stepId = _taskTracker.BeginStep(Identity.Id, "pm-single-issue", "Create single Enhancement issue",
+            "Creating single issue with doc links", Identity.ModelTier);
+        LogActivity("planning", "📋 Creating single Enhancement issue with document references");
+
+        var pmSpec = await _projectFiles.GetPMSpecAsync(ct);
+        if (string.IsNullOrWhiteSpace(pmSpec) || pmSpec.Contains("No PM specification has been created yet"))
+        {
+            Logger.LogWarning("PMSpec.md has no content, cannot create Enhancement issue");
+            _taskTracker.FailStep(stepId, "PMSpec.md has no content");
+            return;
+        }
+
+        // Extract executive summary (first ~800 chars or up to first ## heading after intro)
+        var execSummary = ExtractExecutiveSummary(pmSpec);
+
+        var projectName = _config.Project.Name;
+        if (string.IsNullOrWhiteSpace(projectName))
+            projectName = _config.Project.Description?.Split('\n').FirstOrDefault()?.Trim() ?? "Project";
+
+        var docsBasePath = _projectFiles.ArtifactBasePath;
+        var title = $"Enhancement: {projectName}";
+
+        var body = $"""
+            ## Enhancement: {projectName}
+
+            {execSummary}
+
+            ### Referenced Documents
+            - **PM Specification**: [{docsBasePath}/PMSpec.md]({docsBasePath}/PMSpec.md) — Full business requirements and user stories
+            - **Architecture Design**: [{docsBasePath}/Architecture.md]({docsBasePath}/Architecture.md) — Technical architecture and design decisions
+            - **Research**: [{docsBasePath}/Research.md]({docsBasePath}/Research.md) — Technology research and analysis
+
+            ### Engineering Notes
+            This issue represents the complete project scope. Engineering tasks will be created as sub-items.
+            Refer to the linked documents above for full specifications and requirements.
+
+            ---
+            _Created by {Identity.DisplayName} — Single Issue Mode_
+            """;
+
+        var validatedBody = IssueBodyValidator.ValidateAndClean(body, title, Logger);
+        if (validatedBody is null)
+        {
+            Logger.LogWarning("Single enhancement issue body failed validation");
+            _taskTracker.FailStep(stepId, "Issue body failed validation");
+            return;
+        }
+
+        // Check for existing issue
+        var existingIssue = await _issueWorkflow.FindExistingIssueAsync(title, ct);
+        if (existingIssue is not null)
+        {
+            Logger.LogInformation("Single enhancement issue already exists as #{Number}", existingIssue.Number);
+        }
+        else
+        {
+            var issue = await _workItemService!.CreateAsync(
+                title, validatedBody,
+                [IssueWorkflow.Labels.Enhancement],
+                ct);
+            Logger.LogInformation("Created single Enhancement issue #{Number}: {Title}", issue.Number, title);
+        }
+
+        _userStoryIssuesCreated = true;
+        _taskTracker.CompleteStep(stepId);
+        LogActivity("task", $"📌 Created single Enhancement issue for {projectName}");
+
+        // Notify team
+        await _messageBus.PublishAsync(new PlanningCompleteMessage
+        {
+            FromAgentId = Identity.Id,
+            ToAgentId = "*",
+            MessageType = "PlanningComplete",
+            IssueCount = 1
+        }, ct);
+
+        UpdateStatus(AgentStatus.Idle, "Created single Enhancement issue");
+    }
+
+    /// <summary>
+    /// Extract the first ~800 characters of the PMSpec as an executive summary,
+    /// trimming at a paragraph boundary.
+    /// </summary>
+    private static string ExtractExecutiveSummary(string pmSpec)
+    {
+        const int maxLength = 800;
+        if (pmSpec.Length <= maxLength) return pmSpec;
+
+        // Try to cut at a paragraph boundary
+        var cutoff = pmSpec.LastIndexOf("\n\n", maxLength, StringComparison.Ordinal);
+        if (cutoff < maxLength / 2)
+            cutoff = pmSpec.LastIndexOf('\n', maxLength);
+        if (cutoff < maxLength / 2)
+            cutoff = maxLength;
+
+        return pmSpec[..cutoff].TrimEnd() + "\n\n> _See the full PM Specification for complete details._";
     }
 
     /// <summary>

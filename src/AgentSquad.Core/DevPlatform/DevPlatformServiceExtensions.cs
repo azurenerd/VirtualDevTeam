@@ -145,6 +145,7 @@ public static class DevPlatformServiceExtensions
 
         // Cross-cutting services that use capability interfaces
         services.AddSingleton<MergeCloseoutService>();
+        services.AddSingleton<IDocumentReferenceResolver, DocumentReferenceResolver>();
 
         return services;
     }

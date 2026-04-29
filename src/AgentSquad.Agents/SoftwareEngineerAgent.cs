@@ -47,6 +47,9 @@ public class SoftwareEngineerAgent : EngineerAgentBase
     // Platform abstraction for post-merge close-out (works for both GitHub and ADO)
     private readonly MergeCloseoutService? _mergeCloseout;
 
+    // Document reference resolver for single-issue mode context enrichment
+    private readonly IDocumentReferenceResolver? _docResolver;
+
     // Strategy Framework (Phase 1) — optional, opt-in via StrategyFrameworkConfig.Enabled.
     private readonly StrategyOrchestrator? _strategyOrchestrator;
     private readonly WinnerApplyService? _winnerApply;
@@ -164,7 +167,8 @@ public class SoftwareEngineerAgent : EngineerAgentBase
         IWorkItemService? workItemService = null,
         IRepositoryContentService? repoContent = null,
         IReviewService? reviewService = null,
-        IBranchService? branchService = null)
+        IBranchService? branchService = null,
+        IDocumentReferenceResolver? docResolver = null)
         : base(identity, messageBus, prWorkflow, issueWorkflow,
                projectFiles, modelRegistry, stateStore, config.Value, memoryStore, gateCheck, logger,
                promptService, roleContextProvider, buildRunner, testRunner, metrics, playwrightRunner, decisionGate, taskTracker,
@@ -183,6 +187,7 @@ public class SoftwareEngineerAgent : EngineerAgentBase
         _strategyConfig = strategyConfig;
         _strategyStepBridge = strategyStepBridge;
         _mergeCloseout = mergeCloseout;
+        _docResolver = docResolver;
     }
 
     protected override string GetRoleDisplayName() => "Software Engineer";
@@ -713,6 +718,44 @@ public class SoftwareEngineerAgent : EngineerAgentBase
 
         var issuesSummary = string.Join("\n\n", enhancementIssues.Select(i =>
             $"### Issue #{i.Number}: {i.Title}\n{i.Body}"));
+
+        // Single-issue mode enrichment: resolve doc links in the issue body
+        // This allows the SE to get full PMSpec/Architecture content even when
+        // the issue body only contains summary + links to the actual docs
+        if (Config.Limits.SingleIssueMode && _docResolver is not null && enhancementIssues.Count == 1)
+        {
+            try
+            {
+                var issue = enhancementIssues[0];
+                var resolveContext = new DocumentResolutionContext(Config.Project.DefaultBranch);
+                var resolvedDocs = await _docResolver.ResolveReferencesAsync(issue.Body ?? "", resolveContext, ct);
+
+                if (resolvedDocs.Count > 0)
+                {
+                    Logger.LogInformation("Resolved {Count} document references from single Enhancement issue #{Number}",
+                        resolvedDocs.Count, issue.Number);
+
+                    foreach (var doc in resolvedDocs)
+                    {
+                        // Enrich architecture and PMSpec if not already loaded with meaningful content
+                        if (doc.Path.EndsWith("Architecture.md", StringComparison.OrdinalIgnoreCase)
+                            && (architectureDoc.Contains("No architecture document") || architectureDoc.Length < 100))
+                        {
+                            architectureDoc = doc.Content;
+                        }
+                        else if (doc.Path.EndsWith("PMSpec.md", StringComparison.OrdinalIgnoreCase)
+                            && (pmSpec.Contains("No PM specification") || pmSpec.Length < 100))
+                        {
+                            pmSpec = doc.Content;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex, "Document reference resolution failed (non-fatal), continuing with direct file reads");
+            }
+        }
 
         // Fetch repo structure so PE can include file path guidance in tasks
         var repoStructure = await GetRepoStructureForContextAsync(ct);

@@ -18,6 +18,7 @@ public class RunCoordinator
     private readonly WorkflowStateMachine _workflow;
     private readonly AgentStateStore _stateStore;
     private readonly IGateCheckService _gateCheck;
+    private readonly ProjectFileManager _fileManager;
     private readonly ILogger<RunCoordinator> _logger;
     private readonly AgentSquadConfig _config;
 
@@ -33,6 +34,7 @@ public class RunCoordinator
         WorkflowStateMachine workflow,
         AgentStateStore stateStore,
         IGateCheckService gateCheck,
+        ProjectFileManager fileManager,
         ILogger<RunCoordinator> logger,
         IOptions<AgentSquadConfig> config)
     {
@@ -41,6 +43,7 @@ public class RunCoordinator
         _workflow = workflow ?? throw new ArgumentNullException(nameof(workflow));
         _stateStore = stateStore ?? throw new ArgumentNullException(nameof(stateStore));
         _gateCheck = gateCheck ?? throw new ArgumentNullException(nameof(gateCheck));
+        _fileManager = fileManager ?? throw new ArgumentNullException(nameof(fileManager));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _config = config?.Value ?? throw new ArgumentNullException(nameof(config));
     }
@@ -101,9 +104,12 @@ public class RunCoordinator
             _activeProfile = CreateProfile(savedRun);
         }
 
+        // Sync the file manager's artifact path with the recovered profile
+        _fileManager.ArtifactBasePath = _activeProfile!.ArtifactBasePath;
+
         _logger.LogInformation(
-            "Recovered {Mode} run {RunId} in status {Status} (workflow recovered: {WfRecovered})",
-            savedRun.Mode, savedRun.RunId, savedRun.Status, workflowRecovered);
+            "Recovered {Mode} run {RunId} in status {Status} (workflow recovered: {WfRecovered}, docs path: {DocsPath})",
+            savedRun.Mode, savedRun.RunId, savedRun.Status, workflowRecovered, _activeProfile.ArtifactBasePath);
 
         return savedRun.Status == RunStatus.Running
             ? RecoveryResult.ResumeImmediately
@@ -134,7 +140,12 @@ public class RunCoordinator
             StartedAt = DateTime.UtcNow
         };
 
-        var profile = new ProjectWorkflowProfile(_config.Limits.SinglePRMode);
+        // Run scope: use ParentWorkItemId if set, otherwise first 8 chars of RunId
+        var runScope = _config.Project.ParentWorkItemId?.ToString() ?? run.RunId[..8];
+        var profile = new ProjectWorkflowProfile(
+            _config.Limits.SinglePRMode,
+            _config.Project.DocsFolderPath,
+            runScope);
 
         // Clear any stale state from a previous run and set the new run ID
         await _stateStore.ClearAllCheckpointsAsync(ct);
@@ -149,7 +160,11 @@ public class RunCoordinator
             _runCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         }
 
-        _logger.LogInformation("Started Project run {RunId} for {Repo}", run.RunId, run.Repo);
+        // Set the artifact base path so all agent doc reads/writes go to the scoped folder
+        _fileManager.ArtifactBasePath = profile.ArtifactBasePath;
+
+        _logger.LogInformation("Started Project run {RunId} for {Repo} (docs path: {DocsPath})",
+            run.RunId, run.Repo, profile.ArtifactBasePath);
         return run;
         }
         finally
@@ -209,8 +224,11 @@ public class RunCoordinator
                 _runCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             }
 
-            _logger.LogInformation("Started Feature run {RunId} for feature '{Title}' ({FeatureId})",
-                run.RunId, feature.Title, featureId);
+            // Feature runs use their own artifact path
+            _fileManager.ArtifactBasePath = profile.ArtifactBasePath;
+
+            _logger.LogInformation("Started Feature run {RunId} for feature '{Title}' ({FeatureId}), docs path: {DocsPath}",
+                run.RunId, feature.Title, featureId, profile.ArtifactBasePath);
             return run;
         }
         finally
@@ -468,6 +486,10 @@ public class RunCoordinator
                 run.FeatureId, run.RunId);
         }
 
-        return new ProjectWorkflowProfile(_config.Limits.SinglePRMode);
+        var runScope = _config.Project.ParentWorkItemId?.ToString() ?? run.RunId[..Math.Min(8, run.RunId.Length)];
+        return new ProjectWorkflowProfile(
+            _config.Limits.SinglePRMode,
+            _config.Project.DocsFolderPath,
+            runScope);
     }
 }

@@ -96,6 +96,35 @@ else
                                placeholder="e.g., .NET 8 Blazor, React + Node.js"
                                @bind="_settings.TechStack" @bind:event="oninput" />
                     </div>
+
+                    <div class="config-field">
+                        <label title="Folder in the repository where agent-generated documents (PMSpec, Architecture, Research) are stored.">
+                            Agent Docs Folder <span style="color:var(--text-muted, #616161);">(optional)</span>
+                            <span class="wizard-tooltip" title="Folder in the repository where agent-generated documents (PMSpec, Architecture, Research) are stored. A run-specific subfolder is created automatically.">ⓘ</span>
+                        </label>
+                        <input type="text" class="config-input"
+                               placeholder="AgentDocs"
+                               @bind="_settings.DocsFolderPath" @bind:event="oninput" />
+                    </div>
+
+                    <div class="config-field">
+                        <label title="Controls how the PM creates work items from the spec.">
+                            PM Issue Creation
+                            <span class="wizard-tooltip" title="Single Issue creates one Enhancement with links to docs. Detailed User Stories creates individual issues per story.">ⓘ</span>
+                        </label>
+                        <div class="wizard-radio-group">
+                            <label class="wizard-radio-label">
+                                <input type="radio" name="issueMode" checked="@(!_settings.SingleIssueMode)"
+                                       @onchange='() => _settings.SingleIssueMode = false' />
+                                <span>📝 Detailed User Stories</span>
+                            </label>
+                            <label class="wizard-radio-label">
+                                <input type="radio" name="issueMode" checked="@(_settings.SingleIssueMode)"
+                                       @onchange='() => _settings.SingleIssueMode = true' />
+                                <span>📌 Single Issue with Doc Links</span>
+                            </label>
+                        </div>
+                    </div>
                 </div>
             </div>
         }
@@ -505,6 +534,14 @@ else
                             <div class="wizard-summary-row">
                                 <span class="wizard-summary-label">Tech Stack</span>
                                 <span class="wizard-summary-value">@(string.IsNullOrWhiteSpace(_settings.TechStack) ? "AI will choose" : _settings.TechStack)</span>
+                            </div>
+                            <div class="wizard-summary-row">
+                                <span class="wizard-summary-label">Docs Folder</span>
+                                <span class="wizard-summary-value">@(string.IsNullOrWhiteSpace(_settings.DocsFolderPath) ? "AgentDocs" : _settings.DocsFolderPath)</span>
+                            </div>
+                            <div class="wizard-summary-row">
+                                <span class="wizard-summary-label">PM Issue Mode</span>
+                                <span class="wizard-summary-value">@(_settings.SingleIssueMode ? "📌 Single Issue" : "📝 Detailed User Stories")</span>
                             </div>
                         </div>
 

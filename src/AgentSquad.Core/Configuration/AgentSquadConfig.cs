@@ -90,6 +90,13 @@ public class ProjectConfig
     /// are linked as children under this parent (System.LinkTypes.Hierarchy-Reverse).
     /// </summary>
     public int? ParentWorkItemId { get; set; }
+
+    /// <summary>
+    /// Base folder for agent-generated documents (Research.md, PMSpec.md, Architecture.md, etc.).
+    /// Combined with a run-scope subfolder to produce paths like "AgentDocs/101/PMSpec.md".
+    /// Default: "AgentDocs".
+    /// </summary>
+    public string DocsFolderPath { get; set; } = "AgentDocs";
 }
 
 public class ModelConfig
@@ -290,6 +297,14 @@ public class LimitsConfig
     /// When false (default), the existing fragment-and-parallelize planning is used.
     /// </summary>
     public bool SinglePRMode { get; set; } = false;
+
+    /// <summary>
+    /// When true, the PM creates a single Enhancement issue with links to the agent-generated
+    /// documents (PMSpec, Architecture, Research) instead of breaking out individual user story
+    /// issues. The SE reads doc links from the single issue to get full context for planning.
+    /// When false (default), the PM creates N separate user story issues from the PMSpec.
+    /// </summary>
+    public bool SingleIssueMode { get; set; } = false;
 }
 
 /// <summary>

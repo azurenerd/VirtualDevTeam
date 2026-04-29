@@ -7,6 +7,8 @@ namespace AgentSquad.Core.Persistence;
 
 /// <summary>
 /// Manages the shared Markdown files in the repo: TeamMembers.md, EngineeringPlan.md, Architecture.md, Research.md, PMSpec.md.
+/// Paths are resolved relative to <see cref="ArtifactBasePath"/> (e.g., "AgentDocs/101/PMSpec.md").
+/// When reading, falls back to the repo root if the scoped path is not found (legacy compatibility).
 /// </summary>
 public class ProjectFileManager
 {
@@ -15,12 +17,18 @@ public class ProjectFileManager
     private readonly string? _branch;
     private readonly HashSet<string> _warnedMissingAgents = new(StringComparer.OrdinalIgnoreCase);
 
-    private const string TeamMembersPath = "TeamMembers.md";
-    private const string EngineeringPlanPath = "EngineeringPlan.md";
-    private const string ArchitecturePath = "Architecture.md";
-    private const string ResearchPath = "Research.md";
-    private const string PMSpecPath = "PMSpec.md";
-    private const string TeamCompositionPath = "TeamComposition.md";
+    private const string TeamMembersFile = "TeamMembers.md";
+    private const string EngineeringPlanFile = "EngineeringPlan.md";
+    private const string ArchitectureFile = "Architecture.md";
+    private const string ResearchFile = "Research.md";
+    private const string PMSpecFile = "PMSpec.md";
+    private const string TeamCompositionFile = "TeamComposition.md";
+
+    /// <summary>
+    /// Base path prefix for all agent-generated documents (e.g., "AgentDocs/101").
+    /// Set by RunCoordinator when a run starts. Empty string means repo root (legacy behavior).
+    /// </summary>
+    public string ArtifactBasePath { get; set; } = "";
 
     public ProjectFileManager(
         IRepositoryContentService repoContent,
@@ -32,6 +40,26 @@ public class ProjectFileManager
         _branch = branch;
     }
 
+    /// <summary>Resolve a doc filename to its full path under <see cref="ArtifactBasePath"/>.</summary>
+    private string ResolvePath(string fileName) =>
+        string.IsNullOrEmpty(ArtifactBasePath) ? fileName : $"{ArtifactBasePath}/{fileName}";
+
+    /// <summary>
+    /// Read a file from the scoped path; if not found, fall back to repo root (legacy repos).
+    /// </summary>
+    private async Task<string?> GetFileWithFallbackAsync(string fileName, CancellationToken ct)
+    {
+        var scopedPath = ResolvePath(fileName);
+        var content = await _repoContent.GetFileContentAsync(scopedPath, _branch, ct);
+
+        if (content is not null || string.IsNullOrEmpty(ArtifactBasePath))
+            return content;
+
+        // Fallback: try bare filename at repo root for repos created before AgentDocs/ was introduced
+        _logger.LogDebug("File not found at {ScopedPath}, falling back to root {FileName}", scopedPath, fileName);
+        return await _repoContent.GetFileContentAsync(fileName, _branch, ct);
+    }
+
     #region TeamMembers.md
 
     /// <summary>
@@ -39,7 +67,7 @@ public class ProjectFileManager
     /// </summary>
     public async Task<string> GetTeamMembersAsync(CancellationToken ct = default)
     {
-        var content = await _repoContent.GetFileContentAsync(TeamMembersPath, _branch, ct);
+        var content = await GetFileWithFallbackAsync(TeamMembersFile, ct);
         return content ?? CreateEmptyTeamMembersDoc();
     }
 
@@ -66,7 +94,7 @@ public class ProjectFileManager
         _logger.LogInformation("Adding team member {Name} ({Role}) to TeamMembers.md", agent.DisplayName, agent.Role);
 
         await _repoContent.CreateOrUpdateFileAsync(
-            TeamMembersPath, updated,
+            ResolvePath(TeamMembersFile), updated,
             $"Add team member: {agent.DisplayName}",
             _branch, ct);
     }
@@ -115,7 +143,7 @@ public class ProjectFileManager
         _logger.LogInformation("Updating status for {AgentId} to {Status}", agentId, newStatus);
 
         await _repoContent.CreateOrUpdateFileAsync(
-            TeamMembersPath,
+            ResolvePath(TeamMembersFile),
             string.Join('\n', lines),
             $"Update {agentId} status to {newStatus}",
             _branch, ct);
@@ -158,7 +186,7 @@ public class ProjectFileManager
         _logger.LogInformation("Removing team member {AgentId} from TeamMembers.md", agentId);
 
         await _repoContent.CreateOrUpdateFileAsync(
-            TeamMembersPath,
+            ResolvePath(TeamMembersFile),
             string.Join('\n', lines),
             $"Remove team member: {agentId}",
             _branch, ct);
@@ -170,7 +198,7 @@ public class ProjectFileManager
 
     public async Task<string> GetEngineeringPlanAsync(CancellationToken ct = default)
     {
-        var content = await _repoContent.GetFileContentAsync(EngineeringPlanPath, _branch, ct);
+        var content = await GetFileWithFallbackAsync(EngineeringPlanFile, ct);
         return content ?? "# Engineering Plan\n\n_No engineering plan has been created yet._\n";
     }
 
@@ -178,8 +206,8 @@ public class ProjectFileManager
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(content);
 
-        _logger.LogInformation("Updating EngineeringPlan.md");
-        await _repoContent.CreateOrUpdateFileAsync(EngineeringPlanPath, content, "Update engineering plan", _branch, ct);
+        _logger.LogInformation("Updating EngineeringPlan.md at {Path}", ResolvePath(EngineeringPlanFile));
+        await _repoContent.CreateOrUpdateFileAsync(ResolvePath(EngineeringPlanFile), content, "Update engineering plan", _branch, ct);
     }
 
     #endregion
@@ -188,7 +216,7 @@ public class ProjectFileManager
 
     public async Task<string> GetArchitectureDocAsync(CancellationToken ct = default)
     {
-        var content = await _repoContent.GetFileContentAsync(ArchitecturePath, _branch, ct);
+        var content = await GetFileWithFallbackAsync(ArchitectureFile, ct);
         return content ?? "# Architecture\n\n_No architecture document has been created yet._\n";
     }
 
@@ -196,8 +224,8 @@ public class ProjectFileManager
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(content);
 
-        _logger.LogInformation("Updating Architecture.md");
-        await _repoContent.CreateOrUpdateFileAsync(ArchitecturePath, content, "Update architecture document", _branch, ct);
+        _logger.LogInformation("Updating Architecture.md at {Path}", ResolvePath(ArchitectureFile));
+        await _repoContent.CreateOrUpdateFileAsync(ResolvePath(ArchitectureFile), content, "Update architecture document", _branch, ct);
     }
 
     #endregion
@@ -206,7 +234,7 @@ public class ProjectFileManager
 
     public async Task<string> GetResearchDocAsync(CancellationToken ct = default)
     {
-        var content = await _repoContent.GetFileContentAsync(ResearchPath, _branch, ct);
+        var content = await GetFileWithFallbackAsync(ResearchFile, ct);
         return content ?? "# Research\n\n_No research has been documented yet._\n";
     }
 
@@ -214,8 +242,8 @@ public class ProjectFileManager
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(content);
 
-        _logger.LogInformation("Updating Research.md");
-        await _repoContent.CreateOrUpdateFileAsync(ResearchPath, content, "Update research document", _branch, ct);
+        _logger.LogInformation("Updating Research.md at {Path}", ResolvePath(ResearchFile));
+        await _repoContent.CreateOrUpdateFileAsync(ResolvePath(ResearchFile), content, "Update research document", _branch, ct);
     }
 
     #endregion
@@ -224,7 +252,7 @@ public class ProjectFileManager
 
     public async Task<string> GetPMSpecAsync(CancellationToken ct = default)
     {
-        var content = await _repoContent.GetFileContentAsync(PMSpecPath, _branch, ct);
+        var content = await GetFileWithFallbackAsync(PMSpecFile, ct);
         return content ?? "# PM Specification\n\n_No PM specification has been created yet._\n";
     }
 
@@ -232,8 +260,8 @@ public class ProjectFileManager
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(content);
 
-        _logger.LogInformation("Updating PMSpec.md");
-        await _repoContent.CreateOrUpdateFileAsync(PMSpecPath, content, "Update PM specification", _branch, ct);
+        _logger.LogInformation("Updating PMSpec.md at {Path}", ResolvePath(PMSpecFile));
+        await _repoContent.CreateOrUpdateFileAsync(ResolvePath(PMSpecFile), content, "Update PM specification", _branch, ct);
     }
 
     #endregion
@@ -246,15 +274,15 @@ public class ProjectFileManager
     /// </summary>
     public async Task<string?> GetTeamCompositionAsync(CancellationToken ct = default)
     {
-        return await _repoContent.GetFileContentAsync(TeamCompositionPath, _branch, ct);
+        return await GetFileWithFallbackAsync(TeamCompositionFile, ct);
     }
 
     public async Task UpdateTeamCompositionAsync(string content, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(content);
 
-        _logger.LogInformation("Updating TeamComposition.md");
-        await _repoContent.CreateOrUpdateFileAsync(TeamCompositionPath, content, "Update team composition", _branch, ct);
+        _logger.LogInformation("Updating TeamComposition.md at {Path}", ResolvePath(TeamCompositionFile));
+        await _repoContent.CreateOrUpdateFileAsync(ResolvePath(TeamCompositionFile), content, "Update team composition", _branch, ct);
     }
 
     #endregion

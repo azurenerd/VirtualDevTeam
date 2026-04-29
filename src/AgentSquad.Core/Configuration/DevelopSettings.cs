@@ -16,6 +16,12 @@ public class DevelopSettings
     public int? ParentWorkItemId { get; set; }
     public bool CreateNewRepo { get; set; } = false;
     public string NewRepoName { get; set; } = "";
+
+    /// <summary>Base folder for agent-generated docs (default: "AgentDocs").</summary>
+    public string DocsFolderPath { get; set; } = "AgentDocs";
+
+    /// <summary>When true, PM creates 1 issue with doc links instead of N user stories.</summary>
+    public bool SingleIssueMode { get; set; } = false;
 }
 
 public class GitHubRepoSettings

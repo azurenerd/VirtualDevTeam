@@ -123,6 +123,12 @@ public sealed class DevelopSettingsService : IDisposable
 
         config.Project.ParentWorkItemId = settings.ParentWorkItemId;
 
+        // Agent docs and issue mode
+        if (!string.IsNullOrWhiteSpace(settings.DocsFolderPath))
+            config.Project.DocsFolderPath = settings.DocsFolderPath;
+
+        config.Limits.SingleIssueMode = settings.SingleIssueMode;
+
         // Platform-specific repo settings
         if (string.Equals(settings.Platform, "GitHub", StringComparison.OrdinalIgnoreCase))
         {
@@ -212,6 +218,8 @@ public sealed class DevelopSettingsService : IDisposable
         settings.TechStack = config.Project.TechStack;
         settings.ExecutiveUsername = config.Project.ExecutiveGitHubUsername;
         settings.ParentWorkItemId = config.Project.ParentWorkItemId;
+        settings.DocsFolderPath = config.Project.DocsFolderPath;
+        settings.SingleIssueMode = config.Limits.SingleIssueMode;
 
         return settings;
     }

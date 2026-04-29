@@ -62,15 +62,19 @@ public interface IWorkflowProfile
 
 /// <summary>
 /// Workflow profile for greenfield project creation.
-/// Uses repo-root artifacts, standard branch naming, and full agent set.
+/// Uses run-scoped artifact paths under a configurable docs folder, standard branch naming, and full agent set.
 /// </summary>
 public class ProjectWorkflowProfile : IWorkflowProfile
 {
     private readonly bool _singlePrMode;
+    private readonly string _docsFolderPath;
+    private readonly string _runScope;
 
-    public ProjectWorkflowProfile(bool singlePrMode = true)
+    public ProjectWorkflowProfile(bool singlePrMode = true, string docsFolderPath = "AgentDocs", string? runScope = null)
     {
         _singlePrMode = singlePrMode;
+        _docsFolderPath = docsFolderPath;
+        _runScope = runScope ?? Guid.NewGuid().ToString("N")[..8];
     }
 
     public WorkMode Mode => WorkMode.Project;
@@ -81,7 +85,8 @@ public class ProjectWorkflowProfile : IWorkflowProfile
         "ProgramManager", "Researcher", "Architect", "SoftwareEngineer", "TestEngineer"
     };
 
-    public string ArtifactBasePath => "";
+    public string ArtifactBasePath =>
+        string.IsNullOrEmpty(_docsFolderPath) ? "" : $"{_docsFolderPath}/{_runScope}";
     public string SpecDocName => "PMSpec.md";
     public string ResearchDocName => "Research.md";
     public string ArchitectureDocName => "Architecture.md";
