@@ -84,6 +84,9 @@ experiment-data/
 .evaluator-scratch/
 **/.evaluator-scratch/
 
+## Agent working directories (cloned repos, worktrees, agent-local state)
+.agents/
+
 ## Test captures (GIFs, screenshots, videos from UI tests)
 tests/Captures/
 
