@@ -2,6 +2,7 @@
 @rendermode InteractiveServer
 @using AgentSquad.Core.Notifications
 @using AgentSquad.Core.Agents.Decisions
+@using AgentSquad.Core.Configuration
 @using AgentSquad.Dashboard.Services
 @implements IDisposable
 @inject IServiceProvider ServiceProvider
@@ -169,7 +170,9 @@ else if (_notifications.Count > 0)
                         }
                         @if (!gate.IsResolved && !isProjectComplete)
                         {
-                            <span class="approval-status-pill pending">Awaiting Review</span>
+                            <button class="approval-action-btn approve-btn" @onclick="() => ApproveGate(gate.GateId)">
+                                ✅ Approve
+                            </button>
                         }
                         else if (gate.IsResolved)
                         {
@@ -195,6 +198,7 @@ else if (_notifications.Count > 0)
     private HttpGateNotificationService? _httpService;
     private IDecisionLog? _decisionLog;
     private DecisionGateService? _decisionGateService;
+    private IGateCheckService? _gateCheckService;
 
     protected override void OnInitialized()
     {
@@ -202,6 +206,7 @@ else if (_notifications.Count > 0)
         _inProcessService = ServiceProvider.GetService<GateNotificationService>();
         _decisionLog = ServiceProvider.GetService<IDecisionLog>();
         _decisionGateService = ServiceProvider.GetService<DecisionGateService>();
+        _gateCheckService = ServiceProvider.GetService<IGateCheckService>();
 
         if (_httpService is not null)
             _httpService.OnChange += OnChange;
@@ -265,6 +270,13 @@ else if (_notifications.Count > 0)
                 _feedbackInputs.TryAdd(d.Id, "");
             }
         }
+    }
+
+    private void ApproveGate(string gateId)
+    {
+        _gateCheckService?.ApproveGate(gateId);
+        _inProcessService?.Resolve(gateId, resourceNumber: null);
+        RefreshData();
     }
 
     private void ApproveDecision(string decisionId)

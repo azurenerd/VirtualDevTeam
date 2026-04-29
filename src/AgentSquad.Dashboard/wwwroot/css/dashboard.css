@@ -7433,6 +7433,16 @@ a.ntl-detail-pr-num:hover { text-decoration: underline; color: #79c0ff; }
     background: rgba(88, 166, 255, 0.22);
     color: #79c0ff;
 }
+.approve-btn {
+    background: rgba(63, 185, 80, 0.15);
+    color: #3fb950;
+    border: 1px solid rgba(63, 185, 80, 0.3);
+    cursor: pointer;
+}
+.approve-btn:hover {
+    background: rgba(63, 185, 80, 0.3);
+    color: #56d364;
+}
 .approval-status-pill {
     font-size: 0.75rem;
     padding: 2px 10px;
