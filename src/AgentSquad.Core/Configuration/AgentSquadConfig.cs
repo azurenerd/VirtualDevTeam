@@ -510,12 +510,11 @@ public class HumanInteractionConfig
     public bool Enabled { get; set; } = false;
 
     /// <summary>
-    /// Per-gate configuration. Keys are gate IDs (e.g., "ProjectKickoff", "PMSpecification").
+    /// Per-gate configuration. Keys are gate IDs (e.g., "PMSpecification").
     /// Gates not explicitly configured default to RequiresHuman=false.
     /// </summary>
     public Dictionary<string, GateConfig> Gates { get; set; } = new()
     {
-        [GateIds.ProjectKickoff] = new(),
         [GateIds.AgentTeamComposition] = new(),
         [GateIds.SmeAgentSpawn] = new(),
         [GateIds.ResearchFindings] = new(),
@@ -603,7 +602,6 @@ public enum HumanInteractionPreset
 public static class GateIds
 {
     // Phase: Initialization
-    public const string ProjectKickoff = "ProjectKickoff";
     public const string AgentTeamComposition = "AgentTeamComposition";
     public const string SmeAgentSpawn = "SmeAgentSpawn";
 
@@ -637,8 +635,6 @@ public static class GateIds
     /// <summary>All gate IDs with display names, grouped by workflow phase.</summary>
     public static readonly IReadOnlyList<(string Phase, string Id, string Name, string Description)> AllGates = new[]
     {
-        ("Initialization", ProjectKickoff, "Project Kickoff",
-            "Pause before agents begin work. When enabled: you review the project description, goals, and constraints — agents wait for your go-ahead. When auto: agents start immediately after launch."),
         ("Initialization", AgentTeamComposition, "Agent Team",
             "Pause after PM proposes the agent team. When enabled: you review which agents spawn, their model tiers, and role assignments — you can adjust before resources are allocated. When auto: PM's team composition is accepted and agents spawn immediately."),
         ("Initialization", SmeAgentSpawn, "SME Agent Spawn",

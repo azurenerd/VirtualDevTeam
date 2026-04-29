@@ -14,7 +14,6 @@ public class AgentSquadWorker : BackgroundService
     private readonly AgentRegistry _registry;
     private readonly WorkflowStateMachine _workflow;
     private readonly PullRequestWorkflow _prWorkflow;
-    private readonly IGateCheckService _gateCheck;
     private readonly AgentStateStore _stateStore;
     private readonly RunCoordinator _runCoordinator;
     private readonly ILogger<AgentSquadWorker> _logger;
@@ -27,7 +26,6 @@ public class AgentSquadWorker : BackgroundService
         AgentRegistry registry,
         WorkflowStateMachine workflow,
         PullRequestWorkflow prWorkflow,
-        IGateCheckService gateCheck,
         AgentStateStore stateStore,
         RunCoordinator runCoordinator,
         ILogger<AgentSquadWorker> logger,
@@ -38,7 +36,6 @@ public class AgentSquadWorker : BackgroundService
         _registry = registry ?? throw new ArgumentNullException(nameof(registry));
         _workflow = workflow ?? throw new ArgumentNullException(nameof(workflow));
         _prWorkflow = prWorkflow ?? throw new ArgumentNullException(nameof(prWorkflow));
-        _gateCheck = gateCheck ?? throw new ArgumentNullException(nameof(gateCheck));
         _stateStore = stateStore ?? throw new ArgumentNullException(nameof(stateStore));
         _runCoordinator = runCoordinator ?? throw new ArgumentNullException(nameof(runCoordinator));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -95,22 +92,10 @@ public class AgentSquadWorker : BackgroundService
             case RunCoordinator.RecoveryResult.NoRun:
             default:
             {
-                // No active run — wait for ProjectKickoff gate (human approval)
-                // This preserves backward compatibility: the gate triggers a new project run
-                _logger.LogInformation("No active run found — waiting for ProjectKickoff gate or dashboard start command");
-
-                await _gateCheck.WaitForGateAsync(
-                    GateIds.ProjectKickoff,
-                    "Project ready to start, awaiting human approval to begin agent workflow",
-                    ct: ct);
-
-                // Gate approved — start a new project run via RunCoordinator
-                var run = await _runCoordinator.StartProjectAsync(ct);
-                _logger.LogInformation("ProjectKickoff gate approved — started run {RunId}", run.RunId);
-
-                // Spawn agents for the new run
-                await _runCoordinator.SpawnAgentsForRunAsync(ct);
-                await SpawnCustomAndSmeAgents(ct);
+                // No active run — the Develop wizard is the sole start trigger.
+                // The worker just stays alive; RunCoordinator.StartProjectAsync() is called
+                // from the dashboard when the user clicks Start in the Develop tab.
+                _logger.LogInformation("No active run found — waiting for project start from Develop wizard");
                 break;
             }
         }

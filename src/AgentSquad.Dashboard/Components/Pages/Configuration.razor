@@ -49,31 +49,6 @@ else if (_config is not null)
             </div>
         </div>
 
-        @* ── Project Settings (moved to Develop wizard) ── *@
-        <div class="config-card">
-            <div class="config-card-header" data-testid="config-card-project">
-                <span class="config-card-icon">🏗️</span>
-                <span class="config-card-title">Project</span>
-                <span class="badge" style="background: var(--accent-cyan); color: var(--bg-primary); margin-left: 0.5rem; font-size: 0.7rem;">Moved</span>
-            </div>
-            <div class="config-card-body">
-                <div class="config-hint" style="margin: 0; padding: 0.75rem 1rem; background: rgba(0, 212, 255, 0.06); border-radius: var(--radius-sm); border-left: 3px solid var(--accent-cyan);">
-                    🛠️ <strong>Project, repository, and auth settings have moved to the <a href="/develop" style="color: var(--accent-cyan);">Develop</a> tab.</strong>
-                    <br/>Configure what to build, select your repo, and launch agents from the new guided wizard.
-                </div>
-                @if (!string.IsNullOrWhiteSpace(_config?.Project?.Name))
-                {
-                    <div style="margin-top: 0.75rem; display: flex; gap: 1rem; flex-wrap: wrap;">
-                        <div class="config-field" style="flex: 0 0 auto; margin-bottom: 0;">
-                            <label>Project Name</label>
-                            <input type="text" @bind="_config.Project.Name" class="config-input" style="max-width: 300px;"
-                                title="Display name for logs and dashboard. This field stays here." />
-                        </div>
-                    </div>
-                }
-            </div>
-        </div>
-
         @* ── Copilot CLI Settings ── *@
         <div class="config-card">
             <div class="config-card-header" @onclick="() => _copilotExpanded = !_copilotExpanded" data-testid="config-card-copilot">

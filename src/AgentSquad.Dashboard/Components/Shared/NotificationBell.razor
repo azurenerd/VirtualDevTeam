@@ -3,6 +3,7 @@
 @using Microsoft.JSInterop
 @inject IServiceProvider ServiceProvider
 @inject IJSRuntime JS
+@inject NavigationManager Navigation
 @implements IDisposable
 
 <div class="notification-container">
@@ -73,7 +74,8 @@
                     @foreach (var notification in _notifications)
                     {
                         var isProjectComplete = notification.GateId == "project-complete";
-                        <div class="notification-item @(notification.IsRead ? "read" : "unread") @(notification.IsResolved ? "resolved" : "") @(isProjectComplete ? "project-complete" : "")">
+                        <div class="notification-item @(notification.IsRead ? "read" : "unread") @(notification.IsResolved ? "resolved" : "") @(isProjectComplete ? "project-complete" : "")"
+                             @onclick="() => NavigateToApproval(notification)" style="cursor: pointer;" title="Click to view in Approvals page">
                             <div class="notification-item-header">
                                 <span class="notification-gate-badge @(isProjectComplete ? "gate-complete" : notification.IsResolved ? "gate-resolved" : "")">
                                     @(isProjectComplete ? "🎉 " : "")@notification.GateName
@@ -110,7 +112,8 @@
                                            target="_blank"
                                            rel="noopener noreferrer"
                                            class="notification-link"
-                                           @onclick="() => OnLinkClicked(notification)">
+                                           @onclick="() => OnLinkClicked(notification)"
+                                           @onclick:stopPropagation="true">
                                             @if (isProjectComplete)
                                             {
                                                 @:📁 View Repo ↗
@@ -262,6 +265,18 @@
             _httpService.MarkAsRead(notification.Id);
         else
             _inProcessService?.MarkAsRead(notification.Id);
+    }
+
+    private void NavigateToApproval(GateNotification notification)
+    {
+        // Mark as read and close popup
+        if (_httpService is not null)
+            _httpService.MarkAsRead(notification.Id);
+        else
+            _inProcessService?.MarkAsRead(notification.Id);
+
+        _showPopup = false;
+        Navigation.NavigateTo($"/approvals?gate={notification.GateId}");
     }
 
     private static string FormatTime(DateTime utcTime)

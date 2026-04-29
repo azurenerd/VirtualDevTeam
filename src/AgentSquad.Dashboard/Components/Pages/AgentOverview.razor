@@ -104,14 +104,7 @@
             }
         </div>
         <div class="project-control-actions">
-            @if (_runState is "Idle" or "" or "Completed" or "Failed" or "Cancelled")
-            {
-                <button class="btn-primary" @onclick="StartProjectAsync" disabled="@_runActionPending"
-                        title="Starts a new project run using the project description and settings from the Configuration page. Agents will be spawned according to the selected framework strategy.">
-                    @(_runActionPending ? "Starting..." : "▶ Start Project")
-                </button>
-            }
-            else if (_runState is "Running")
+            @if (_runState is "Running")
             {
                 <button class="btn-danger" @onclick="PauseRunAsync" disabled="@_runActionPending"
                         title="Pauses the current run. All agents will be stopped gracefully and workflow state will be checkpointed. You can resume later with the Continue button.">
@@ -930,57 +923,6 @@ else
             }
         }
         catch { /* API not available yet */ }
-    }
-
-    private async Task StartProjectAsync()
-    {
-        _runActionPending = true;
-        _runError = "";
-        StateHasChanged();
-
-        try
-        {
-            if (_runsHttp is not null)
-            {
-                var resp = await _runsHttp.PostAsync("/api/runs/start-project", null);
-                if (resp.IsSuccessStatusCode)
-                {
-                    _runState = "Running";
-                    _runMode = "Project";
-                    _runDisplayName = "Greenfield Project";
-                }
-                else
-                {
-                    var body = await resp.Content.ReadAsStringAsync();
-                    _runError = $"Failed to start: {body}";
-                }
-            }
-            else
-            {
-                var coordinator = ServiceProvider.GetService<AgentSquad.Orchestrator.RunCoordinator>();
-                if (coordinator is not null)
-                {
-                    await coordinator.StartProjectAsync();
-                    _ = Task.Run(async () =>
-                    {
-                        try { await coordinator.SpawnAgentsForRunAsync(); }
-                        catch { /* logged internally */ }
-                    });
-                    _runState = "Running";
-                    _runMode = "Project";
-                    _runDisplayName = "Greenfield Project";
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            _runError = ex.Message;
-        }
-        finally
-        {
-            _runActionPending = false;
-            StateHasChanged();
-        }
     }
 
     private async Task PauseRunAsync()
