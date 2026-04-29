@@ -10,27 +10,27 @@ namespace AgentSquad.Core.DevPlatform.Providers.GitHub;
 /// </summary>
 public sealed class GitHubHostContext : IPlatformHostContext
 {
-    private readonly string _repo;
-    private readonly string _defaultBranch;
+    private readonly AgentSquadConfig _config;
 
     public GitHubHostContext(IOptions<AgentSquadConfig> config)
     {
         ArgumentNullException.ThrowIfNull(config);
-        _repo = config.Value.Project.GitHubRepo;
-        _defaultBranch = config.Value.Project.DefaultBranch;
+        _config = config.Value;
     }
 
+    private string Repo => _config.Project.GitHubRepo;
+
     public string GetCloneUrl(string token)
-        => $"https://x-access-token:{token}@github.com/{_repo}.git";
+        => $"https://x-access-token:{token}@github.com/{Repo}.git";
 
     public string GetPullRequestWebUrl(int prId)
-        => $"https://github.com/{_repo}/pull/{prId}";
+        => $"https://github.com/{Repo}/pull/{prId}";
 
     public string GetWorkItemWebUrl(int workItemId)
-        => $"https://github.com/{_repo}/issues/{workItemId}";
+        => $"https://github.com/{Repo}/issues/{workItemId}";
 
     public string GetRawFileUrl(string path, string branch)
-        => $"https://raw.githubusercontent.com/{_repo}/{branch}/{path}";
+        => $"https://raw.githubusercontent.com/{Repo}/{branch}/{path}";
 
-    public string DefaultBranch => _defaultBranch;
+    public string DefaultBranch => _config.Project.DefaultBranch;
 }
