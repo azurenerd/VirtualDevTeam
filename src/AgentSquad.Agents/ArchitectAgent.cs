@@ -503,7 +503,7 @@ public class ArchitectAgent : AgentBase
 
         var useSinglePass = _config.CopilotCli.SinglePassMode;
         string? designStepId = null;
-        try { designStepId = _taskTracker.BeginStep(Identity.Id, directive.TaskId, "Multi-turn architecture design", "Designing architecture via AI conversation", Identity.ModelTier); } catch { }
+        try { designStepId = _taskTracker.BeginStep(Identity.Id, directive.TaskId, "Architecture design", "Designing architecture via AI conversation", Identity.ModelTier); } catch { }
 
         if (useSinglePass)
         {

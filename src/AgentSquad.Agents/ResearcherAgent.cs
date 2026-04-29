@@ -214,7 +214,7 @@ public class ResearcherAgent : AgentBase
                             LogActivity("task", $"🔬 Starting research on: {directive.Topic}");
 
                             string? researchStepId = null;
-                            try { researchStepId = _taskTracker.BeginStep(Identity.Id, directive.TaskId, "Multi-turn research", $"Conducting research on: {directive.Topic}", Identity.ModelTier); } catch { }
+        try { researchStepId = _taskTracker.BeginStep(Identity.Id, directive.TaskId, "AI research", $"Conducting research on: {directive.Topic}", Identity.ModelTier); } catch { }
                             var research = await ConductResearchAsync(directive, researchStepId, ct);
                             try { if (researchStepId is not null) _taskTracker.CompleteStep(researchStepId); } catch { }
 

@@ -256,12 +256,12 @@ else
                         <div class="auth-method-toggle">
                             <button type="button"
                                     class="auth-method-btn @(_settings.AuthMethod == "Pat" ? "auth-method-active" : "")"
-                                    @onclick="() => SwitchAuthMethod("Pat")">
+                                    @onclick='() => SwitchAuthMethod("Pat")'>
                                 🔑 PAT
                             </button>
                             <button type="button"
                                     class="auth-method-btn @(_settings.AuthMethod == "AzureCliBearer" ? "auth-method-active" : "")"
-                                    @onclick="() => SwitchAuthMethod("AzureCliBearer")">
+                                    @onclick='() => SwitchAuthMethod("AzureCliBearer")'>
                                 🎫 Bearer Token
                             </button>
                         </div>

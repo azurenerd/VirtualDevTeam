@@ -370,6 +370,7 @@ public class ProgramManagerAgent : AgentBase
             //    gets the full context even if it doesn't read the GitHub issue.
             //    Pass the issue number so the Researcher can link it directly.
             var taskId = $"kickoff-research-{Guid.NewGuid():N}";
+            _taskTracker.RegisterTaskDisplayName(taskId, "Research Kickoff");
             await _messageBus.PublishAsync(new TaskAssignmentMessage
             {
                 FromAgentId = Identity.Id,
@@ -1499,6 +1500,7 @@ public class ProgramManagerAgent : AgentBase
     /// Check if all open PRs are PM-approved (or no open PRs remain).
     /// If so, update status to signal that all reviews are complete, which
     /// HealthMonitor uses to emit the reviews.all.approved workflow signal.
+    /// Only considers engineering PRs (from SE/TE agents), not doc PRs from Researcher/PM/Architect.
     /// </summary>
     private async Task CheckAndSignalAllReviewsCompleteAsync(CancellationToken ct)
     {
@@ -1506,8 +1508,11 @@ public class ProgramManagerAgent : AgentBase
         {
             var openPRs = await _prService.ListOpenAsync(ct);
 
-            // If there are open PRs that are NOT yet PM-approved, reviews are still pending
-            var unapprovedPrs = openPRs
+            // Only consider engineering PRs (SE/TE), not doc PRs from Researcher/PM/Architect
+            var engineeringOpen = openPRs.Where(IsEngineeringPr).ToList();
+
+            // If there are engineering PRs that are NOT yet PM-approved, reviews are still pending
+            var unapprovedPrs = engineeringOpen
                 .Where(pr => !pr.Labels.Contains(PullRequestWorkflow.Labels.PmApproved, StringComparer.OrdinalIgnoreCase))
                 .ToList();
 
@@ -1517,26 +1522,25 @@ public class ProgramManagerAgent : AgentBase
                 return;
             }
 
-            // All PRs are either PM-approved or there are no open PRs
-            // Set status text that HealthMonitor recognizes for the reviews.all.approved signal
-            if (openPRs.Count > 0)
+            // All engineering PRs are either PM-approved or there are no open engineering PRs
+            if (engineeringOpen.Count > 0)
             {
-                Logger.LogInformation("All {Count} open PRs are PM-approved — signaling reviews complete", openPRs.Count);
+                Logger.LogInformation("All {Count} open engineering PRs are PM-approved — signaling reviews complete", engineeringOpen.Count);
                 UpdateStatus(AgentStatus.Idle, "All reviews complete — all PRs approved");
             }
             else
             {
-                // Only declare "all merged" if at least one PR was actually merged.
-                // After a mini-reset there are 0 open PRs but nothing has been merged yet.
+                // Only declare "all merged" if at least one engineering PR was actually merged.
                 var mergedPRs = await _prService.ListMergedAsync(ct);
-                if (mergedPRs.Count > 0)
+                var engineeringMerged = mergedPRs.Where(IsEngineeringPr).ToList();
+                if (engineeringMerged.Count > 0)
                 {
-                    Logger.LogInformation("No open PRs remain — all merged ({Count} merged). Signaling reviews complete", mergedPRs.Count);
+                    Logger.LogInformation("No open engineering PRs remain — all merged ({Count} merged). Signaling reviews complete", engineeringMerged.Count);
                     UpdateStatus(AgentStatus.Idle, "All reviews complete — all merged");
                 }
                 else
                 {
-                    Logger.LogDebug("No open PRs and no merged PRs — waiting for engineering to create PRs");
+                    Logger.LogDebug("No engineering PRs found (open or merged) — waiting for engineering to create PRs");
                     UpdateStatus(AgentStatus.Idle, "Monitoring for review requests");
                 }
             }
@@ -1546,6 +1550,22 @@ public class ProgramManagerAgent : AgentBase
             Logger.LogWarning(ex, "Failed to check review completion status");
             UpdateStatus(AgentStatus.Idle, "Monitoring team progress");
         }
+    }
+
+    /// <summary>
+    /// Returns true if the PR is from an engineering agent (Software Engineer or Test Engineer),
+    /// as opposed to a doc PR from Researcher, PM, or Architect.
+    /// Uses branch naming convention: agent/{role}/...
+    /// </summary>
+    private static bool IsEngineeringPr(PlatformPullRequest pr)
+    {
+        var branch = pr.HeadBranch;
+        // Normalize ADO full ref format
+        if (branch.StartsWith("refs/heads/", StringComparison.OrdinalIgnoreCase))
+            branch = branch["refs/heads/".Length..];
+
+        return branch.StartsWith("agent/software-engineer", StringComparison.OrdinalIgnoreCase)
+            || branch.StartsWith("agent/test-engineer", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

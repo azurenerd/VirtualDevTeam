@@ -20,7 +20,7 @@ public static class AgentStepTemplates
     private static readonly string[] ResearcherSteps =
     [
         "Create research PR",
-        "Multi-turn research",
+        "AI research",
         "Self-assessment & refinement",
         "Commit Research.md",
         "Signal PM"
@@ -40,7 +40,7 @@ public static class AgentStepTemplates
     private static readonly string[] ArchitectSteps =
     [
         "Read context (PMSpec, Research)",
-        "Multi-turn architecture design",
+        "Architecture design",
         "Self-assessment & impact classification",
         "Commit Architecture.md",
         "Decision gate",

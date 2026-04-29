@@ -319,7 +319,20 @@ public sealed class AdoWorkItemService : AdoHttpClientBase, IWorkItemService
             $"ids={idsParam}&$expand=Relations");
         var batch = await GetAsync<AdoListResponse<AdoWorkItem>>(batchUrl, ct);
 
-        return batch?.Value.Select(w => AdoModelMapper.ToPlatform(w, Organization, Project)).ToList()
+        var items = batch?.Value.Select(w => AdoModelMapper.ToPlatform(w, Organization, Project)).ToList()
             ?? new List<PlatformWorkItem>();
+
+        // Post-fetch precision filter: WIQL CreatedDate is date-only (no time component),
+        // so same-day items from prior runs leak through. Filter by exact RunStartedUtc.
+        if (_runStartedUtc.HasValue)
+        {
+            var before = items.Count;
+            items = items.Where(w => w.CreatedAt >= _runStartedUtc.Value).ToList();
+            if (items.Count < before)
+                _logger.LogDebug("Run-scope post-filter removed {Removed} stale work items (pre: {Before}, post: {After})",
+                    before - items.Count, before, items.Count);
+        }
+
+        return items;
     }
 }
