@@ -2514,6 +2514,32 @@ public class SoftwareEngineerAgent : EngineerAgentBase
                         _taskTracker.RecordLlmCall(execStepId);
 
                         var codeFiles = AgentSquad.Core.AI.CodeFileParser.ParseFiles(stepImpl);
+
+                        // Retry once if AI didn't produce FILE: markers for this step
+                        if (codeFiles.Count == 0 && !string.IsNullOrEmpty(stepImpl))
+                        {
+                            Logger.LogWarning(
+                                "SE step {Step}/{Total} produced no FILE: blocks (response length={Length}). Retrying.",
+                                stepNumber, steps.Count, stepImpl.Length);
+
+                            stepHistory.AddAssistantMessage(stepImpl);
+                            stepHistory.AddUserMessage(
+                                "Your response did not contain any parseable code files. " +
+                                "You MUST output every file using EXACTLY this format:\n\n" +
+                                "FILE: path/to/file.ext\n```language\n<complete file content>\n```\n\n" +
+                                "Output the ACTUAL source code files for this step. Do not describe — produce code.");
+
+                            var retryResp = await chat.GetChatMessageContentAsync(stepHistory, cancellationToken: ct);
+                            var retryImpl = retryResp.Content?.Trim() ?? "";
+                            _taskTracker.RecordLlmCall(execStepId);
+                            codeFiles = AgentSquad.Core.AI.CodeFileParser.ParseFiles(retryImpl);
+
+                            if (codeFiles.Count > 0)
+                                Logger.LogInformation("SE step {Step}/{Total} retry succeeded: {FileCount} files", stepNumber, steps.Count, codeFiles.Count);
+                            else
+                                Logger.LogWarning("SE step {Step}/{Total} retry also produced no files, continuing", stepNumber, steps.Count);
+                        }
+
                         if (codeFiles.Count > 0)
                         {
                             if (Workspace is not null && BuildRunnerSvc is not null)
@@ -2589,25 +2615,66 @@ public class SoftwareEngineerAgent : EngineerAgentBase
                 _taskTracker.RecordLlmCall(implStepId);
 
                 var codeFiles = AgentSquad.Core.AI.CodeFileParser.ParseFiles(implementation);
-                if (codeFiles.Count > 0)
+
+                // Retry once if AI didn't produce FILE: markers
+                if (codeFiles.Count == 0 && !string.IsNullOrEmpty(implementation))
                 {
-                    if (Workspace is not null && BuildRunnerSvc is not null)
+                    Logger.LogWarning(
+                        "SE single-pass produced no parseable FILE: blocks (response length={Length}, preview: {Preview}). Retrying with explicit format reminder.",
+                        implementation.Length, implementation[..Math.Min(300, implementation.Length)]);
+                    LogActivity("task", "⚠️ AI response missing FILE: markers — sending retry with format reminder");
+
+                    history.AddAssistantMessage(implementation);
+                    history.AddUserMessage(
+                        "Your response did not contain any parseable code files. " +
+                        "You MUST output every file using EXACTLY this format (no exceptions):\n\n" +
+                        "FILE: path/to/file.ext\n```language\n<complete file content>\n```\n\n" +
+                        "Do NOT describe what to build — OUTPUT THE ACTUAL FILES with real code. " +
+                        "Every source file, config file, and data file must use the FILE: marker format above. " +
+                        "Start with the most critical files first (entry point, main page, config).");
+
+                    var retryResponse = await chat.GetChatMessageContentAsync(history, cancellationToken: ct);
+                    var retryImpl = retryResponse.Content?.Trim() ?? "";
+                    _taskTracker.RecordLlmCall(implStepId);
+                    codeFiles = AgentSquad.Core.AI.CodeFileParser.ParseFiles(retryImpl);
+
+                    if (codeFiles.Count == 0)
                     {
-                        var committed = await CommitViaLocalWorkspaceAsync(pr, codeFiles,
-                            $"Implement {task.Name}", 1, 1, task.Name, chat, ct);
-                        if (!committed)
-                        {
-                            _taskTracker.FailStep(implStepId, "Blocked by build errors");
-                            Logger.LogWarning("SE single-pass implementation blocked by build errors on PR #{PrNumber}", pr.Number);
-                            await ReviewService.AddCommentAsync(pr.Number,
-                                $"❌ **Build Blocked:** Single-pass implementation could not produce a buildable commit.", ct);
-                            return;
-                        }
+                        Logger.LogError(
+                            "SE single-pass retry also produced no FILE: blocks (response length={Length}). Failing step.",
+                            retryImpl.Length);
+                        _taskTracker.FailStep(implStepId, "AI produced no parseable code files after retry");
+                        LogActivity("task", "❌ Implementation failed — AI unable to produce code in FILE: format after retry");
+                        await ReviewService.AddCommentAsync(pr.Number,
+                            $"❌ **Implementation Failed:** AI was unable to produce code files in the expected format after 2 attempts.", ct);
+                        return;
                     }
-                    else
+                    Logger.LogInformation("SE single-pass retry succeeded: {FileCount} files parsed", codeFiles.Count);
+                }
+                else if (codeFiles.Count == 0)
+                {
+                    Logger.LogWarning("SE single-pass produced empty response. Failing step.");
+                    _taskTracker.FailStep(implStepId, "AI produced empty response");
+                    LogActivity("task", "❌ Implementation failed — AI returned empty response");
+                    return;
+                }
+
+                if (Workspace is not null && BuildRunnerSvc is not null)
+                {
+                    var committed = await CommitViaLocalWorkspaceAsync(pr, codeFiles,
+                        $"Implement {task.Name}", 1, 1, task.Name, chat, ct);
+                    if (!committed)
                     {
-                        await PrWorkflow.CommitCodeFilesToPRAsync(pr.Number, codeFiles, $"Implement {task.Name}", ct);
+                        _taskTracker.FailStep(implStepId, "Blocked by build errors");
+                        Logger.LogWarning("SE single-pass implementation blocked by build errors on PR #{PrNumber}", pr.Number);
+                        await ReviewService.AddCommentAsync(pr.Number,
+                            $"❌ **Build Blocked:** Single-pass implementation could not produce a buildable commit.", ct);
+                        return;
                     }
+                }
+                else
+                {
+                    await PrWorkflow.CommitCodeFilesToPRAsync(pr.Number, codeFiles, $"Implement {task.Name}", ct);
                 }
                 _taskTracker.CompleteStep(implStepId);
             }
@@ -4181,9 +4248,40 @@ public class SoftwareEngineerAgent : EngineerAgentBase
 
                 history.AddUserMessage(ctx.ToString());
                 var response = await chat.GetChatMessageContentAsync(history, cancellationToken: ct);
-                var codeFiles = AgentSquad.Core.AI.CodeFileParser.ParseFiles(response.Content?.Trim() ?? "");
+                var responseText = response.Content?.Trim() ?? "";
+                var codeFiles = AgentSquad.Core.AI.CodeFileParser.ParseFiles(responseText);
 
-                if (codeFiles.Count > 0 && Workspace is not null && BuildRunnerSvc is not null)
+                // Retry once if AI didn't produce FILE: markers
+                if (codeFiles.Count == 0 && !string.IsNullOrEmpty(responseText))
+                {
+                    Logger.LogWarning(
+                        "SE single-pass continuation produced no FILE: blocks (response length={Length}). Retrying.",
+                        responseText.Length);
+
+                    history.AddAssistantMessage(responseText);
+                    history.AddUserMessage(
+                        "Your response did not contain any parseable code files. " +
+                        "You MUST output every file using EXACTLY this format:\n\n" +
+                        "FILE: path/to/file.ext\n```language\n<complete file content>\n```\n\n" +
+                        "Output the ACTUAL source code files. Do not describe — produce code.");
+
+                    var retryResp = await chat.GetChatMessageContentAsync(history, cancellationToken: ct);
+                    codeFiles = AgentSquad.Core.AI.CodeFileParser.ParseFiles(retryResp.Content?.Trim() ?? "");
+
+                    if (codeFiles.Count == 0)
+                    {
+                        Logger.LogError("SE single-pass continuation retry also produced no files. Aborting.");
+                        LogActivity("task", "❌ Continuation failed — AI unable to produce code in FILE: format");
+                        return;
+                    }
+                }
+                else if (codeFiles.Count == 0)
+                {
+                    Logger.LogWarning("SE single-pass continuation got empty response. Aborting.");
+                    return;
+                }
+
+                if (Workspace is not null && BuildRunnerSvc is not null)
                 {
                     var committed = await CommitViaLocalWorkspaceAsync(pr, codeFiles,
                         $"Implement {pr.Title}", 1, 1, pr.Title, chat, ct, isRework: true);
@@ -4195,7 +4293,7 @@ public class SoftwareEngineerAgent : EngineerAgentBase
                         return;
                     }
                 }
-                else if (codeFiles.Count > 0)
+                else
                 {
                     await PrWorkflow.CommitCodeFilesToPRAsync(pr.Number, codeFiles, $"Implement {pr.Title}", ct);
                 }
