@@ -529,7 +529,8 @@ public partial class PullRequestWorkflow
     }
 
     /// <summary>
-    /// Create the feature branch for a task: agent/{agent-name-slug}/{task-slug}
+    /// Create the feature branch for a task: agent/{runScope}/{agent-name-slug}/{task-slug}
+    /// When no run scope is available (backward compat), falls back to: agent/{agent-name-slug}/{task-slug}
     /// </summary>
     public async Task<string> CreateTaskBranchAsync(
         string agentName,
@@ -541,7 +542,10 @@ public partial class PullRequestWorkflow
 
         var agentSlug = Slugify(agentName);
         var normalizedTaskSlug = Slugify(taskSlug);
-        var branchName = $"agent/{agentSlug}/{normalizedTaskSlug}";
+        var runScope = _branchProvider?.RunScope;
+        var branchName = runScope is not null
+            ? $"agent/{runScope}/{agentSlug}/{normalizedTaskSlug}"
+            : $"agent/{agentSlug}/{normalizedTaskSlug}";
 
         _logger.LogInformation("Creating task branch {Branch} from {DefaultBranch}", branchName, ActiveBranch);
 

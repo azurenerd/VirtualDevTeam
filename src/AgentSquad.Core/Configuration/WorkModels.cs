@@ -105,6 +105,12 @@ public record ActiveRun
     /// scoped folder even if config changes between crash and restart.
     /// </summary>
     public string? ArtifactBasePath { get; init; }
+
+    /// <summary>
+    /// Short run-scoped prefix for feature branch names (e.g., first 8 chars of RunId).
+    /// Persisted so recovery restores the same branch naming, preventing orphaned branches.
+    /// </summary>
+    public string? RunScope { get; init; }
 }
 
 /// <summary>

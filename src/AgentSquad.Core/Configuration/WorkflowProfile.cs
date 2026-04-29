@@ -50,6 +50,8 @@ public interface IWorkflowProfile
     /// <summary>
     /// Branch naming pattern for engineering work.
     /// Project: "agent/{name}/{task-slug}". Feature: "feature/{feature-slug}".
+    /// Note: actual branch naming is centralized in <see cref="PullRequestWorkflow.CreateTaskBranchAsync"/>
+    /// which includes run scope. This method is kept for interface compliance.
     /// </summary>
     string GetBranchName(string agentName, string taskSlug);
 

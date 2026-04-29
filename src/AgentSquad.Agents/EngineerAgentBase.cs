@@ -2609,7 +2609,12 @@ public abstract class EngineerAgentBase : AgentBase
         bool isRework = false)
     {
         var wsConfig = Config.Workspace;
-        var branchName = pr.HeadBranch ?? $"agent/{Identity.Id.Replace(" ", "-").ToLowerInvariant()}/pr-{pr.Number}";
+        var runScope = BranchProvider?.RunScope;
+        var fallbackSlug = Identity.Id.Replace(" ", "-").ToLowerInvariant();
+        var fallbackBranch = runScope is not null
+            ? $"agent/{runScope}/{fallbackSlug}/pr-{pr.Number}"
+            : $"agent/{fallbackSlug}/pr-{pr.Number}";
+        var branchName = pr.HeadBranch ?? fallbackBranch;
 
         // Ensure workspace is on the right branch
         if (stepNumber == 1)

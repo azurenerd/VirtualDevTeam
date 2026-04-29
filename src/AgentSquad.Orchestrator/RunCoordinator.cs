@@ -118,8 +118,8 @@ public class RunCoordinator
         var artifactPath = savedRun.ArtifactBasePath ?? _activeProfile!.ArtifactBasePath;
         _fileManager.ArtifactBasePath = artifactPath;
 
-        // Restore the effective branch for the run (working branch if set, else default)
-        _branchProvider.SetForRun(savedRun.TargetBranch);
+        // Restore the effective branch and run scope from persisted run state
+        _branchProvider.SetForRun(savedRun.TargetBranch, savedRun.RunScope);
 
         _logger.LogInformation(
             "Recovered {Mode} run {RunId} in status {Status} (workflow recovered: {WfRecovered}, docs path: {DocsPath}, branch: {Branch})",
@@ -176,15 +176,15 @@ public class RunCoordinator
             run = run with { TargetBranch = workingBranch };
         }
 
-        // Run scope: use ParentWorkItemId if set, otherwise first 8 chars of RunId
-        var runScope = _config.Project.ParentWorkItemId?.ToString() ?? run.RunId[..8];
+        // Run scope: always use first 8 chars of RunId for branch naming uniqueness
+        var runScope = run.RunId[..8];
         var profile = new ProjectWorkflowProfile(
             _config.Limits.SinglePRMode,
             _config.Project.DocsFolderPath,
-            runScope);
+            _config.Project.ParentWorkItemId?.ToString() ?? runScope);
 
-        // Persist the artifact path with the run so recovery doesn't depend on config
-        run = run with { ArtifactBasePath = profile.ArtifactBasePath };
+        // Persist the artifact path and run scope with the run so recovery is deterministic
+        run = run with { ArtifactBasePath = profile.ArtifactBasePath, RunScope = runScope };
 
         // Clear any stale state from a previous run and set the new run ID
         await _stateStore.ClearAllCheckpointsAsync(ct);
@@ -202,11 +202,11 @@ public class RunCoordinator
         // Set the artifact base path so all agent doc reads/writes go to the scoped folder
         _fileManager.ArtifactBasePath = profile.ArtifactBasePath;
 
-        // Set the effective branch for the run (working branch if set, else default)
-        _branchProvider.SetForRun(run.TargetBranch);
+        // Set the effective branch and run scope for branch naming
+        _branchProvider.SetForRun(run.TargetBranch, run.RunScope);
 
-        _logger.LogInformation("Started Project run {RunId} for {Repo} (docs path: {DocsPath}, branch: {Branch})",
-            run.RunId, run.Repo, profile.ArtifactBasePath, _branchProvider.EffectiveBranch);
+        _logger.LogInformation("Started Project run {RunId} for {Repo} (docs path: {DocsPath}, branch: {Branch}, runScope: {RunScope})",
+            run.RunId, run.Repo, profile.ArtifactBasePath, _branchProvider.EffectiveBranch, run.RunScope);
         return run;
         }
         finally
@@ -252,8 +252,9 @@ public class RunCoordinator
 
             var profile = new FeatureWorkflowProfile(feature, runId);
 
-            // Persist the artifact path with the run so recovery doesn't depend on config
-            run = run with { ArtifactBasePath = profile.ArtifactBasePath };
+            // Persist the artifact path and run scope so recovery is deterministic
+            var runScope = runId[..8];
+            run = run with { ArtifactBasePath = profile.ArtifactBasePath, RunScope = runScope };
 
             // Clear any stale state from a previous run and set the new run ID
             await _stateStore.ClearAllCheckpointsAsync(ct);
@@ -272,11 +273,11 @@ public class RunCoordinator
             // Feature runs use their own artifact path
             _fileManager.ArtifactBasePath = profile.ArtifactBasePath;
 
-            // Set the effective branch for the feature run
-            _branchProvider.SetForRun(run.TargetBranch);
+            // Set the effective branch and run scope for branch naming
+            _branchProvider.SetForRun(run.TargetBranch, run.RunScope);
 
-            _logger.LogInformation("Started Feature run {RunId} for feature '{Title}' ({FeatureId}), docs path: {DocsPath}, branch: {Branch}",
-                run.RunId, feature.Title, featureId, profile.ArtifactBasePath, _branchProvider.EffectiveBranch);
+            _logger.LogInformation("Started Feature run {RunId} for feature '{Title}' ({FeatureId}), docs path: {DocsPath}, branch: {Branch}, runScope: {RunScope}",
+                run.RunId, feature.Title, featureId, profile.ArtifactBasePath, _branchProvider.EffectiveBranch, run.RunScope);
             return run;
         }
         finally

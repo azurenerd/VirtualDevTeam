@@ -3369,7 +3369,8 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
         CancellationToken ct)
     {
         var taskSlug = $"{sourcePR.Number}-tests";
-        var branchName = $"agent/{Identity.Id.Replace(" ", "-").ToLowerInvariant()}/{taskSlug}";
+        // Use centralized branch naming (includes run scope for multi-user safety)
+        var branchName = await _prWorkflow.CreateTaskBranchAsync(Identity.DisplayName, taskSlug, ct);
 
         // Local workspace mode: write → build → test → push
         if (_workspace is not null && _buildRunner is not null && _testRunner is not null)
@@ -3377,8 +3378,7 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
             return await CreateTestPRViaLocalWorkspaceAsync(sourcePR, testFiles, branchName, ct);
         }
 
-        // Fallback: API-only mode
-        branchName = await _prWorkflow.CreateTaskBranchAsync(Identity.DisplayName, taskSlug, ct);
+        // Fallback: API-only mode — branch already created by CreateTaskBranchAsync above
 
         // Commit all test files to the branch
         foreach (var file in testFiles)

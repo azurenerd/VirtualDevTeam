@@ -2791,8 +2791,13 @@ public class SoftwareEngineerAgent : EngineerAgentBase
             return false;
         }
 
-        var branchName = pr.HeadBranch
-            ?? $"agent/{Identity.DisplayName.Replace(" ", "").ToLowerInvariant()}/{task.Id}-{task.Name}";
+        var runScope = BranchProvider?.RunScope;
+        var fallbackSlug = Identity.DisplayName.Replace(" ", "").ToLowerInvariant();
+        var fallbackTaskSlug = $"{task.Id}-{task.Name}";
+        var fallbackBranch = runScope is not null
+            ? $"agent/{runScope}/{fallbackSlug}/{fallbackTaskSlug}"
+            : $"agent/{fallbackSlug}/{fallbackTaskSlug}";
+        var branchName = pr.HeadBranch ?? fallbackBranch;
 
         try
         {

@@ -16,7 +16,7 @@ public sealed class AdoWorkItemService : AdoHttpClientBase, IWorkItemService
 {
     private readonly ILogger<AdoWorkItemService> _logger;
     private readonly DevPlatformConfig _platformConfig;
-    private readonly int? _parentWorkItemId;
+    private readonly Configuration.AgentSquadConfig _config;
     private readonly DateTime? _runStartedUtc;
 
     public AdoWorkItemService(
@@ -29,7 +29,7 @@ public sealed class AdoWorkItemService : AdoHttpClientBase, IWorkItemService
     {
         _logger = logger;
         _platformConfig = config.Value.DevPlatform ?? new DevPlatformConfig();
-        _parentWorkItemId = config.Value.Project.ParentWorkItemId;
+        _config = config.Value;
         _runStartedUtc = stateStore?.RunStartedUtc;
     }
 
@@ -75,7 +75,9 @@ public sealed class AdoWorkItemService : AdoHttpClientBase, IWorkItemService
             patchDoc.Add(new { op = "add", path = "/fields/System.Tags", value = string.Join("; ", labels) });
 
         // Link as child of the configured parent work item (Hierarchy-Reverse = child→parent)
-        if (_parentWorkItemId.HasValue)
+        // Read lazily from config — MergeIntoConfig sets this after DI construction
+        var parentWorkItemId = _config.Project.ParentWorkItemId;
+        if (parentWorkItemId.HasValue)
         {
             patchDoc.Add(new
             {
@@ -84,7 +86,7 @@ public sealed class AdoWorkItemService : AdoHttpClientBase, IWorkItemService
                 value = new
                 {
                     rel = "System.LinkTypes.Hierarchy-Reverse",
-                    url = $"{BaseUrl}{Project}/_apis/wit/workitems/{_parentWorkItemId.Value}"
+                    url = $"{BaseUrl}{Project}/_apis/wit/workitems/{parentWorkItemId.Value}"
                 }
             });
         }

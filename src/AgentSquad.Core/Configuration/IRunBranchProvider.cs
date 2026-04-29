@@ -12,6 +12,13 @@ public interface IRunBranchProvider
     /// for the current run, otherwise returns the repository's default branch (e.g., "main").
     /// </summary>
     string EffectiveBranch { get; }
+
+    /// <summary>
+    /// Short run-scoped prefix for feature branch names (e.g., first 8 chars of RunId).
+    /// Used to prevent multi-user branch collisions: <c>agent/{RunScope}/{agentSlug}/{taskSlug}</c>.
+    /// Null when no run is active.
+    /// </summary>
+    string? RunScope { get; }
 }
 
 /// <summary>
@@ -23,6 +30,7 @@ public class RunBranchProvider : IRunBranchProvider
 {
     private readonly string _defaultBranch;
     private volatile string? _runBranch;
+    private volatile string? _runScope;
 
     public RunBranchProvider(string defaultBranch)
     {
@@ -33,21 +41,26 @@ public class RunBranchProvider : IRunBranchProvider
     /// <inheritdoc />
     public string EffectiveBranch => _runBranch ?? _defaultBranch;
 
+    /// <inheritdoc />
+    public string? RunScope => _runScope;
+
     /// <summary>
-    /// Set the target branch for the current run. Pass null to use the default branch.
+    /// Set the target branch and run scope for the current run.
     /// Called by RunCoordinator on start and recovery.
     /// </summary>
-    public void SetForRun(string? targetBranch)
+    public void SetForRun(string? targetBranch, string? runScope)
     {
         _runBranch = string.IsNullOrWhiteSpace(targetBranch) ? null : targetBranch;
+        _runScope = string.IsNullOrWhiteSpace(runScope) ? null : runScope;
     }
 
     /// <summary>
-    /// Clear the run-specific branch override, reverting to the default branch.
+    /// Clear the run-specific branch override and scope, reverting to defaults.
     /// Called by RunCoordinator on complete, fail, or cancel.
     /// </summary>
     public void Reset()
     {
         _runBranch = null;
+        _runScope = null;
     }
 }

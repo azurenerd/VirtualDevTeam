@@ -180,8 +180,8 @@ public class CustomAgent : AgentBase
 
             if (!string.IsNullOrWhiteSpace(workProduct))
             {
-                var slug = Identity.DisplayName.ToLowerInvariant().Replace(' ', '-');
-                var branchName = $"agent/{slug}/issue-{assignment.IssueNumber}";
+                var branchName = await _prWorkflow.CreateTaskBranchAsync(
+                    Identity.DisplayName, $"issue-{assignment.IssueNumber}", ct);
 
                 await _prWorkflow.CreateTaskPullRequestAsync(
                     agentName: Identity.DisplayName,

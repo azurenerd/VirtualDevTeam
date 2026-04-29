@@ -1562,7 +1562,8 @@ public class ProgramManagerAgent : AgentBase
     /// <summary>
     /// Returns true if the PR is from an engineering agent (Software Engineer or Test Engineer),
     /// as opposed to a doc PR from Researcher, PM, or Architect.
-    /// Uses branch naming convention: agent/{role}/...
+    /// Uses branch naming convention: agent/{runScope?}/{role}/...
+    /// Handles both legacy (agent/role/...) and run-scoped (agent/{scope}/role/...) formats.
     /// </summary>
     private static bool IsEngineeringPr(PlatformPullRequest pr)
     {
@@ -1571,8 +1572,11 @@ public class ProgramManagerAgent : AgentBase
         if (branch.StartsWith("refs/heads/", StringComparison.OrdinalIgnoreCase))
             branch = branch["refs/heads/".Length..];
 
-        return branch.StartsWith("agent/software-engineer", StringComparison.OrdinalIgnoreCase)
-            || branch.StartsWith("agent/test-engineer", StringComparison.OrdinalIgnoreCase);
+        // Check any segment for engineering agent role prefix
+        var segments = branch.Split('/');
+        return segments.Any(s =>
+            s.StartsWith("software-engineer", StringComparison.OrdinalIgnoreCase) ||
+            s.StartsWith("test-engineer", StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>
