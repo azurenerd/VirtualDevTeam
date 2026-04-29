@@ -512,6 +512,16 @@ public class TestEngineerAgent : AgentBase
             // AI-based testability assessment — examines files, acceptance criteria, and context
             var changedFiles = await _prService.GetChangedFilesAsync(pr.Number, ct);
 
+            // Skip PRs with 0 changed files — SE may not have pushed code yet.
+            // Don't add to _testedPRs so we re-check on the next loop iteration.
+            if (changedFiles.Count == 0)
+            {
+                Logger.LogDebug(
+                    "PR #{Number} has 0 changed files — code may not be pushed yet, will retry later",
+                    pr.Number);
+                continue;
+            }
+
             var inlineAssessStepId = _taskTracker.BeginStep(Identity.Id, $"te-pr-{pr.Number}", "Generate test plan",
                 $"Assessing testability of PR #{pr.Number}", Identity.ModelTier);
             Logger.LogInformation("Assessing testability of PR #{Number} ({FileCount} changed files): {Title}",
@@ -1501,11 +1511,8 @@ public class TestEngineerAgent : AgentBase
 
         try
         {
-            var updatedLabels = pr.Labels
-                .Append(PullRequestWorkflow.Labels.TestsAdded)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-            await _prService.UpdateAsync(pr.Number, labels: updatedLabels, ct: ct);
+            // Use AddLabelAsync to re-fetch fresh labels, avoiding race conditions
+            await _prService.AddLabelAsync(pr.Number, PullRequestWorkflow.Labels.TestsAdded, ct);
         }
         catch (Exception ex)
         {

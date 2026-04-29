@@ -1399,11 +1399,9 @@ public class ProgramManagerAgent : AgentBase
                     await ResolvePmReviewThreadsAsync(pr.Number, ct);
 
                     // Add pm-approved label — this is the final gate before merge
-                    var updatedLabels = pr.Labels
-                        .Append(PullRequestWorkflow.Labels.PmApproved)
-                        .Distinct(StringComparer.OrdinalIgnoreCase)
-                        .ToList();
-                    await _prService.UpdateAsync(pr.Number, labels: updatedLabels, ct: ct);
+                    // Uses AddLabelAsync to re-fetch fresh labels, avoiding race conditions
+                    // where concurrent label updates by other agents could be lost.
+                    await _prService.AddLabelAsync(pr.Number, PullRequestWorkflow.Labels.PmApproved, ct);
 
                     LogActivity("task", $"✅ PM final approval on PR #{pr.Number}: {pr.Title} — ready to merge");
                     _taskTracker.RecordLlmCall(reviewStepId);
