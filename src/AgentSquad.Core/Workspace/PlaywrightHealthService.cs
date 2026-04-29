@@ -35,7 +35,7 @@ public class PlaywrightHealthService : BackgroundService
         await Task.Delay(2000, stoppingToken);
 
         var wsConfig = _config.Value.Workspace;
-        var workspacePath = wsConfig.RootPath ?? @"C:\Agents";
+        var workspacePath = wsConfig.RootPath ?? ".agents";
         Directory.CreateDirectory(workspacePath);
 
         // ── Startup: browser validation ──

@@ -9,10 +9,25 @@ public class WorkspaceConfig
 {
     /// <summary>
     /// Root directory for agent workspaces. Each agent gets a subdirectory.
-    /// Example: "C:/AgentSquadWorkspaces" → "C:/AgentSquadWorkspaces/SoftwareEngineer/{repo}"
+    /// Example: ".agents" → "{cwd}/.agents/SoftwareEngineer/{repo}"
+    /// Relative paths are resolved against the application's working directory at startup.
     /// When null or empty, local workspace is disabled and agents use GitHub API-only mode.
     /// </summary>
-    public string? RootPath { get; set; } = @"C:\Agents";
+    public string? RootPath { get; set; } = ".agents";
+
+    /// <summary>
+    /// Resolves <see cref="RootPath"/> to an absolute path. If already absolute, returns as-is.
+    /// If relative, resolves against <paramref name="basePath"/> (or current directory if null).
+    /// Call this once at startup and assign back to <see cref="RootPath"/>.
+    /// </summary>
+    public void ResolveRootPath(string? basePath = null)
+    {
+        if (string.IsNullOrWhiteSpace(RootPath)) return;
+        if (Path.IsPathRooted(RootPath)) return;
+
+        var resolvedBase = basePath ?? Directory.GetCurrentDirectory();
+        RootPath = Path.GetFullPath(Path.Combine(resolvedBase, RootPath));
+    }
 
     /// <summary>
     /// Command to build the project. Executed from the repo root directory.
@@ -119,7 +134,7 @@ public class WorkspaceConfig
             return standardPath;
 
         // Fallback to workspace-local path
-        return Path.Combine(RootPath ?? @"C:\Agents", ".playwright-browsers");
+        return Path.Combine(RootPath ?? ".agents", ".playwright-browsers");
     }
 
     #endregion

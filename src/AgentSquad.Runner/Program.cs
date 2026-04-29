@@ -30,6 +30,12 @@ builder.Services.Configure<LimitsConfig>(
 builder.Services.Configure<StrategyFrameworkConfig>(
     builder.Configuration.GetSection("AgentSquad:StrategyFramework"));
 
+// Resolve relative workspace paths (e.g., ".agents") against the git repo root
+builder.Services.PostConfigure<AgentSquadConfig>(config =>
+{
+    config.Workspace.ResolveRootPath();
+});
+
 // Configure Kestrel to use the dashboard port from config
 var dashboardPort = builder.Configuration.GetValue("AgentSquad:Dashboard:Port", 5050);
 builder.WebHost.UseUrls($"http://localhost:{dashboardPort}");

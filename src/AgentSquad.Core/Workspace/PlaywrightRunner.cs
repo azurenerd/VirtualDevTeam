@@ -176,7 +176,7 @@ public class PlaywrightRunner
                 _logger.LogDebug("PORT HEALTH: All sampled ports available ✓");
 
             // Clean up stale .playwright-bak files from crashed sessions
-            CleanupStaleBackups(config.RootPath ?? @"C:\Agents");
+            CleanupStaleBackups(config.RootPath ?? ".");
         }
         catch (Exception ex)
         {
