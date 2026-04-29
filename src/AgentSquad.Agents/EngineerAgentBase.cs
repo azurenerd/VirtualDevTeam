@@ -2362,8 +2362,8 @@ public abstract class EngineerAgentBase : AgentBase
             {
                 var ext = Path.GetExtension(f).ToLowerInvariant();
                 if (ext != ".png" && ext != ".jpg" && ext != ".jpeg" && ext != ".webp") return false;
-                // Anything under docs/design-screenshots/ is always considered a design ref
-                if (f.StartsWith("docs/design-screenshots/", StringComparison.OrdinalIgnoreCase)) return true;
+                // Anything under the scoped design-screenshots folder is always considered a design ref
+                if (f.StartsWith(ProjectFiles.DesignScreenshotsPrefix, StringComparison.OrdinalIgnoreCase)) return true;
                 // Otherwise, keyword-filter by file name or parent folder
                 var lower = f.ToLowerInvariant();
                 return lower.Contains("design") || lower.Contains("concept") ||

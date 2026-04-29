@@ -349,12 +349,13 @@ public class ArchitectAgent : AgentBase
         }
 
         // Quick mode: produce a minimal 1-paragraph architecture for fast testing
+        var archPath = _projectFiles.ResolvePath("Architecture.md");
         if (_config.Project.QuickDocumentCreation)
         {
             Logger.LogInformation("QuickDocumentCreation: producing minimal Architecture.md");
             UpdateStatus(AgentStatus.Working, "Creating minimal Architecture (quick mode)");
             var qPr = await _prWorkflow.OpenDocumentPRAsync(
-                Identity.DisplayName, "Architecture.md",
+                Identity.DisplayName, archPath,
                 $"System Architecture for {directive.Title}",
                 "Quick-mode architecture document.", relatedIssue, ct);
 
@@ -385,7 +386,7 @@ public class ArchitectAgent : AgentBase
             var qContent = $"# System Architecture: {directive.Title}\n\n{qResp.Content?.Trim() ?? ""}";
 
             await _prWorkflow.CommitAndMergeDocumentPRAsync(
-                qPr, Identity.DisplayName, "Architecture.md", qContent,
+                qPr, Identity.DisplayName, archPath, qContent,
                 $"Add system architecture for {directive.Title}", ct);
             Logger.LogInformation("Quick Architecture.md created and merged");
             LogActivity("task", $"✅ Quick Architecture.md merged: {directive.Title}");
@@ -413,7 +414,7 @@ public class ArchitectAgent : AgentBase
         try { createPrStepId = _taskTracker.BeginStep(Identity.Id, directive.TaskId, "Create architecture PR", "Opening PR for Architecture.md"); } catch { }
         var pr = await _prWorkflow.OpenDocumentPRAsync(
             Identity.DisplayName,
-            "Architecture.md",
+            archPath,
             $"System Architecture for {directive.Title}",
             "Complete system architecture document covering components, data model, " +
             "API contracts, infrastructure, security, and scaling strategy.",
@@ -784,7 +785,7 @@ public class ArchitectAgent : AgentBase
             string? commitStepId = null;
             try { commitStepId = _taskTracker.BeginStep(Identity.Id, directive.TaskId, "Commit Architecture.md", "Committing architecture document to PR"); } catch { }
             await _prWorkflow.CommitDocumentToPRAsync(
-                pr, "Architecture.md", architectureDoc,
+                pr, archPath, architectureDoc,
                 $"Add system architecture for {directive.Title}", ct);
             try { if (commitStepId is not null) _taskTracker.CompleteStep(commitStepId); } catch { }
         }
@@ -816,7 +817,7 @@ public class ArchitectAgent : AgentBase
                 if (revised is not null && !pr.IsMerged)
                 {
                     await _prWorkflow.CommitDocumentToPRAsync(
-                        pr, "Architecture.md", revised,
+                        pr, archPath, revised,
                         $"Revise architecture based on reviewer feedback (attempt {revision + 2})", ct);
                 }
                 await ResetGateLabelsAsync(pr.Number, ct);
@@ -834,7 +835,7 @@ public class ArchitectAgent : AgentBase
             UpdateStatus(AgentStatus.Working, "Merging Architecture.md PR");
             try { mergeStepId = _taskTracker.BeginStep(Identity.Id, directive.TaskId, "Merge PR", "Merging Architecture.md PR"); } catch { }
             await _prWorkflow.MergeDocumentPRAsync(
-                pr, Identity.DisplayName, "Architecture.md", ct);
+                pr, Identity.DisplayName, archPath, ct);
             try { if (mergeStepId is not null) _taskTracker.CompleteStep(mergeStepId); } catch { }
         }
 

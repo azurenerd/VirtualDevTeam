@@ -515,7 +515,7 @@ public class ProgramManagerAgent : AgentBase
 
                 if (updated != content)
                 {
-                    await _projectFiles.SaveFileAsync("TeamMembers.md", updated,
+                    await _projectFiles.SaveScopedFileAsync("TeamMembers.md", updated,
                         "Add missing core agents to TeamMembers.md", ct);
                 }
                 return;
@@ -537,7 +537,7 @@ public class ProgramManagerAgent : AgentBase
 
             doc += "\n";
 
-            await _projectFiles.SaveFileAsync("TeamMembers.md", doc, "Initialize TeamMembers.md with core agents", ct);
+            await _projectFiles.SaveScopedFileAsync("TeamMembers.md", doc, "Initialize TeamMembers.md with core agents", ct);
             Logger.LogInformation("Created TeamMembers.md with {Count} core agents", coreAgents.Count);
         }
         catch (Exception ex)
@@ -2147,6 +2147,7 @@ public class ProgramManagerAgent : AgentBase
 
             // Create the PR upfront so it's visible immediately
             var projectName = _config.Project.Name;
+            var pmSpecPath = _projectFiles.ResolvePath("PMSpec.md");
 
             // Quick mode: produce a minimal 1-paragraph PMSpec for fast testing
             if (_config.Project.QuickDocumentCreation)
@@ -2154,7 +2155,7 @@ public class ProgramManagerAgent : AgentBase
                 Logger.LogInformation("QuickDocumentCreation: producing minimal PMSpec.md");
                 UpdateStatus(AgentStatus.Working, "Creating minimal PMSpec (quick mode)");
                 var qPr = await _prWorkflow.OpenDocumentPRAsync(
-                    Identity.DisplayName, "PMSpec.md",
+                    Identity.DisplayName, pmSpecPath,
                     $"PM Specification for {projectName}",
                     $"Quick-mode PM specification for {projectName}.",
                     closesIssueNumber: null, ct);
@@ -2195,7 +2196,7 @@ public class ProgramManagerAgent : AgentBase
                 if (qContent is not null && !qPr.IsMerged)
                 {
                     await _prWorkflow.CommitDocumentToPRAsync(
-                        qPr, "PMSpec.md", qContent,
+                        qPr, pmSpecPath, qContent,
                         $"Add PM Specification for {projectName}", ct);
                 }
 
@@ -2223,7 +2224,7 @@ public class ProgramManagerAgent : AgentBase
                         if (revised is not null && !qPr.IsMerged)
                         {
                             await _prWorkflow.CommitDocumentToPRAsync(
-                                qPr, "PMSpec.md", revised,
+                                qPr, pmSpecPath, revised,
                                 $"Revise PMSpec based on reviewer feedback (attempt {revision + 2})", ct);
                         }
                         await ResetGateLabelsAsync(qPr.Number, ct);
@@ -2235,7 +2236,7 @@ public class ProgramManagerAgent : AgentBase
                 if (!qPr.IsMerged)
                 {
                     await _prWorkflow.MergeDocumentPRAsync(
-                        qPr, Identity.DisplayName, "PMSpec.md", ct);
+                        qPr, Identity.DisplayName, pmSpecPath, ct);
                 }
                 Logger.LogInformation("Quick PMSpec.md created and merged");
                 LogActivity("task", $"📝 Quick PMSpec.md created for {projectName}");
@@ -2256,7 +2257,7 @@ public class ProgramManagerAgent : AgentBase
             UpdateStatus(AgentStatus.Working, "Creating PR for PMSpec.md");
             var pr = await _prWorkflow.OpenDocumentPRAsync(
                 Identity.DisplayName,
-                "PMSpec.md",
+                pmSpecPath,
                 $"PM Specification for {projectName}",
                 $"Formal product specification document covering business goals, user stories, " +
                 $"acceptance criteria, scope, and non-functional requirements for {projectName}.",
@@ -2471,7 +2472,7 @@ public class ProgramManagerAgent : AgentBase
             if (pmSpecDoc is not null && !pr.IsMerged)
             {
                 await _prWorkflow.CommitDocumentToPRAsync(
-                    pr, "PMSpec.md", pmSpecDoc,
+                    pr, pmSpecPath, pmSpecDoc,
                     $"Add PM Specification for {projectName}", ct);
             }
             _taskTracker.CompleteStep(commitStepId);
@@ -2503,7 +2504,7 @@ public class ProgramManagerAgent : AgentBase
                     if (revised is not null && !pr.IsMerged)
                     {
                         await _prWorkflow.CommitDocumentToPRAsync(
-                            pr, "PMSpec.md", revised,
+                            pr, pmSpecPath, revised,
                             $"Revise PMSpec based on reviewer feedback (attempt {revision + 2})", ct);
                     }
                     await ResetGateLabelsAsync(pr.Number, ct);
@@ -2515,7 +2516,7 @@ public class ProgramManagerAgent : AgentBase
             if (!pr.IsMerged)
             {
                 await _prWorkflow.MergeDocumentPRAsync(
-                    pr, Identity.DisplayName, "PMSpec.md", ct);
+                    pr, Identity.DisplayName, pmSpecPath, ct);
             }
             _taskTracker.CompleteStep(gateStepId);
             Logger.LogInformation("PMSpec.md PR created and merged for project {ProjectName}", projectName);
@@ -2674,7 +2675,7 @@ public class ProgramManagerAgent : AgentBase
             var docStepId = _taskTracker.BeginStep(Identity.Id, "pm-team", "Write TeamComposition.md",
                 "Generating and committing team composition document");
             var teamDoc = _teamComposer.GenerateTeamCompositionDoc(proposal);
-            await _projectFiles.SaveFileAsync("TeamComposition.md", teamDoc,
+            await _projectFiles.SaveScopedFileAsync("TeamComposition.md", teamDoc,
                 "PM: Add team composition document", ct);
             Logger.LogInformation("TeamComposition.md saved");
             _taskTracker.CompleteStep(docStepId);
@@ -3373,7 +3374,7 @@ public class ProgramManagerAgent : AgentBase
                 {
                     // No rendered design reference images — still enforce strict visual rules
                     screenshotIntro += "\n## ⚠️ No Design Reference Image Available\n" +
-                        "No rendered design screenshot was found in `docs/design-screenshots/`. " +
+                        $"No rendered design screenshot was found in `{_projectFiles.DesignScreenshotsPrefix}`. " +
                         "Apply these strict visual quality rules to the actual screenshot:\n\n" +
                         "**STRICT VISUAL RULES — REQUEST_CHANGES if ANY are violated:**\n" +
                         "- If the actual screenshot is blank, mostly white, or shows only a white page → REQUEST_CHANGES.\n" +
@@ -3675,7 +3676,7 @@ public class ProgramManagerAgent : AgentBase
 
             // Also find design screenshots committed by the Researcher
             var designScreenshots = tree
-                .Where(f => f.StartsWith("docs/design-screenshots/", StringComparison.OrdinalIgnoreCase) &&
+                .Where(f => f.StartsWith(_projectFiles.DesignScreenshotsPrefix, StringComparison.OrdinalIgnoreCase) &&
                             Path.GetExtension(f).Equals(".png", StringComparison.OrdinalIgnoreCase))
                 .ToList();
 
@@ -3801,7 +3802,7 @@ public class ProgramManagerAgent : AgentBase
         {
             var tree = await _repoContent.GetRepositoryTreeAsync(EffectiveBranch, ct);
             var designPngs= tree
-                .Where(f => f.StartsWith("docs/design-screenshots/", StringComparison.OrdinalIgnoreCase) &&
+                .Where(f => f.StartsWith(_projectFiles.DesignScreenshotsPrefix, StringComparison.OrdinalIgnoreCase) &&
                             f.EndsWith(".png", StringComparison.OrdinalIgnoreCase))
                 .Take(3) // cap at 3 references to keep token usage sane
                 .ToList();

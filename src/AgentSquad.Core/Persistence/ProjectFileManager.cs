@@ -51,8 +51,17 @@ public class ProjectFileManager
     }
 
     /// <summary>Resolve a doc filename to its full path under <see cref="ArtifactBasePath"/>.</summary>
-    private string ResolvePath(string fileName) =>
+    public string ResolvePath(string fileName) =>
         string.IsNullOrEmpty(ArtifactBasePath) ? fileName : $"{ArtifactBasePath}/{fileName}";
+
+    /// <summary>
+    /// Path prefix for design screenshots under the scoped folder
+    /// (e.g., "AgentDocs/305/design-screenshots/"). Use for tree StartsWith checks.
+    /// </summary>
+    public string DesignScreenshotsPrefix =>
+        string.IsNullOrEmpty(ArtifactBasePath)
+            ? "design-screenshots/"
+            : $"{ArtifactBasePath}/design-screenshots/";
 
     /// <summary>
     /// Read a file from the scoped path. Falls back to repo root when scoped path yields nothing,

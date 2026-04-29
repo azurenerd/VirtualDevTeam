@@ -184,9 +184,10 @@ public class ResearcherAgent : AgentBase
                         UpdateStatus(AgentStatus.Working, "Creating PR for Research.md");
                         string? createPrStepId = null;
                         try { createPrStepId = _taskTracker.BeginStep(Identity.Id, directive.TaskId, "Create research PR", "Opening PR for Research.md", Identity.ModelTier); } catch { }
+                        var researchPath = _projectFiles.ResolvePath("Research.md");
                         var pr = await _prWorkflow.OpenDocumentPRAsync(
                             Identity.DisplayName,
-                            "Research.md",
+                            researchPath,
                             $"Research findings for {directive.Topic}",
                             $"Research findings covering: {directive.Topic}",
                             relatedIssue,
@@ -240,7 +241,7 @@ public class ResearcherAgent : AgentBase
                             string? commitStepId = null;
                             try { commitStepId = _taskTracker.BeginStep(Identity.Id, directive.TaskId, "Commit Research.md", "Committing research findings to PR"); } catch { }
                             await _prWorkflow.CommitDocumentToPRAsync(
-                                pr, "Research.md", updatedDoc,
+                                pr, researchPath, updatedDoc,
                                 $"Add research findings: {directive.Topic}", ct);
                             try { if (commitStepId is not null) _taskTracker.CompleteStep(commitStepId); } catch { }
                         }
@@ -277,7 +278,7 @@ public class ResearcherAgent : AgentBase
                                 if (revisedDoc is not null && !pr.IsMerged)
                                 {
                                     await _prWorkflow.CommitDocumentToPRAsync(
-                                        pr, "Research.md", revisedDoc,
+                                        pr, researchPath, revisedDoc,
                                         $"Revise research based on reviewer feedback (attempt {revision + 2})", ct);
                                 }
 
@@ -304,7 +305,7 @@ public class ResearcherAgent : AgentBase
                             LogActivity("task", "🔗 Merging Research.md PR");
                             UpdateStatus(AgentStatus.Working, "Merging Research.md PR");
                             await _prWorkflow.MergeDocumentPRAsync(
-                                pr, Identity.DisplayName, "Research.md", ct);
+                                pr, Identity.DisplayName, researchPath, ct);
                         }
 
                         Logger.LogInformation("Research.md PR created and merged for '{Topic}'", directive.Topic);
@@ -1079,7 +1080,7 @@ public class ResearcherAgent : AgentBase
         if (htmlDesignFiles.Count == 0) return;
 
         var existingScreenshots = new HashSet<string>(
-            tree.Where(f => f.StartsWith("docs/design-screenshots/", StringComparison.OrdinalIgnoreCase) &&
+            tree.Where(f => f.StartsWith(_projectFiles.DesignScreenshotsPrefix, StringComparison.OrdinalIgnoreCase) &&
                             f.EndsWith(".png", StringComparison.OrdinalIgnoreCase))
                 .Select(f => Path.GetFileNameWithoutExtension(f)),
             StringComparer.OrdinalIgnoreCase);
@@ -1102,7 +1103,7 @@ public class ResearcherAgent : AgentBase
                     continue;
                 }
 
-                var screenshotPath = $"docs/design-screenshots/{stem}.png";
+                var screenshotPath = $"{_projectFiles.DesignScreenshotsPrefix}{stem}.png";
                 var imageUrl = await _repoContent.CommitBinaryFileAsync(
                     screenshotPath, screenshotBytes,
                     $"Add design screenshot: {stem}.png (rendered from {htmlPath})",
@@ -1160,7 +1161,7 @@ public class ResearcherAgent : AgentBase
 
                 // Commit the screenshot to the repo
                 var fileName = Path.GetFileNameWithoutExtension(path);
-                var screenshotPath = $"docs/design-screenshots/{fileName}.png";
+                var screenshotPath = $"{_projectFiles.DesignScreenshotsPrefix}{fileName}.png";
                 var imageUrl = await _repoContent.CommitBinaryFileAsync(
                     screenshotPath, screenshotBytes,
                     $"Add design screenshot: {fileName}.png (rendered from {path})",
