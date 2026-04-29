@@ -35,6 +35,13 @@ public interface IPlatformHostContext
     /// </summary>
     string GetRawFileUrl(string path, string branch);
 
+    /// <summary>
+    /// Web-browsable URL for a file on a branch.
+    /// GitHub: https://github.com/owner/repo/blob/branch/path
+    /// ADO: https://dev.azure.com/org/project/_git/repo?path=/path&amp;version=GBbranch
+    /// </summary>
+    string GetFileWebUrl(string path, string branch);
+
     /// <summary>Default branch name (usually "main").</summary>
     string DefaultBranch { get; }
 }

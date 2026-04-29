@@ -37,6 +37,7 @@ public partial class PullRequestWorkflow
     private readonly IBranchService _branchService;
     private readonly ILogger<PullRequestWorkflow> _logger;
     private readonly IRunBranchProvider? _branchProvider;
+    private readonly IPlatformHostContext? _hostContext;
     private readonly string _defaultBranch;
 
     /// <summary>
@@ -97,7 +98,8 @@ public partial class PullRequestWorkflow
         ILogger<PullRequestWorkflow> logger,
         IRunBranchProvider? branchProvider = null,
         string defaultBranch = "main",
-        ConflictDetector? conflictDetector = null)
+        ConflictDetector? conflictDetector = null,
+        IPlatformHostContext? hostContext = null)
     {
         _prService = prService ?? throw new ArgumentNullException(nameof(prService));
         _repoContent = repoContent ?? throw new ArgumentNullException(nameof(repoContent));
@@ -107,6 +109,7 @@ public partial class PullRequestWorkflow
         _branchProvider = branchProvider;
         _defaultBranch = defaultBranch;
         _conflictDetector = conflictDetector;
+        _hostContext = hostContext;
     }
 
     /// <summary>
@@ -622,8 +625,11 @@ public partial class PullRequestWorkflow
         var issueRef = closesIssueNumber.HasValue
             ? $"\n\nCloses #{closesIssueNumber.Value}"
             : "";
+        var docLink = _hostContext is not null
+            ? $"[{documentPath}]({_hostContext.GetFileWebUrl(documentPath, branchName)})"
+            : documentPath;
         var prBody = $"""
-            ## Document: {documentPath}
+            ## Document: {docLink}
             **Author:** {agentName}
             **Status:** 🔄 In Progress
 

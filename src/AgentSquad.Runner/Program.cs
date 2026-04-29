@@ -92,7 +92,8 @@ builder.Services.AddSingleton<PullRequestWorkflow>(sp =>
         sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<PullRequestWorkflow>>(),
         sp.GetRequiredService<IRunBranchProvider>(),
         config.Project.DefaultBranch,
-        sp.GetRequiredService<ConflictDetector>());
+        sp.GetRequiredService<ConflictDetector>(),
+        sp.GetRequiredService<IPlatformHostContext>());
 });
 builder.Services.AddSingleton<IssueWorkflow>();
 builder.Services.AddSingleton<ConflictResolver>();

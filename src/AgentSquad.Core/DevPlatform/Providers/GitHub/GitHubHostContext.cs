@@ -32,5 +32,8 @@ public sealed class GitHubHostContext : IPlatformHostContext
     public string GetRawFileUrl(string path, string branch)
         => $"https://raw.githubusercontent.com/{Repo}/{branch}/{path}";
 
+    public string GetFileWebUrl(string path, string branch)
+        => $"https://github.com/{Repo}/blob/{branch}/{path}";
+
     public string DefaultBranch => _config.Project.DefaultBranch;
 }

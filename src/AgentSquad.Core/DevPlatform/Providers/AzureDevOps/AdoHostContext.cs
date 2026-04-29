@@ -44,4 +44,10 @@ public sealed class AdoHostContext : IPlatformHostContext
         var normalizedPath = path.StartsWith('/') ? path : $"/{path}";
         return $"https://dev.azure.com/{Ado.Organization}/{Ado.Project}/_apis/git/repositories/{Ado.Repository}/items?path={Uri.EscapeDataString(normalizedPath)}&versionDescriptor.version={Uri.EscapeDataString(branch)}&versionDescriptor.versionType=branch&api-version=7.1";
     }
+
+    public string GetFileWebUrl(string path, string branch)
+    {
+        var normalizedPath = path.StartsWith('/') ? path : $"/{path}";
+        return $"https://dev.azure.com/{Ado.Organization}/{Ado.Project}/_git/{Ado.Repository}?path={Uri.EscapeDataString(normalizedPath)}&version=GB{Uri.EscapeDataString(branch)}";
+    }
 }
