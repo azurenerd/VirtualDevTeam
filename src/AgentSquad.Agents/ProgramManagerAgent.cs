@@ -191,7 +191,7 @@ public class ProgramManagerAgent : AgentBase
                 {
                     var openEnhancements = await _workItemService!.ListByLabelAsync(
                         IssueWorkflow.Labels.Enhancement, "open", ct);
-                    if (openEnhancements.Count == 0 && _reviewedEnhancementIssues.Count == 0)
+                    if (openEnhancements.Count == 0 && _reviewedEnhancementIssues.Count == 0 && !_userStoryIssuesCreated)
                     {
                         var specContent = await _projectFiles.GetPMSpecAsync(ct);
                         if (!string.IsNullOrWhiteSpace(specContent) &&
@@ -2876,6 +2876,15 @@ public class ProgramManagerAgent : AgentBase
             // Parse the AI output into individual stories
             var storyBlocks = content.Split("---", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
             _taskTracker.CompleteStep(extractStepId);
+
+            // Cap stories to avoid AI generating an unreasonable number
+            const int maxStories = 12;
+            if (storyBlocks.Length > maxStories)
+            {
+                Logger.LogWarning("AI extracted {Count} story blocks — capping at {Max} to keep scope manageable",
+                    storyBlocks.Length, maxStories);
+                storyBlocks = storyBlocks[..maxStories];
+            }
 
             var createStepId = _taskTracker.BeginStep(Identity.Id, "pm-stories", $"Create {storyBlocks.Length} GitHub issues",
                 "Creating enhancement issues on GitHub");
