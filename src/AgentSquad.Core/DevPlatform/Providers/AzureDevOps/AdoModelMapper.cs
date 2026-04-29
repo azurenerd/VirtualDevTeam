@@ -1,3 +1,4 @@
+using System.Globalization;
 using AgentSquad.Core.DevPlatform.Models;
 
 namespace AgentSquad.Core.DevPlatform.Providers.AzureDevOps;
@@ -147,10 +148,14 @@ internal static class AdoModelMapper
         {
             if (val is System.Text.Json.JsonElement je && je.ValueKind == System.Text.Json.JsonValueKind.String)
             {
-                if (DateTime.TryParse(je.GetString(), out var dt))
-                    return dt;
+                // RoundtripKind preserves the UTC 'Z' suffix from ADO dates.
+                // Without it, DateTime.TryParse converts UTC dates to local time,
+                // breaking post-fetch comparisons against UTC timestamps.
+                if (DateTime.TryParse(je.GetString(), CultureInfo.InvariantCulture,
+                        DateTimeStyles.RoundtripKind, out var dt))
+                    return dt.ToUniversalTime();
             }
-            if (val is DateTime dt2) return dt2;
+            if (val is DateTime dt2) return dt2.ToUniversalTime();
         }
         return null;
     }
