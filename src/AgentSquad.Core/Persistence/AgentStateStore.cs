@@ -100,7 +100,8 @@ public record StrategyActivityLogEntry(
 /// </summary>
 public class AgentStateStore : IDisposable
 {
-    private readonly SqliteConnection _connection;
+    private SqliteConnection _connection;
+    private readonly object _dbLock = new();
     private bool _disposed;
 
     public AgentStateStore(string dbPath = "agentsquad.db")
@@ -108,6 +109,23 @@ public class AgentStateStore : IDisposable
         _connection = new SqliteConnection($"Data Source={dbPath}");
         _connection.Open();
         InitializeDatabase();
+    }
+
+    /// <summary>
+    /// Reconfigure to use a different database file. Closes the current connection
+    /// and opens a new one. Call when the target repo changes between runs.
+    /// </summary>
+    public void Reconfigure(string newDbPath)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        lock (_dbLock)
+        {
+            _connection.Close();
+            _connection.Dispose();
+            _connection = new SqliteConnection($"Data Source={newDbPath}");
+            _connection.Open();
+            InitializeDatabase();
+        }
     }
 
     private void InitializeDatabase()

@@ -13,9 +13,9 @@ namespace AgentSquad.Core.GitHub;
 public class ConflictResolver
 {
     private readonly IGitHubService _github;
-    private readonly GitHubClient _client;
-    private readonly string _owner;
-    private readonly string _repo;
+    private GitHubClient _client;
+    private string _owner;
+    private string _repo;
     private readonly ILogger<ConflictResolver> _logger;
 
     public ConflictResolver(
@@ -38,6 +38,20 @@ public class ConflictResolver
         {
             Credentials = new Credentials(projectConfig.GitHubToken)
         };
+    }
+
+    /// <summary>
+    /// Reconfigure to target a different repository. Call when user changes target repo between runs.
+    /// </summary>
+    public void Reconfigure(string owner, string repo, string token)
+    {
+        _owner = owner;
+        _repo = repo;
+        _client = new GitHubClient(new ProductHeaderValue("AgentSquad-ConflictResolver"))
+        {
+            Credentials = new Credentials(token)
+        };
+        _logger.LogInformation("ConflictResolver reconfigured for {Owner}/{Repo}", owner, repo);
     }
 
     /// <summary>

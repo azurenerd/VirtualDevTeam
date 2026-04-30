@@ -10,10 +10,11 @@ namespace AgentSquad.Core.GitHub;
 
 public class GitHubService : IGitHubService
 {
-    private readonly GitHubClient _client;
-    private readonly string _owner;
-    private readonly string _repo;
-    private readonly string _token;
+    private GitHubClient _client;
+    private string _owner;
+    private string _repo;
+    private string _token;
+    private readonly object _repoContextLock = new();
     private readonly ILogger<GitHubService> _logger;
     private readonly RateLimitManager _rl;
     private readonly DateTime? _runStartedUtc;
@@ -112,6 +113,31 @@ public class GitHubService : IGitHubService
         lock (_fileContentCache) { _fileContentCache.Clear(); }
         lock (_issueCommentsCache) { _issueCommentsCache.Clear(); }
         lock (_prCommentsCache) { _prCommentsCache.Clear(); }
+    }
+
+    /// <summary>
+    /// Reconfigure this service to target a different repository. Thread-safe — atomically
+    /// swaps repo context and clears all caches. Call when user changes target repo between runs.
+    /// </summary>
+    public void ReconfigureRepository(string owner, string repo, string token)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(owner);
+        ArgumentException.ThrowIfNullOrWhiteSpace(repo);
+        ArgumentException.ThrowIfNullOrWhiteSpace(token);
+
+        lock (_repoContextLock)
+        {
+            _owner = owner;
+            _repo = repo;
+            _token = token;
+            _client = new GitHubClient(new ProductHeaderValue("AgentSquad"))
+            {
+                Credentials = new Credentials(token)
+            };
+            InvalidateListCaches();
+            _knownLabels = null;
+        }
+        _logger.LogInformation("GitHubService reconfigured for {Owner}/{Repo}", owner, repo);
     }
 
     // Cache of labels known to exist in the repo (populated on first use, then updated as we create).

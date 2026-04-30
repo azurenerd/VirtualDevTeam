@@ -1,7 +1,9 @@
 using AgentSquad.Core.Agents;
 using AgentSquad.Core.Configuration;
 using AgentSquad.Core.DevPlatform.Capabilities;
+using AgentSquad.Core.GitHub;
 using AgentSquad.Core.Persistence;
+using AgentSquad.Core.Strategies;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -18,11 +20,15 @@ public class RunCoordinator
     private readonly AgentRegistry _registry;
     private readonly WorkflowStateMachine _workflow;
     private readonly AgentStateStore _stateStore;
+    private readonly AgentMemoryStore _memoryStore;
     private readonly IGateCheckService _gateCheck;
     private readonly ProjectFileManager _fileManager;
     private readonly RunBranchProvider _branchProvider;
     private readonly IBranchService _branchService;
     private readonly DevelopSettingsService _developSettingsService;
+    private readonly IGitHubService _gitHubService;
+    private readonly ConflictResolver _conflictResolver;
+    private readonly CandidateStateStore _candidateStateStore;
     private readonly ILogger<RunCoordinator> _logger;
     private readonly AgentSquadConfig _config;
 
@@ -37,11 +43,15 @@ public class RunCoordinator
         AgentRegistry registry,
         WorkflowStateMachine workflow,
         AgentStateStore stateStore,
+        AgentMemoryStore memoryStore,
         IGateCheckService gateCheck,
         ProjectFileManager fileManager,
         RunBranchProvider branchProvider,
         IBranchService branchService,
         DevelopSettingsService developSettingsService,
+        IGitHubService gitHubService,
+        ConflictResolver conflictResolver,
+        CandidateStateStore candidateStateStore,
         ILogger<RunCoordinator> logger,
         IOptions<AgentSquadConfig> config)
     {
@@ -49,11 +59,15 @@ public class RunCoordinator
         _registry = registry ?? throw new ArgumentNullException(nameof(registry));
         _workflow = workflow ?? throw new ArgumentNullException(nameof(workflow));
         _stateStore = stateStore ?? throw new ArgumentNullException(nameof(stateStore));
+        _memoryStore = memoryStore ?? throw new ArgumentNullException(nameof(memoryStore));
         _gateCheck = gateCheck ?? throw new ArgumentNullException(nameof(gateCheck));
         _fileManager = fileManager ?? throw new ArgumentNullException(nameof(fileManager));
         _branchProvider = branchProvider ?? throw new ArgumentNullException(nameof(branchProvider));
         _branchService = branchService ?? throw new ArgumentNullException(nameof(branchService));
         _developSettingsService = developSettingsService ?? throw new ArgumentNullException(nameof(developSettingsService));
+        _gitHubService = gitHubService ?? throw new ArgumentNullException(nameof(gitHubService));
+        _conflictResolver = conflictResolver ?? throw new ArgumentNullException(nameof(conflictResolver));
+        _candidateStateStore = candidateStateStore ?? throw new ArgumentNullException(nameof(candidateStateStore));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _config = config?.Value ?? throw new ArgumentNullException(nameof(config));
     }
@@ -152,6 +166,11 @@ public class RunCoordinator
         _logger.LogInformation("Merged develop settings into config (WorkingBranch={Branch})",
             _config.Project.WorkingBranch ?? "(none)");
 
+        // Reconfigure singleton services to target the (possibly changed) repository.
+        // This ensures GitHubService, stores, and resolvers use the correct repo/token
+        // even if the user changed the target via the wizard since last run.
+        ReconfigureServicesForRepo();
+
         var run = new ActiveRun
         {
             RunId = Guid.NewGuid().ToString("N"),
@@ -216,6 +235,53 @@ public class RunCoordinator
     }
 
     /// <summary>
+    /// Reconfigure singleton services to target the current repo from config.
+    /// Called at the start of each run so that services pick up any repo/token changes
+    /// made via the wizard since the process started.
+    /// </summary>
+    private void ReconfigureServicesForRepo()
+    {
+        var repoParts = _config.Project.GitHubRepo.Split('/', 2);
+        if (repoParts.Length != 2)
+        {
+            _logger.LogWarning("Cannot reconfigure — GitHubRepo '{Repo}' is not in owner/repo format",
+                _config.Project.GitHubRepo);
+            return;
+        }
+
+        var owner = repoParts[0];
+        var repo = repoParts[1];
+        var token = _config.Project.GitHubToken;
+
+        // Skip if repo hasn't changed
+        if (_gitHubService.RepositoryFullName == _config.Project.GitHubRepo)
+        {
+            _logger.LogDebug("Repository unchanged ({Repo}), skipping service reconfiguration",
+                _config.Project.GitHubRepo);
+            return;
+        }
+
+        _logger.LogInformation("Repository changed to {Owner}/{Repo} — reconfiguring services", owner, repo);
+
+        // 1. Reconfigure GitHub API services
+        if (_gitHubService is GitHubService concreteGitHub)
+            concreteGitHub.ReconfigureRepository(owner, repo, token);
+        _conflictResolver.Reconfigure(owner, repo, token);
+
+        // 2. Reconfigure SQLite stores to use the new repo's database
+        var repoSlug = _config.Project.GitHubRepo.Replace('/', '_');
+        var newDbPath = $"agentsquad_{repoSlug}.db";
+        _stateStore.Reconfigure(newDbPath);
+        _memoryStore.Reconfigure(newDbPath);
+
+        // 3. Reset CandidateStateStore (clears in-memory state, re-hydrates from new DB)
+        _candidateStateStore.Reset();
+
+        _logger.LogInformation("All services reconfigured for {Owner}/{Repo} (db: {DbPath})",
+            owner, repo, newDbPath);
+    }
+
+    /// <summary>
     /// Start a feature run. Loads the feature definition, creates the run, and sets up the profile.
     /// </summary>
     public async Task<ActiveRun> StartFeatureAsync(string featureId, CancellationToken ct = default)
@@ -236,6 +302,18 @@ public class RunCoordinator
 
             if (feature.Status is not (FeatureStatus.Draft or FeatureStatus.Queued))
                 throw new InvalidOperationException($"Feature '{featureId}' is in status {feature.Status} — only Draft or Queued features can be started");
+
+            // Reconfigure services if feature targets a different repo
+            var featureRepo = feature.TargetRepo ?? _config.Project.GitHubRepo;
+            if (!string.IsNullOrWhiteSpace(featureRepo) && featureRepo != _gitHubService.RepositoryFullName)
+            {
+                var parts = featureRepo.Split('/', 2);
+                if (parts.Length == 2)
+                {
+                    _config.Project.GitHubRepo = featureRepo;
+                    ReconfigureServicesForRepo();
+                }
+            }
 
             var runId = Guid.NewGuid().ToString("N");
             var run = new ActiveRun

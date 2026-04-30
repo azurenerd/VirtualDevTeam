@@ -557,6 +557,28 @@ public sealed class CandidateStateStore : IDisposable
         // Final flush before shutdown
         FlushActiveTasks();
     }
+
+    /// <summary>
+    /// Reset all in-memory state and re-hydrate from the (possibly reconfigured) SQLite store.
+    /// Pauses the flush timer during reset to prevent cross-writes.
+    /// Call after AgentStateStore.Reconfigure() when the target repo changes.
+    /// </summary>
+    public void Reset()
+    {
+        // Pause the flush timer to prevent races
+        _flushTimer?.Change(Timeout.Infinite, Timeout.Infinite);
+        try
+        {
+            _active.Clear();
+            lock (_recentLock) { _recent.Clear(); }
+            HydrateFromSqlite();
+        }
+        finally
+        {
+            // Resume the flush timer
+            _flushTimer?.Change(TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
+        }
+    }
 }
 
 public enum CandidateState

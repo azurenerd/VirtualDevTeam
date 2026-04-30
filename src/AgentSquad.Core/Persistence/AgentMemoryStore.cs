@@ -37,7 +37,8 @@ public sealed record AgentMemoryEntry
 /// </summary>
 public sealed class AgentMemoryStore : IDisposable
 {
-    private readonly SqliteConnection _connection;
+    private SqliteConnection _connection;
+    private readonly object _dbLock = new();
     private bool _disposed;
 
     public AgentMemoryStore(string dbPath = "agentsquad.db")
@@ -45,6 +46,23 @@ public sealed class AgentMemoryStore : IDisposable
         _connection = new SqliteConnection($"Data Source={dbPath}");
         _connection.Open();
         InitializeTable();
+    }
+
+    /// <summary>
+    /// Reconfigure to use a different database file. Closes the current connection
+    /// and opens a new one. Call when the target repo changes between runs.
+    /// </summary>
+    public void Reconfigure(string newDbPath)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        lock (_dbLock)
+        {
+            _connection.Close();
+            _connection.Dispose();
+            _connection = new SqliteConnection($"Data Source={newDbPath}");
+            _connection.Open();
+            InitializeTable();
+        }
     }
 
     private void InitializeTable()
