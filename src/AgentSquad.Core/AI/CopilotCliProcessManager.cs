@@ -290,6 +290,7 @@ public sealed class CopilotCliProcessManager : IHostedService, IDisposable
         {
             process = new Process { StartInfo = psi };
             process.Start();
+            _activeProcesses.TryAdd(process.Id, process);
         }
         catch (Exception ex)
         {
@@ -348,6 +349,10 @@ public sealed class CopilotCliProcessManager : IHostedService, IDisposable
                 KillProcessSafely(process);
                 _logger.LogError(ex, "Error during copilot process execution");
                 return CopilotCliResult.Failure($"Process error: {ex.Message}");
+            }
+            finally
+            {
+                _activeProcesses.TryRemove(process.Id, out _);
             }
         }
     }
@@ -416,6 +421,7 @@ public sealed class CopilotCliProcessManager : IHostedService, IDisposable
         {
             process = new Process { StartInfo = psi };
             process.Start();
+            _activeProcesses.TryAdd(process.Id, process);
 
             // Assign to a Job Object for atomic descendant-kill on close.
             // KILL_ON_JOB_CLOSE + BreakawayOK=false means every grandchild is
@@ -623,6 +629,10 @@ public sealed class CopilotCliProcessManager : IHostedService, IDisposable
                     LogBuffer = logBuffer.ToString(),
                     ErrorMessage = $"Process error: {ex.Message}",
                 };
+            }
+            finally
+            {
+                _activeProcesses.TryRemove(process.Id, out _);
             }
         }
     }
@@ -932,6 +942,14 @@ public sealed class CopilotCliProcessManager : IHostedService, IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+
+        // Kill all in-flight copilot processes to prevent orphaned sessions
+        foreach (var kvp in _activeProcesses)
+        {
+            if (_activeProcesses.TryRemove(kvp.Key, out var process))
+                KillProcessSafely(process);
+        }
+
         _singleShotPool.Dispose();
         _candidatePool.Dispose();
         _agenticPool.Dispose();
