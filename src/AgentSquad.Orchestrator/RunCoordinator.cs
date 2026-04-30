@@ -197,10 +197,16 @@ public class RunCoordinator
 
         // Run scope: always use first 8 chars of RunId for branch naming uniqueness
         var runScope = run.RunId[..8];
+
+        // Artifact scope: stable identifier for doc paths (survives mini-resets)
+        // Priority: ParentWorkItemId (ADO) > working branch (GitHub) > random RunId fragment
+        var artifactScope = _config.Project.ParentWorkItemId?.ToString()
+            ?? (workingBranch is not null ? NormalizeBranchForPath(workingBranch) : null)
+            ?? runScope;
         var profile = new ProjectWorkflowProfile(
             _config.Limits.SinglePRMode,
             _config.Project.DocsFolderPath,
-            _config.Project.ParentWorkItemId?.ToString() ?? runScope);
+            artifactScope);
 
         // Persist the artifact path and run scope with the run so recovery is deterministic
         run = run with { ArtifactBasePath = profile.ArtifactBasePath, RunScope = runScope };
@@ -627,10 +633,22 @@ public class RunCoordinator
                 run.FeatureId, run.RunId);
         }
 
-        var runScope = _config.Project.ParentWorkItemId?.ToString() ?? run.RunId[..Math.Min(8, run.RunId.Length)];
+        // Artifact scope: stable identifier for doc paths (survives mini-resets)
+        // Priority: ParentWorkItemId (ADO) > working branch (GitHub) > random RunId fragment
+        var normalizedBranch = run.TargetBranch is not null ? NormalizeBranchForPath(run.TargetBranch) : null;
+        var runScope = _config.Project.ParentWorkItemId?.ToString()
+            ?? normalizedBranch
+            ?? run.RunId[..Math.Min(8, run.RunId.Length)];
         return new ProjectWorkflowProfile(
             _config.Limits.SinglePRMode,
             _config.Project.DocsFolderPath,
             runScope);
     }
+
+    /// <summary>
+    /// Normalizes a branch name for use as a path segment (replaces '/' with '-').
+    /// e.g., "feature/auth" → "feature-auth", "testbranch" → "testbranch"
+    /// </summary>
+    private static string NormalizeBranchForPath(string branch) =>
+        branch.Replace('/', '-').Replace('\\', '-');
 }
