@@ -119,4 +119,89 @@ public class SpecialistEngineerAgent : EngineerAgentBase
             "an updated implementation that addresses ALL the feedback points. " +
             "Apply your specialist expertise to ensure the fix is thorough and production-quality.";
     }
+
+    private int _idleLoopCount;
+    private const int SelfClaimAfterIdleLoops = 2; // Self-claim faster than SE workers (specialists are always idle)
+
+    /// <summary>
+    /// Self-claim fallback: if this specialist has been idle for several loops and the leader
+    /// hasn't assigned work via the bus, look for unassigned engineering-task issues on GitHub
+    /// that match our capabilities and claim one directly.
+    /// </summary>
+    protected override async Task RunAdditionalLoopWorkAsync(CancellationToken ct)
+    {
+        // Only self-claim if we have no current work
+        if (CurrentPrNumber is not null || AssignmentQueue.Count > 0)
+        {
+            _idleLoopCount = 0;
+            return;
+        }
+
+        _idleLoopCount++;
+        if (_idleLoopCount < SelfClaimAfterIdleLoops)
+            return;
+
+        try
+        {
+            // Find unassigned engineering tasks
+            var allItems = await WorkItemService.ListByLabelAsync("engineering-task", "open", ct);
+            var unassigned = allItems
+                .Where(item => string.IsNullOrEmpty(item.AssignedAgent)
+                    && !item.Labels.Contains("done", StringComparer.OrdinalIgnoreCase)
+                    && !item.Labels.Contains("in-progress", StringComparer.OrdinalIgnoreCase))
+                .ToList();
+
+            if (unassigned.Count == 0)
+            {
+                Logger.LogDebug("{Role} {Name} self-claim: no unassigned engineering tasks available",
+                    Identity.Role, Identity.DisplayName);
+                return;
+            }
+
+            // Prefer tasks matching our capabilities
+            var capabilityKeywords = Definition.Capabilities
+                .SelectMany(c => c.ToLowerInvariant().Split(' ', StringSplitOptions.RemoveEmptyEntries))
+                .Where(w => w.Length > 3)
+                .ToHashSet();
+
+            var bestMatch = unassigned
+                .OrderByDescending(item =>
+                {
+                    var text = $"{item.Title} {item.Body}".ToLowerInvariant();
+                    return capabilityKeywords.Count(kw => text.Contains(kw));
+                })
+                .First();
+
+            // Self-assign: update the issue title to claim it
+            var cleanTitle = bestMatch.Title.Contains(':')
+                ? bestMatch.Title[(bestMatch.Title.IndexOf(':') + 1)..].Trim()
+                : bestMatch.Title;
+            var newTitle = $"{Identity.DisplayName}: {cleanTitle}";
+            var newLabels = bestMatch.Labels.ToList();
+            if (!newLabels.Contains("assigned"))
+                newLabels.Add("assigned");
+
+            await WorkItemService.UpdateAsync(bestMatch.Number, title: newTitle, labels: newLabels, state: "inprogress", ct: ct);
+
+            // Enqueue as an assignment so the base loop picks it up next iteration
+            AssignmentQueue.Enqueue(new IssueAssignmentMessage
+            {
+                FromAgentId = Identity.Id, // Self-assigned
+                ToAgentId = Identity.Id,
+                IssueNumber = bestMatch.Number,
+                IssueTitle = cleanTitle,
+                Complexity = "Medium", // Default — exact complexity is in the issue body
+                MessageType = "IssueAssignment"
+            });
+
+            _idleLoopCount = 0;
+            Logger.LogInformation(
+                "{Role} {Name} self-claimed task #{IssueNumber}: {Title} (idle for {Loops} loops)",
+                Identity.Role, Identity.DisplayName, bestMatch.Number, cleanTitle, _idleLoopCount);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "{Role} {Name} self-claim failed", Identity.Role, Identity.DisplayName);
+        }
+    }
 }

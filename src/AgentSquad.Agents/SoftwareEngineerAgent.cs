@@ -115,6 +115,8 @@ public class SoftwareEngineerAgent : EngineerAgentBase
     private string? _currentTaskName; // Human-readable name for dashboard display
     private DateTime _lastReviewDiscovery = DateTime.MinValue;
     private static readonly TimeSpan ReviewDiscoveryInterval = TimeSpan.FromMinutes(2);
+    private int _idleLoopCount; // Tracks consecutive idle iterations for self-claim fallback
+    private const int SelfClaimAfterIdleLoops = 3; // Self-claim after 3 idle loops (~45s with 15s poll)
 
     /// <summary>
     /// Determines if this PE instance is the leader (responsible for orchestration-only tasks).
@@ -2145,13 +2147,53 @@ public class SoftwareEngineerAgent : EngineerAgentBase
                     task = _taskManager.FindAssignedTo(Identity.DisplayName);
                     if (task is null)
                     {
-                        Logger.LogDebug("Worker PE: no task assigned to {Name}, waiting for leader",
-                            Identity.DisplayName);
-                        return;
+                        // Self-claim fallback: if we've been idle too long and there are unassigned
+                        // pending tasks, claim one directly instead of waiting forever for the leader.
+                        // This handles the case where workers spawn after the leader is already deep
+                        // in its own implementation and can't loop back to assign tasks.
+                        _idleLoopCount++;
+                        if (_idleLoopCount >= SelfClaimAfterIdleLoops)
+                        {
+                            task = _taskManager.Tasks
+                                .Where(t => t.Status == "Pending"
+                                    && _taskManager.IsWaveEligible(t)
+                                    && _taskManager.AreDependenciesMet(t)
+                                    && t.Id != IntegrationTaskId
+                                    && t.IssueNumber.HasValue
+                                    && !IsFoundationTask(t)
+                                    && string.IsNullOrEmpty(t.AssignedTo))
+                                .OrderByDescending(t => MatchesCapabilities(t))
+                                .ThenByDescending(t => t.Complexity == "High" ? 3 : t.Complexity == "Medium" ? 2 : 1)
+                                .FirstOrDefault();
+
+                            if (task is not null)
+                            {
+                                await _taskManager.AssignTaskAsync(task.IssueNumber!.Value, Identity.DisplayName, ct);
+                                Logger.LogInformation(
+                                    "Worker PE self-claimed unassigned task #{IssueNumber}: {Name} (idle for {Loops} loops)",
+                                    task.IssueNumber, task.Name, _idleLoopCount);
+                                _idleLoopCount = 0;
+                            }
+                            else
+                            {
+                                Logger.LogDebug("Worker PE: no unassigned tasks available for self-claim");
+                                return;
+                            }
+                        }
+                        else
+                        {
+                            Logger.LogDebug("Worker PE: no task assigned to {Name}, waiting for leader (idle {Count}/{Max})",
+                                Identity.DisplayName, _idleLoopCount, SelfClaimAfterIdleLoops);
+                            return;
+                        }
                     }
-                    Logger.LogInformation(
-                        "Worker PE recovered assigned task #{IssueNumber}: {Name}",
-                        task.IssueNumber, task.Name);
+                    else
+                    {
+                        _idleLoopCount = 0;
+                        Logger.LogInformation(
+                            "Worker PE recovered assigned task #{IssueNumber}: {Name}",
+                            task.IssueNumber, task.Name);
+                    }
                 }
             }
             else
@@ -2608,6 +2650,14 @@ public class SoftwareEngineerAgent : EngineerAgentBase
 
                         _taskTracker.CompleteStep(execStepId);
                         completedSteps.Add(step);
+
+                        // Inter-step assignment: if we're the leader, assign tasks to idle workers
+                        // between steps so they don't wait for the entire PR to finish.
+                        if (IsLeader() && stepNumber < steps.Count)
+                        {
+                            try { await AssignTasksToAvailableEngineersAsync(ct); }
+                            catch (Exception ex) { Logger.LogDebug(ex, "Inter-step assignment failed (non-critical)"); }
+                        }
                     }
                 }
                 else
@@ -6580,6 +6630,25 @@ public class SoftwareEngineerAgent : EngineerAgentBase
         return string.Equals(task.Id, "T1", StringComparison.OrdinalIgnoreCase)
             || string.Equals(task.Wave, "W0", StringComparison.OrdinalIgnoreCase)
             || (hasFoundationTitle && task.DependencyIssueNumbers.Count == 0);
+    }
+
+    /// <summary>
+    /// Returns true if a task's name/description keywords align with this agent's display name.
+    /// Used for self-claim preference ordering — not strict filtering.
+    /// </summary>
+    private bool MatchesCapabilities(EngineeringTask task)
+    {
+        var name = Identity.DisplayName.ToLowerInvariant();
+        var taskText = $"{task.Name} {task.Description}".ToLowerInvariant();
+
+        // Generic SE workers match everything
+        if (name.Contains("software engineer")) return true;
+
+        // Check for keyword overlap between agent name and task text
+        var nameWords = name.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .Where(w => w.Length > 3)
+            .ToArray();
+        return nameWords.Any(w => taskText.Contains(w));
     }
 
     private void EnsureFoundationFirstPattern(List<EngineeringTask> tasks)

@@ -398,6 +398,13 @@ public abstract class EngineerAgentBase : AgentBase
     protected virtual Task RunAdditionalLoopWorkAsync(CancellationToken ct) => Task.CompletedTask;
 
     /// <summary>
+    /// Called after each implementation step completes within the step loop.
+    /// Allows subclasses (e.g., SE leader) to perform inter-step coordination such as
+    /// assigning tasks to idle workers without waiting for the entire PR to finish.
+    /// </summary>
+    protected virtual Task OnStepCompletedAsync(int stepNumber, int totalSteps, CancellationToken ct) => Task.CompletedTask;
+
+    /// <summary>
     /// Called when an existing open PR is found for this agent (recovery after restart).
     /// Subclasses can override to customize behavior.
     /// </summary>
@@ -952,6 +959,10 @@ public abstract class EngineerAgentBase : AgentBase
             }
 
             completedSteps.Add(step);
+
+            // Between-step hook: allows subclasses (SE leader) to run inter-step coordination
+            // such as assigning tasks to idle workers while the leader is busy implementing.
+            await OnStepCompletedAsync(stepNumber, steps.Count, ct);
         }
 
         // Mark PR ready for review after all steps complete
