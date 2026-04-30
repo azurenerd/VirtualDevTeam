@@ -2155,7 +2155,8 @@ public class ProgramManagerAgent : AgentBase
                 }, ct);
 
                 // Create User Story Issues if not already done
-                await CreateUserStoryIssuesAsync(ct);
+                // skipClosedIssueGuard: PMSpec exists in repo, old closed issues are from prior runs
+                await CreateUserStoryIssuesAsync(ct, skipClosedIssueGuard: true);
                 _taskTracker.CompleteStep(specStepId);
                 return;
             }
@@ -2264,7 +2265,7 @@ public class ProgramManagerAgent : AgentBase
                     Details = "PM Specification is ready (quick mode). Architect can begin."
                 }, ct);
 
-                await CreateUserStoryIssuesAsync(ct);
+                await CreateUserStoryIssuesAsync(ct, skipClosedIssueGuard: true);
                 UpdateStatus(AgentStatus.Idle, "Quick PMSpec complete, Architect triggered");
                 return;
             }
@@ -2574,7 +2575,7 @@ public class ProgramManagerAgent : AgentBase
             Logger.LogInformation("Triggered Architect to begin architecture design");
 
             // After PMSpec is merged, create User Story Issues
-            await CreateUserStoryIssuesAsync(ct);
+            await CreateUserStoryIssuesAsync(ct, skipClosedIssueGuard: true);
             _taskTracker.CompleteStep(signalStepId);
 
             UpdateStatus(AgentStatus.Idle, "PMSpec complete, Issues created, Architect triggered");
