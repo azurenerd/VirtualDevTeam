@@ -110,6 +110,8 @@ public class SoftwareEngineerAgent : EngineerAgentBase
     /// </summary>
     private static readonly ConcurrentDictionary<int, (string AgentId, DateTime ClaimedAt)> s_activeReviews = new();
     private readonly Dictionary<int, int> _conflictRetryByIssue = new();
+    private int _continuationAttempts; // Tracks how many times ContinueOwnPrImplementationAsync is called without progress
+    private const int MaxContinuationAttempts = 3;
     private string? _currentTaskName; // Human-readable name for dashboard display
     private DateTime _lastReviewDiscovery = DateTime.MinValue;
     private static readonly TimeSpan ReviewDiscoveryInterval = TimeSpan.FromMinutes(2);
@@ -4272,6 +4274,20 @@ public class SoftwareEngineerAgent : EngineerAgentBase
         if (CurrentPrNumber is null)
             return;
 
+        // Guard: prevent infinite continuation loops (e.g., push keeps failing)
+        _continuationAttempts++;
+        if (_continuationAttempts > MaxContinuationAttempts)
+        {
+            Logger.LogWarning(
+                "SE PR #{PrNumber} exceeded {Max} continuation attempts — releasing to prevent runaway loop",
+                CurrentPrNumber.Value, MaxContinuationAttempts);
+            LogActivity("task", $"⛔ PR #{CurrentPrNumber.Value} blocked after {_continuationAttempts} failed continuation attempts");
+            CurrentPrNumber = null;
+            Identity.AssignedPullRequest = null;
+            _continuationAttempts = 0;
+            return;
+        }
+
         try
         {
             var pr = (await PrService.GetAsync(CurrentPrNumber.Value, ct))?.ToAgentPR();
@@ -4279,6 +4295,7 @@ public class SoftwareEngineerAgent : EngineerAgentBase
             {
                 CurrentPrNumber = null;
                 Identity.AssignedPullRequest = null;
+                _continuationAttempts = 0;
                 return;
             }
 
@@ -4529,6 +4546,7 @@ public class SoftwareEngineerAgent : EngineerAgentBase
             Logger.LogInformation(
                 "SE completed continued implementation for PR #{PrNumber}",
                 pr.Number);
+            _continuationAttempts = 0; // Reset on success
         }
         catch (OperationCanceledException)
         {

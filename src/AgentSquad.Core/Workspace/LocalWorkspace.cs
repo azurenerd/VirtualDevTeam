@@ -788,7 +788,7 @@ public class LocalWorkspace
         var startInfo = new ProcessStartInfo
         {
             FileName = "git",
-            Arguments = string.Join(" ", args.Select(EscapeArg)),
+            Arguments = string.Join(" ", args.Where(a => a is not null).Select(EscapeArg)),
             WorkingDirectory = workDir ?? RepoPath,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
