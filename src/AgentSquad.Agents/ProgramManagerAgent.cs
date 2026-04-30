@@ -1643,8 +1643,10 @@ public class ProgramManagerAgent : AgentBase
                         // Guard: don't close until engineering tasks have been created AND all are done.
                         // Without this, the PM would close stories as soon as a doc PR merges (e.g.,
                         // Architecture.md) because "no open tasks" is trivially true when no tasks exist.
+                        // NOTE: Must query with state="all" because closed tasks won't appear in
+                        // the default (open-only) query — causing the PM to think engineering never started.
                         var allEngineeringTasks = await _workItemService!.ListByLabelAsync(
-                            EngineeringTaskIssueManager.TaskLabel, null, ct);
+                            EngineeringTaskIssueManager.TaskLabel, "all", ct);
                         if (allEngineeringTasks.Count == 0)
                         {
                             Logger.LogDebug(
