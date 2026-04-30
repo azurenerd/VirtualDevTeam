@@ -289,9 +289,13 @@
                                                         {
                                                             <div class="judge-feedback-text">@candidate.JudgeFeedback</div>
                                                         }
-                                                        else
+                                                        else if (TotalScore(candidate) >= MaxScore(candidate))
                                                         {
                                                             <div class="judge-feedback-text judge-feedback-perfect">No feedback — perfect score</div>
+                                                        }
+                                                        else
+                                                        {
+                                                            <div class="judge-feedback-text judge-feedback-missing">⚠️ Judge did not provide detailed feedback (score: @TotalScore(candidate)/@MaxScore(candidate)). This may indicate the judge LLM response was not parsed correctly.</div>
                                                         }
                                                     </div>
                                                 }
@@ -336,7 +340,14 @@
                                                 else if (initFbExpanded)
                                                 {
                                                     <div class="cd-score-feedback-expand">
-                                                        <div class="judge-feedback-text judge-feedback-perfect">No feedback — perfect score</div>
+                                                        @if (InitialTotalScore(candidate) >= InitialMaxScore(candidate))
+                                                        {
+                                                            <div class="judge-feedback-text judge-feedback-perfect">No feedback — perfect score</div>
+                                                        }
+                                                        else
+                                                        {
+                                                            <div class="judge-feedback-text judge-feedback-missing">⚠️ Judge did not provide detailed feedback (score: @InitialTotalScore(candidate)/@InitialMaxScore(candidate)). This may indicate the judge LLM response was not parsed correctly.</div>
+                                                        }
                                                     </div>
                                                 }
                                             }
@@ -676,9 +687,13 @@
                                                                 {
                                                                     <div class="judge-feedback-text">@candidate.JudgeFeedback</div>
                                                                 }
-                                                                else
+                                                                else if (TotalScore(candidate) >= MaxScore(candidate))
                                                                 {
                                                                     <div class="judge-feedback-text judge-feedback-perfect">No feedback — perfect score</div>
+                                                                }
+                                                                else
+                                                                {
+                                                                    <div class="judge-feedback-text judge-feedback-missing">⚠️ Judge did not provide detailed feedback (score: @TotalScore(candidate)/@MaxScore(candidate)). This may indicate the judge LLM response was not parsed correctly.</div>
                                                                 }
                                                             </div>
                                                         }
@@ -1232,6 +1247,12 @@
 
     private static int MaxScore(CandidateSnapshot c)
         => c.VisualsScore.HasValue ? 40 : 30;
+
+    private static int InitialTotalScore(CandidateSnapshot c)
+        => (c.InitialAcScore ?? 0) + (c.InitialDesignScore ?? 0) + (c.InitialReadabilityScore ?? 0) + (c.InitialVisualsScore ?? 0);
+
+    private static int InitialMaxScore(CandidateSnapshot c)
+        => c.InitialVisualsScore.HasValue ? 40 : 30;
 
     protected override async Task OnInitializedAsync()
     {
