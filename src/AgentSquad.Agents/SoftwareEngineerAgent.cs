@@ -310,8 +310,8 @@ public class SoftwareEngineerAgent : EngineerAgentBase
                         {
                             if (!_loggedArchitectureRead)
                             {
-                                var readArchStepId = _taskTracker.BeginStep(Identity.Id, "pe-planning", "Read architecture",
-                                    "Architecture document detected, starting engineering plan", Identity.ModelTier);
+                                var readArchStepId = _taskTracker.BeginStep(Identity.Id, "pe-planning", "Read architecture & PMSpec",
+                                    "Architecture and PM Specification documents detected, starting engineering plan", Identity.ModelTier);
                                 _taskTracker.CompleteStep(readArchStepId);
                                 _loggedArchitectureRead = true;
                             }
