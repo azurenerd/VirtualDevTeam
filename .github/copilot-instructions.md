@@ -40,7 +40,7 @@ AgentSquad.Runner (host)
 - **Agents** — Seven concrete agent implementations, each extending `AgentBase` with role-specific AI conversation logic and GitHub workflows. Created via `AgentFactory` using `ActivatorUtilities.CreateInstance<T>`.
 - **Orchestrator** — Runtime coordination: `WorkflowStateMachine` (phase-gated progression), `AgentRegistry` (thread-safe lifecycle), `AgentSpawnManager` (dynamic scaling with slot reservation), `DeadlockDetector` (DFS wait-for graph), `HealthMonitor`, `GracefulShutdownHandler`.
 - **Runner** — Application host. Registers all services via DI in `Program.cs`, bootstraps core agents in phased sequence via `AgentSquadWorker` (a `BackgroundService`).
-- **Dashboard** — Blazor Server app with SignalR push updates. `DashboardDataService` subscribes to `AgentRegistry` events and broadcasts via `IHubContext<AgentHub>`.
+- **Dashboard** — Blazor Server app with SignalR push updates. `DashboardDataService` subscribes to `AgentRegistry` events and broadcasts via `IHubContext<AgentHub>`. Includes Testing page (Preview Build + Test Artifacts). Also has a standalone host (`AgentSquad.Dashboard.Host`) for running the UI without the Runner.
 
 ### Workflow State Machine
 
@@ -88,6 +88,8 @@ Every agent follows the same structure:
 3. **`RunAgentLoopAsync`** runs a `while (!ct.IsCancellationRequested)` loop with a `Task.Delay` poll interval. Catches `OperationCanceledException` to break cleanly; catches other exceptions, logs them, and retries after a 5-second backoff.
 4. **`OnStopAsync`** disposes all message subscriptions.
 
+**Specialist (SME) agents** are dynamically spawned via `AgentSpawnManager` during the ParallelDevelopment phase. They share the `SoftwareEngineerAgent` class but receive specialized `AgentIdentity` (e.g., "Game Engine Engineer 1", "Backend Engineer 1"). The `SMEAgentDefinition` record includes `SpawnedDisplayName` for identity persistence across restarts and slot reservation for concurrency limits.
+
 ### Multi-Turn AI Conversations
 
 Agents use Semantic Kernel's `ChatHistory` for stateful multi-turn conversations. The pattern is:
@@ -127,6 +129,11 @@ SE agents recover state on restart via:
 
 Critical invariant: `PullRequestNumber` is NOT persisted in issue metadata. After restart, task↔PR correlation must use linked work items or title matching.
 
+**Known restart pitfalls:**
+- If a runner is restarted while an SE agent has an in-progress PR, the agent must find and reclaim it. If the PR gets orphaned (e.g., agent was duplicated due to a bug), manually close the PR and reset the issue labels (`status:in-progress` → remove, strip agent prefix from title) so it's eligible for reassignment.
+- Spawned specialist agents (Game Engine Engineer, Backend Engineer, etc.) persist via `SpawnedDisplayName` in `SMEAgentDefinition` so they maintain identity across restarts.
+- Task dependency enforcement happens at assignment time — tasks with unmet dependencies are skipped even if the agent is idle.
+
 ### Model Tier Strategy
 
 Four tiers map to agent roles by quality requirements:
@@ -153,14 +160,42 @@ copilot --allow-all --no-ask-user --silent --no-color --no-auto-update --no-cust
 Prompts are piped via stdin (avoids shell escaping issues with long multi-KB prompts). SemaphoreSlim limits concurrency (configurable `MaxConcurrentRequests`, default 4).
 
 Key components in `AgentSquad.Core/AI/`:
-- **`CopilotCliChatCompletionService`** — Implements `IChatCompletionService`. Flattens multi-turn `ChatHistory` into a single labeled prompt, sends it to the process manager, and parses the response. Uses JSON parsing when `JsonOutput` is enabled, falls back to text parsing.
+- **`CopilotCliChatCompletionService`** — Implements `IChatCompletionService`. Flattens multi-turn `ChatHistory` into a single labeled prompt, sends it to the process manager, and parses the response. Uses JSON parsing when `JsonOutput` is enabled, falls back to text parsing. Integrates `ActiveLlmCallTracker` to notify when LLM calls start/complete.
 - **`CopilotCliProcessManager`** — Spawns fresh `copilot` processes per request. Runs as `IHostedService` to verify `copilot` availability at startup. Key method: `ExecutePromptAsync(prompt, ct)` returns `CopilotCliResult`.
 - **`CliInteractiveWatchdog`** — Monitors stdout for unexpected interactive prompts and auto-responds. Handles y/n confirmations, selection menus, "press enter" prompts. Fails fast on credential prompts or auth failures.
 - **`CliOutputParser`** — Strips ANSI escape codes, removes CLI chrome (banners, prompt markers, separators), resolves carriage-return overwrites. Also parses JSONL output from `--output-format json` mode.
+- **`ActiveLlmCallTracker`** — Singleton (`ConcurrentDictionary<agentId, LlmCallInfo>`) tracking which agents have in-flight LLM calls. `DashboardDataService` reads this to overlay "Working (AI)" status in the UI. Required by `ModelRegistry` constructor.
 
 Fallback: if `copilot` isn't found at startup, `ModelRegistry` automatically falls back to the API-key provider configured for each tier. Fallback can also be triggered at runtime via `ModelRegistry.TriggerFallback()`.
 
 **Model IDs use dots**: `claude-opus-4.7`, `claude-sonnet-4.6`, `claude-haiku-4.5`, `gpt-5.2` (not dashes).
+
+### Human Gate for Agent-to-Agent Responses
+
+When any agent answers questions from another agent (e.g., PM responding to engineer clarification requests on a PR), the response is routed through the Approvals page for human review/edit before posting. This is controlled by the `AgentToAgentResponse` gate in the configuration.
+
+- Gate ID: `ApprovalGates.AgentToAgentResponse`
+- Toggle: Available on the Approvals configuration page in the Dashboard UI
+- Behavior: If enabled, agent pauses before posting its answer and waits for human approval. The human can edit the text, approve as-is, or reject (skips posting entirely).
+- Implementation: `_gateCheck.WaitForGateAsync(...)` in the answering agent's clarification processing method.
+
+### Preview Build & Test Artifacts (Testing Dashboard)
+
+The Testing page (`/testing`) provides two tabs:
+
+1. **Preview Build** — Clone/update the working branch to a user-specified local directory, auto-detect build/run commands, and stream output. Managed by `PreviewBuildService` singleton in `AgentSquad.Core/Preview/`.
+   - Settings persisted to `{WorkspaceRoot}/preview-settings.json`
+   - Auto-detects project type: .sln → `dotnet build`/`dotnet run`, package.json → `npm install && npm run build`/`npm run dev`
+   - Port auto-selection probes 5100-5199, then falls back to OS-assigned
+   - Token redaction via regex on all output lines
+
+2. **Test Artifacts** — Browse screenshots, videos, and Playwright traces from agent workspaces. Managed by `TestArtifactIndexService` singleton.
+   - Scans `{WorkspaceRoot}/{agent}/{repo}/test-results/` directories
+   - 30-second cache for performance
+   - Stable IDs from SHA256 hash of file path (first 16 hex chars)
+   - Attributes PR number from `pr-{N}` path segments
+
+API endpoints: `/api/preview/settings` (GET/POST), `/api/preview/start` (POST), `/api/preview/stop` (POST), `/api/preview/status` (GET), `/api/preview/artifacts` (GET).
 
 ### Testing
 
@@ -180,3 +215,29 @@ Fallback: if `copilot` isn't found at startup, `ModelRegistry` automatically fal
 - `ILogger<T>` with structured logging (named parameters, not string interpolation).
 - `IDisposable` with `_disposed` flag to prevent use-after-dispose.
 - DI registration centralized in extension methods (e.g., `AddOrchestrator()`).
+
+### Dashboard Navigation Structure
+
+The Dashboard nav bar is organized into sections:
+
+```
+Project
+├── Agents         — Live agent status cards
+├── Timeline       — Project phase timeline
+├── Repository     — Pull Requests, Issues, Code (file browser) tabs
+└── Testing        — Preview Build + Test Artifacts tabs
+
+Operations
+├── Metrics        — Usage stats & performance
+├── Configuration  — Settings & model config
+└── Approvals      — Human gate decisions
+```
+
+The **Repository** page (`/repository`) has three tabs in this order: **Code** (links to `/repository/files`), **Pull Requests**, **Issues**. The nav bar shows "Repository" as a single link — the Code/Files browser is a sub-page, not a separate nav item.
+
+### Lessons Learned (Common Pitfalls)
+
+1. **File-lock build errors**: When the Runner is running, `dotnet build` on the full solution will fail with MSB3027 file-lock errors for the Runner project. Build individual projects (Core, Agents, Orchestrator, Dashboard, tests) to verify code compiles without stopping the Runner.
+2. **Constructor parameter propagation**: When adding new dependencies to core services like `ModelRegistry`, all call sites must be updated — including test files that construct the service directly (not via DI). Check both DI factories (in extension methods) and test constructors.
+3. **Orphan process cleanup**: The `GracefulShutdownHandler` kills child `copilot` processes on runner shutdown. Use `SquadReadinessChecker` with PATH augmentation to find tools like `npm`/`node` in non-standard locations.
+4. **PR review on deleted branches**: `GetPRCodeContextAsync` may encounter PRs where the source branch was already deleted — guard with `filesRead` counter and log a warning instead of failing.

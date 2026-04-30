@@ -20,14 +20,14 @@
 </div>
 
 <div class="repo-tab-bar">
+    <button class="repo-tab" @onclick="NavigateToFiles">
+        💻 Code
+    </button>
     <button class="repo-tab @(_activeTab == "pull-requests" ? "active" : "")" @onclick='() => SwitchTab("pull-requests")'>
         🔀 Pull Requests <span class="repo-tab-count">@_allPrs.Count</span>
     </button>
     <button class="repo-tab @(_activeTab == "issues" ? "active" : "")" @onclick='() => SwitchTab("issues")'>
         📋 Issues <span class="repo-tab-count">@_allIssues.Count</span>
-    </button>
-    <button class="repo-tab" @onclick="NavigateToFiles">
-        📁 Files
     </button>
 </div>
 
