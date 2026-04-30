@@ -34,7 +34,8 @@ public class LlmJudgeTests
         var registry = new ModelRegistry(
             new AgentSquadConfig { Models = new Dictionary<string, ModelConfig>() },
             NullLoggerFactory.Instance,
-            new AgentUsageTracker());
+            new AgentUsageTracker(),
+            new ActiveLlmCallTracker());
 
         var stratCfg = new TestStratCfg(new StrategyFrameworkConfig());
         var judge = new LlmJudge(

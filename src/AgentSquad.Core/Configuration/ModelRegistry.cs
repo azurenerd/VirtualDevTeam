@@ -18,6 +18,7 @@ public class ModelRegistry
     private readonly CopilotCliConfig _cliConfig;
     private readonly CopilotCliProcessManager? _processManager;
     private readonly AgentUsageTracker _usageTracker;
+    private readonly ActiveLlmCallTracker _llmCallTracker;
     private readonly HashSet<string> _cliFallbackTiers = new();
     private readonly object _overrideLock = new();
     // Guards _kernelCache and _cliFallbackTiers. These are hit concurrently by parallel
@@ -47,11 +48,13 @@ public class ModelRegistry
         AgentSquadConfig config,
         ILoggerFactory loggerFactory,
         AgentUsageTracker usageTracker,
+        ActiveLlmCallTracker llmCallTracker,
         CopilotCliProcessManager? processManager = null)
     {
         _modelConfigs = config.Models;
         _loggerFactory = loggerFactory;
         _usageTracker = usageTracker;
+        _llmCallTracker = llmCallTracker;
         _cliConfig = config.CopilotCli;
         _processManager = processManager;
     }
@@ -200,6 +203,7 @@ public class ModelRegistry
             _processManager!,
             _cliConfig,
             _usageTracker,
+            _llmCallTracker,
             _loggerFactory.CreateLogger<CopilotCliChatCompletionService>());
 
         builder.Services.AddKeyedSingleton<Microsoft.SemanticKernel.ChatCompletion.IChatCompletionService>(
