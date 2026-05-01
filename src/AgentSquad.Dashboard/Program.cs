@@ -5,6 +5,7 @@ using AgentSquad.Core.GitHub;
 using AgentSquad.Core.Messaging;
 using AgentSquad.Core.Persistence;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Options;
 using AgentSquad.Dashboard.Components;
 using AgentSquad.Dashboard.Hubs;
 using AgentSquad.Dashboard.Services;
@@ -37,6 +38,7 @@ builder.WebHost.UseUrls($"http://localhost:{dashboardPort}");
 
 // Core services needed by DashboardDataService
 builder.Services.AddInProcessMessageBus();
+builder.Services.AddSingleton<AgentSquad.Core.AI.ActiveLlmCallTracker>();
 builder.Services.AddSingleton<AgentSquad.Core.AI.AgentUsageTracker>(sp =>
     new AgentSquad.Core.AI.AgentUsageTracker(sp.GetRequiredService<AgentStateStore>()));
 builder.Services.AddSingleton<AgentSquad.Core.Diagnostics.RequirementsCache>();
@@ -54,6 +56,32 @@ if (!File.Exists(dbPath))
 builder.Services.AddSingleton(new AgentStateStore(dbPath));
 builder.Services.AddSingleton(new AgentMemoryStore(dbPath));
 builder.Services.AddSingleton<AgentSquad.Core.Metrics.BuildTestMetrics>();
+
+// Services required by RunCoordinator (registered via AddOrchestrator)
+builder.Services.AddSingleton<AgentSquad.Core.Configuration.RunBranchProvider>(sp =>
+{
+    var config = sp.GetRequiredService<IOptions<AgentSquadConfig>>().Value;
+    return new AgentSquad.Core.Configuration.RunBranchProvider(config.Project.DefaultBranch);
+});
+builder.Services.AddSingleton<IRunBranchProvider>(sp =>
+    sp.GetRequiredService<AgentSquad.Core.Configuration.RunBranchProvider>());
+builder.Services.AddSingleton<ProjectFileManager>(sp =>
+{
+    var config = sp.GetRequiredService<IOptions<AgentSquadConfig>>().Value;
+    return new ProjectFileManager(
+        sp.GetRequiredService<AgentSquad.Core.DevPlatform.Capabilities.IRepositoryContentService>(),
+        sp.GetRequiredService<ILogger<ProjectFileManager>>(),
+        sp.GetRequiredService<IRunBranchProvider>(),
+        config.Project.DefaultBranch);
+});
+builder.Services.AddSingleton<ConflictResolver>();
+builder.Services.AddSingleton(sp =>
+{
+    var logger = sp.GetRequiredService<ILogger<DevelopSettingsService>>();
+    var config = sp.GetService<IOptions<AgentSquadConfig>>();
+    var filePath = Path.Combine(runnerDir, "develop-settings.json");
+    return new DevelopSettingsService(logger, config, filePath);
+});
 
 // Orchestrator (AgentRegistry, HealthMonitor, DeadlockDetector, WorkflowStateMachine, AgentSpawnManager)
 builder.Services.AddOrchestrator();

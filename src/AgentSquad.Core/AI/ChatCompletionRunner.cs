@@ -30,13 +30,21 @@ public sealed class ChatCompletionRunner : IChatCompletionRunner
         var kernel = _modelRegistry.GetKernel(request.ModelTier, request.AgentId);
         var chatService = kernel.GetRequiredService<IChatCompletionService>();
 
-        if (request.AgentId is not null)
+        var previousAgentId = AgentCallContext.CurrentAgentId;
+        try
         {
-            AgentCallContext.CurrentAgentId = request.AgentId;
-        }
+            if (request.AgentId is not null)
+            {
+                AgentCallContext.CurrentAgentId = request.AgentId;
+            }
 
-        var response = await chatService.GetChatMessageContentsAsync(request.History, cancellationToken: ct);
-        return response.FirstOrDefault()?.Content ?? "";
+            var response = await chatService.GetChatMessageContentsAsync(request.History, cancellationToken: ct);
+            return response.FirstOrDefault()?.Content ?? "";
+        }
+        finally
+        {
+            AgentCallContext.CurrentAgentId = previousAgentId;
+        }
     }
 
     /// <inheritdoc />

@@ -5,7 +5,9 @@ using AgentSquad.Core.DevPlatform.Capabilities;
 using AgentSquad.Core.GitHub;
 using AgentSquad.Core.Messaging;
 using AgentSquad.Core.Persistence;
+using AgentSquad.Core.Prompts;
 using AgentSquad.Core.Services;
+using AgentSquad.Core.Workspace;
 using AgentSquad.Agents;
 using AgentSquad.Orchestrator;
 using Microsoft.Extensions.DependencyInjection;
@@ -116,7 +118,9 @@ public class SmeSystemIntegrationTests : IDisposable
 
         services.AddInProcessMessageBus();
         services.AddSingleton<AgentUsageTracker>();
+        services.AddSingleton<AgentSquad.Core.AI.ActiveLlmCallTracker>();
         services.AddSemanticKernelModels();
+        services.AddSingleton<AgentSquad.Core.AI.IChatCompletionRunner, AgentSquad.Core.AI.ChatCompletionRunner>();
 
         var testDbPath= Path.Combine(Path.GetTempPath(), $"agentsquad-test-{Guid.NewGuid():N}.db");
         services.AddSingleton(new AgentStateStore(testDbPath));
@@ -132,6 +136,39 @@ public class SmeSystemIntegrationTests : IDisposable
         services.AddSingleton<AgentSquad.Core.Agents.Reasoning.IAgentReasoningLog,
             AgentSquad.Core.Agents.Reasoning.AgentReasoningLog>();
         services.AddSingleton<AgentSquad.Core.Agents.Reasoning.SelfAssessmentService>();
+
+        // Agent dependency bundles
+        services.AddSingleton(sp => new AgentSquad.Core.Agents.AgentCoreServices(
+            messageBus: sp.GetRequiredService<IMessageBus>(),
+            modelRegistry: sp.GetRequiredService<AgentSquad.Core.Configuration.ModelRegistry>(),
+            chatRunner: sp.GetRequiredService<AgentSquad.Core.AI.IChatCompletionRunner>(),
+            projectFiles: sp.GetRequiredService<ProjectFileManager>(),
+            memoryStore: sp.GetRequiredService<AgentMemoryStore>(),
+            gateCheck: sp.GetRequiredService<IGateCheckService>(),
+            config: sp.GetRequiredService<IOptions<AgentSquadConfig>>(),
+            promptService: sp.GetService<IPromptTemplateService>(),
+            roleContextProvider: sp.GetService<AgentSquad.Core.AI.RoleContextProvider>(),
+            selfAssessment: sp.GetService<AgentSquad.Core.Agents.Reasoning.SelfAssessmentService>(),
+            reasoningLog: sp.GetService<AgentSquad.Core.Agents.Reasoning.IAgentReasoningLog>(),
+            taskTracker: sp.GetService<AgentSquad.Core.Agents.Steps.IAgentTaskTracker>(),
+            stateStore: sp.GetService<AgentStateStore>()));
+        services.AddSingleton(sp => new AgentSquad.Core.Agents.AgentPlatformServices(
+            prService: sp.GetRequiredService<IPullRequestService>(),
+            workItemService: sp.GetRequiredService<IWorkItemService>(),
+            repoContent: sp.GetRequiredService<IRepositoryContentService>(),
+            reviewService: sp.GetRequiredService<IReviewService>(),
+            prWorkflow: sp.GetRequiredService<PullRequestWorkflow>(),
+            branchService: sp.GetService<IBranchService>(),
+            issueWorkflow: sp.GetService<IssueWorkflow>(),
+            branchProvider: sp.GetService<IRunBranchProvider>(),
+            docResolver: sp.GetService<AgentSquad.Core.DevPlatform.Capabilities.IDocumentReferenceResolver>(),
+            platformHost: sp.GetService<IPlatformHostContext>()));
+        services.AddSingleton(sp => new AgentSquad.Core.Agents.AgentWorkspaceServices(
+            buildRunner: sp.GetService<BuildRunner>(),
+            testRunner: sp.GetService<TestRunner>(),
+            playwrightRunner: sp.GetService<PlaywrightRunner>(),
+            metrics: sp.GetService<AgentSquad.Core.Metrics.BuildTestMetrics>()));
+
         services.AddOrchestrator();
         services.AddSingleton<IAgentFactory, AgentFactory>();
 

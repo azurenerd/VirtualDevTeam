@@ -64,7 +64,7 @@ public class DecisionGateService
         string? plan = null;
         if (requiresGate && _config.RequirePlanForGated && _config.MaxDecisionTurns >= 2)
         {
-            plan = await GeneratePlanAsync(agentDisplayName, title, context,
+            plan = await GeneratePlanAsync(agentId, agentDisplayName, title, context,
                 assessment.ImpactRationale ?? "No rationale provided",
                 assessment.Alternatives, assessment.AffectedFiles, assessment.RiskAssessment,
                 modelTier, ct);
@@ -146,7 +146,7 @@ public class DecisionGateService
 
         // Turn 1: Classify impact level
         var (impactLevel, rationale, alternatives, affectedFiles, riskAssessment) =
-            await ClassifyImpactAsync(agentDisplayName, phase, title, context, modelTier, ct);
+            await ClassifyImpactAsync(agentId, agentDisplayName, phase, title, context, modelTier, ct);
 
         var requiresGate = _config.RequiresGate(impactLevel);
 
@@ -154,7 +154,7 @@ public class DecisionGateService
         if (requiresGate && _config.RequirePlanForGated && _config.MaxDecisionTurns >= 2)
         {
             // Turn 2: Generate structured plan for human review
-            plan = await GeneratePlanAsync(agentDisplayName, title, context, rationale,
+            plan = await GeneratePlanAsync(agentId, agentDisplayName, title, context, rationale,
                 alternatives, affectedFiles, riskAssessment, modelTier, ct);
         }
 
@@ -276,7 +276,7 @@ public class DecisionGateService
     #region AI Classification & Plan Generation
 
     private async Task<(DecisionImpactLevel Level, string Rationale, string? Alternatives, string? AffectedFiles, string? RiskAssessment)>
-        ClassifyImpactAsync(string agentName, string phase, string title, string context, string modelTier, CancellationToken ct)
+        ClassifyImpactAsync(string agentId, string agentName, string phase, string title, string context, string modelTier, CancellationToken ct)
     {
         try
         {
@@ -300,7 +300,8 @@ public class DecisionGateService
             var text = await _chatRunner.InvokeAsync(new ChatCompletionRequest
             {
                 History = chat,
-                ModelTier = modelTier
+                ModelTier = modelTier,
+                AgentId = agentId
             }, ct);
 
             return ParseClassificationResponse(text);
@@ -313,7 +314,7 @@ public class DecisionGateService
     }
 
     private async Task<string?> GeneratePlanAsync(
-        string agentName, string title, string context, string rationale,
+        string agentId, string agentName, string title, string context, string rationale,
         string? alternatives, string? affectedFiles, string? riskAssessment,
         string modelTier, CancellationToken ct)
     {
@@ -336,7 +337,8 @@ public class DecisionGateService
             var result = await _chatRunner.InvokeAsync(new ChatCompletionRequest
             {
                 History = chat,
-                ModelTier = modelTier
+                ModelTier = modelTier,
+                AgentId = agentId
             }, ct);
             return string.IsNullOrWhiteSpace(result) ? null : result;
         }

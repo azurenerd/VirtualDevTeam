@@ -209,6 +209,10 @@ public sealed class DashboardDataService : BackgroundService, IDashboardDataServ
             _registry.AgentUnregistered -= OnAgentUnregistered;
             _registry.AgentStatusChanged -= OnAgentStatusChanged;
             _workflow.PhaseChanged -= OnPhaseChanged;
+
+            // Unsubscribe from all live agent events to avoid leaks
+            foreach (var agent in _registry.GetAllAgents())
+                UnsubscribeFromAgentEvents(agent);
         }
     }
 
@@ -379,6 +383,13 @@ public sealed class DashboardDataService : BackgroundService, IDashboardDataServ
         agent.DiagnosticChanged += OnAgentDiagnosticChanged;
     }
 
+    private void UnsubscribeFromAgentEvents(IAgent agent)
+    {
+        agent.ErrorsChanged -= OnAgentErrorsChanged;
+        agent.ActivityLogged -= OnAgentActivityLogged;
+        agent.DiagnosticChanged -= OnAgentDiagnosticChanged;
+    }
+
     private void OnAgentRegistered(object? sender, AgentRegistryChangedEventArgs e)
     {
         var snapshot = _snapshots.HandleAgentRegistered(e.Agent);
@@ -390,6 +401,7 @@ public sealed class DashboardDataService : BackgroundService, IDashboardDataServ
 
     private void OnAgentUnregistered(object? sender, AgentRegistryChangedEventArgs e)
     {
+        UnsubscribeFromAgentEvents(e.Agent);
         _snapshots.HandleAgentUnregistered(e.Agent.Identity.Id);
 
         _ = _hubContext.Clients.All.SendAsync("AgentUnregistered", e.Agent.Identity.Id);
@@ -492,8 +504,9 @@ public sealed class DashboardDataService : BackgroundService, IDashboardDataServ
         {
             var healthSnapshot = _diagnostics.RefreshHealthSnapshot();
             _snapshots.RefreshUsageStats();
-            if (_snapshots.RefreshTaskSteps())
-                NotifyStateChanged();
+            _snapshots.RefreshTaskSteps();
+            // Always notify — health, usage stats, or task steps may have changed
+            NotifyStateChanged();
             await _hubContext.Clients.All.SendAsync("HealthUpdate", healthSnapshot, ct);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
