@@ -214,6 +214,9 @@ builder.Services.AddSingleton<IAgentFactory, AgentFactory>();
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
 builder.Services.AddSignalR();
+builder.Services.AddSingleton<AgentSnapshotService>();
+builder.Services.AddSingleton<DiagnosticSummaryService>();
+builder.Services.AddSingleton<ExecutionTimelineService>();
 builder.Services.AddSingleton<DashboardDataService>();
 builder.Services.AddSingleton<IDashboardDataService>(sp => sp.GetRequiredService<DashboardDataService>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<DashboardDataService>());
