@@ -51,6 +51,7 @@ builder.Services.AddSingleton<AgentSquad.Core.AI.ActiveLlmCallTracker>();
 builder.Services.AddSingleton<AgentSquad.Core.Diagnostics.RequirementsCache>();
 builder.Services.AddSingleton<AgentSquad.Core.Diagnostics.AgentChatService>();
 builder.Services.AddSemanticKernelModels();
+builder.Services.AddSingleton<AgentSquad.Core.AI.IChatCompletionRunner, AgentSquad.Core.AI.ChatCompletionRunner>();
 builder.Services.AddGitHubIntegration();
 
 // Dev platform abstraction layer (capability interfaces backed by GitHub adapter)

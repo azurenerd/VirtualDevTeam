@@ -1,6 +1,5 @@
 using AgentSquad.Core.Configuration;
 using Microsoft.Extensions.Logging;
-using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.ChatCompletion;
 
 namespace AgentSquad.Core.AI;
@@ -11,16 +10,16 @@ namespace AgentSquad.Core.AI;
 /// </summary>
 public class AiKnowledgeSummarizer
 {
-    private readonly ModelRegistry _modelRegistry;
+    private readonly IChatCompletionRunner _chatRunner;
     private readonly ILogger<AiKnowledgeSummarizer> _logger;
 
     // Use budget tier for summarization to minimize cost
     private const string SummarizationTier = "budget";
     private const int MaxInputChars = 8000;
 
-    public AiKnowledgeSummarizer(ModelRegistry modelRegistry, ILogger<AiKnowledgeSummarizer> logger)
+    public AiKnowledgeSummarizer(IChatCompletionRunner chatRunner, ILogger<AiKnowledgeSummarizer> logger)
     {
-        _modelRegistry = modelRegistry ?? throw new ArgumentNullException(nameof(modelRegistry));
+        _chatRunner = chatRunner ?? throw new ArgumentNullException(nameof(chatRunner));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -58,9 +57,6 @@ public class AiKnowledgeSummarizer
 
         try
         {
-            var kernel = _modelRegistry.GetKernel(SummarizationTier, agentId: "knowledge-summarizer");
-            var chatService = kernel.GetRequiredService<IChatCompletionService>();
-
             var history = new ChatHistory();
             history.AddSystemMessage(
                 "You are a concise summarization assistant. Extract the most important and relevant information " +
@@ -73,8 +69,12 @@ public class AiKnowledgeSummarizer
                 $"Produce a concise summary (max {maxOutputChars} chars) with key facts, patterns, and rules.\n\n" +
                 $"Content:\n{input}");
 
-            var result = await chatService.GetChatMessageContentsAsync(history, cancellationToken: ct);
-            var summary = result.FirstOrDefault()?.Content ?? "";
+            var summary = await _chatRunner.InvokeAsync(new ChatCompletionRequest
+            {
+                History = history,
+                ModelTier = SummarizationTier,
+                AgentId = "knowledge-summarizer"
+            }, ct);
 
             if (!string.IsNullOrWhiteSpace(summary))
             {

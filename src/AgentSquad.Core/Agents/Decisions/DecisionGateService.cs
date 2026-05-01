@@ -1,8 +1,8 @@
+using AgentSquad.Core.AI;
 using AgentSquad.Core.Configuration;
 using AgentSquad.Core.Notifications;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.ChatCompletion;
 
 namespace AgentSquad.Core.Agents.Decisions;
@@ -15,7 +15,7 @@ public class DecisionGateService
 {
     private readonly IDecisionLog _decisionLog;
     private readonly GateNotificationService _gateNotificationService;
-    private readonly ModelRegistry _modelRegistry;
+    private readonly IChatCompletionRunner _chatRunner;
     private readonly DecisionGatingConfig _config;
     private readonly ILogger<DecisionGateService> _logger;
 
@@ -25,13 +25,13 @@ public class DecisionGateService
     public DecisionGateService(
         IDecisionLog decisionLog,
         GateNotificationService gateNotificationService,
-        ModelRegistry modelRegistry,
+        IChatCompletionRunner chatRunner,
         IOptions<AgentSquadConfig> config,
         ILogger<DecisionGateService> logger)
     {
         _decisionLog = decisionLog;
         _gateNotificationService = gateNotificationService;
-        _modelRegistry = modelRegistry;
+        _chatRunner = chatRunner;
         _config = config.Value.DecisionGating;
         _logger = logger;
     }
@@ -280,9 +280,6 @@ public class DecisionGateService
     {
         try
         {
-            var kernel = _modelRegistry.GetKernel(modelTier);
-            var chatService = kernel.GetRequiredService<IChatCompletionService>();
-
             var chat = new ChatHistory();
             chat.AddSystemMessage(ClassificationSystemPrompt);
             chat.AddUserMessage($"""
@@ -300,8 +297,11 @@ public class DecisionGateService
                 RISK: [What could go wrong]
                 """);
 
-            var response = await chatService.GetChatMessageContentsAsync(chat, cancellationToken: ct);
-            var text = response.FirstOrDefault()?.Content ?? "";
+            var text = await _chatRunner.InvokeAsync(new ChatCompletionRequest
+            {
+                History = chat,
+                ModelTier = modelTier
+            }, ct);
 
             return ParseClassificationResponse(text);
         }
@@ -319,9 +319,6 @@ public class DecisionGateService
     {
         try
         {
-            var kernel = _modelRegistry.GetKernel(modelTier);
-            var chatService = kernel.GetRequiredService<IChatCompletionService>();
-
             var chat = new ChatHistory();
             chat.AddSystemMessage(PlanGenerationSystemPrompt);
             chat.AddUserMessage($"""
@@ -336,8 +333,12 @@ public class DecisionGateService
                 Generate a structured implementation plan for this decision that a human reviewer can evaluate.
                 """);
 
-            var response = await chatService.GetChatMessageContentsAsync(chat, cancellationToken: ct);
-            return response.FirstOrDefault()?.Content;
+            var result = await _chatRunner.InvokeAsync(new ChatCompletionRequest
+            {
+                History = chat,
+                ModelTier = modelTier
+            }, ct);
+            return string.IsNullOrWhiteSpace(result) ? null : result;
         }
         catch (Exception ex)
         {

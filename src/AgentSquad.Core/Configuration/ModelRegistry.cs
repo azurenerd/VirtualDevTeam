@@ -66,10 +66,10 @@ public class ModelRegistry
     public AgentUsageTracker UsageTracker => _usageTracker;
 
     /// <summary>Get or create a Kernel instance for the given model tier.</summary>
-    public Kernel GetKernel(string modelTier) => GetKernel(modelTier, agentId: null);
+    public virtual Kernel GetKernel(string modelTier) => GetKernel(modelTier, agentId: null);
 
     /// <summary>Get or create a Kernel for a tier, with optional per-agent model override.</summary>
-    public Kernel GetKernel(string modelTier, string? agentId)
+    public virtual Kernel GetKernel(string modelTier, string? agentId)
     {
         // Check for per-agent model override
         string? modelOverride = null;

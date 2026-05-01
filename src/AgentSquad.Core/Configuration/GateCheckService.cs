@@ -1,11 +1,11 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
+using AgentSquad.Core.AI;
 using AgentSquad.Core.GitHub;
 using AgentSquad.Core.Notifications;
 using AgentSquad.Core.Persistence;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.ChatCompletion;
 
 namespace AgentSquad.Core.Configuration;
@@ -25,7 +25,7 @@ public class GateCheckService : IGateCheckService
     private readonly IOptionsMonitor<AgentSquadConfig> _configMonitor;
     private readonly IGitHubService _github;
     private readonly GateNotificationService? _notificationService;
-    private readonly ModelRegistry? _modelRegistry;
+    private readonly IChatCompletionRunner? _chatRunner;
     private readonly AgentStateStore? _stateStore;
     private readonly ILogger<GateCheckService> _logger;
 
@@ -36,14 +36,14 @@ public class GateCheckService : IGateCheckService
         IGitHubService github,
         ILogger<GateCheckService> logger,
         GateNotificationService? notificationService = null,
-        ModelRegistry? modelRegistry = null,
+        IChatCompletionRunner? chatRunner = null,
         AgentStateStore? stateStore = null)
     {
         _configMonitor = config;
         _github = github;
         _logger = logger;
         _notificationService = notificationService;
-        _modelRegistry = modelRegistry;
+        _chatRunner = chatRunner;
         _stateStore = stateStore;
         RestoreApprovals();
     }
@@ -336,7 +336,7 @@ public class GateCheckService : IGateCheckService
     /// </summary>
     private async Task<GateCommentAssessment> AssessCommentWithAIAsync(string commentBody, CancellationToken ct)
     {
-        if (_modelRegistry is null)
+        if (_chatRunner is null)
         {
             // Fallback: simple heuristics when AI is not available (e.g., standalone dashboard)
             return AssessCommentWithHeuristics(commentBody);
@@ -344,9 +344,6 @@ public class GateCheckService : IGateCheckService
 
         try
         {
-            var kernel = _modelRegistry.GetKernel("budget");
-            var chatService = kernel.GetRequiredService<IChatCompletionService>();
-
             var history = new ChatHistory();
             history.AddSystemMessage(
                 """
@@ -364,8 +361,11 @@ public class GateCheckService : IGateCheckService
                 """);
             history.AddUserMessage($"Comment:\n{commentBody}");
 
-            var response = await chatService.GetChatMessageContentsAsync(history, cancellationToken: ct);
-            var responseText = response.FirstOrDefault()?.Content?.Trim() ?? "";
+            var responseText = (await _chatRunner.InvokeAsync(new ChatCompletionRequest
+            {
+                History = history,
+                ModelTier = "budget"
+            }, ct)).Trim();
 
             // Strip markdown code fences if present
             if (responseText.StartsWith("```"))
