@@ -506,6 +506,36 @@ public class PlaywrightRunner
         var browsersPath = config.GetPlaywrightBrowsersPath();
         var originalCommand = config.AppStartCommand;
 
+        // Auto-detect AppStartCommand when not explicitly configured
+        string? appStartCommand = config.AppStartCommand;
+        if (string.IsNullOrWhiteSpace(appStartCommand))
+        {
+            // Look for web projects with launchSettings.json
+            var launchSettings = Directory.EnumerateFiles(workspacePath, "launchSettings.json", SearchOption.AllDirectories).FirstOrDefault();
+            if (launchSettings != null)
+            {
+                var projectDir = Path.GetDirectoryName(Path.GetDirectoryName(Path.GetDirectoryName(launchSettings)));
+                if (projectDir != null)
+                {
+                    var csproj = Directory.EnumerateFiles(projectDir, "*.csproj").FirstOrDefault();
+                    if (csproj != null)
+                        appStartCommand = $"dotnet run --project \"{csproj}\" --urls {config.AppBaseUrl ?? "http://localhost:5000"}";
+                }
+            }
+
+            // Node.js fallback
+            if (appStartCommand == null && File.Exists(Path.Combine(workspacePath, "package.json")))
+            {
+                appStartCommand = "npm run dev";
+            }
+
+            if (appStartCommand != null)
+            {
+                _logger.LogInformation("Auto-detected AppStartCommand: {Command}", appStartCommand);
+                config.AppStartCommand = appStartCommand;
+            }
+        }
+
         // Environment variables for headless Playwright
         var envVars = new Dictionary<string, string>
         {

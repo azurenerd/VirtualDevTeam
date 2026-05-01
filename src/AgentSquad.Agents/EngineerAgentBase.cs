@@ -2835,6 +2835,19 @@ public abstract class EngineerAgentBase : AgentBase
         if (ScreenshotRunner is null || Workspace is null || !Config.Workspace.CaptureScreenshots)
             return null;
 
+        // Try to install browsers if not present before checking IsReady
+        if (!ScreenshotRunner.IsReady)
+        {
+            try
+            {
+                await ScreenshotRunner.EnsureBrowsersInstalledAsync(Config.Workspace, Workspace.RepoPath, ct);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "Failed to install Playwright browsers proactively for PR #{PrNumber}", pr.Number);
+            }
+        }
+
         if (!ScreenshotRunner.IsReady)
         {
             Logger.LogDebug("Playwright not ready, skipping ready-for-review screenshot for PR #{PrNumber}: {Reason}",

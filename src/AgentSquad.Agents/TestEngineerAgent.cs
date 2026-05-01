@@ -3382,6 +3382,37 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
                 return ext is ".razor" or ".cshtml" or ".tsx" or ".jsx" or ".vue" or ".svelte";
             });
 
+        // If UI tests enabled but no explicit command, auto-derive from test project
+        if (wsConfig.EnableUITests && string.IsNullOrWhiteSpace(wsConfig.UITestCommand))
+        {
+            // Check for Node.js Playwright config first
+            var playwrightConfig = Directory.EnumerateFiles(_workspace.RepoPath, "playwright.config.*", SearchOption.TopDirectoryOnly).FirstOrDefault();
+            if (playwrightConfig != null)
+            {
+                wsConfig.UITestCommand = "npx playwright test";
+            }
+            else
+            {
+                // Look for UI test projects in the workspace
+                var uiTestProjects = Directory.EnumerateFiles(_workspace.RepoPath, "*.csproj", SearchOption.AllDirectories)
+                    .Where(p => Path.GetFileName(p).Contains("UI", StringComparison.OrdinalIgnoreCase) ||
+                                 Path.GetFileName(p).Contains("Playwright", StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+
+                if (uiTestProjects.Count > 0)
+                {
+                    wsConfig.UITestCommand = $"dotnet test \"{uiTestProjects[0]}\" --no-build --verbosity normal";
+                }
+                else
+                {
+                    // Fallback: use standard test command with UI category filter
+                    wsConfig.UITestCommand = !string.IsNullOrWhiteSpace(wsConfig.TestCommand)
+                        ? $"{wsConfig.TestCommand} --filter \"Category=UI\""
+                        : "dotnet test --filter \"Category=UI\" --no-build";
+                }
+            }
+        }
+
         // If UI tests are enabled and this is a UI project, we will guarantee ≥1 smoke test exists —
         // either because AI already produced one, or we inject a minimal one below. This prevents
         // the "UI Tests: 0 passed, 0 failed, 0 skipped" outcome on scaffold PRs.
@@ -3543,6 +3574,35 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
 
             // Tier 3: UI tests with Playwright (only if earlier tiers passed)
             var allPriorPassed = tierResults.All(r => r.Success);
+
+            // Auto-derive UITestCommand if enabled but not explicitly set
+            if (wsConfig.EnableUITests && string.IsNullOrWhiteSpace(wsConfig.UITestCommand))
+            {
+                var playwrightConfig = Directory.EnumerateFiles(_workspace.RepoPath, "playwright.config.*", SearchOption.TopDirectoryOnly).FirstOrDefault();
+                if (playwrightConfig != null)
+                {
+                    wsConfig.UITestCommand = "npx playwright test";
+                }
+                else
+                {
+                    var uiTestProjects = Directory.EnumerateFiles(_workspace.RepoPath, "*.csproj", SearchOption.AllDirectories)
+                        .Where(p => Path.GetFileName(p).Contains("UI", StringComparison.OrdinalIgnoreCase) ||
+                                     Path.GetFileName(p).Contains("Playwright", StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+
+                    if (uiTestProjects.Count > 0)
+                    {
+                        wsConfig.UITestCommand = $"dotnet test \"{uiTestProjects[0]}\" --no-build --verbosity normal";
+                    }
+                    else
+                    {
+                        wsConfig.UITestCommand = !string.IsNullOrWhiteSpace(wsConfig.TestCommand)
+                            ? $"{wsConfig.TestCommand} --filter \"Category=UI\""
+                            : "dotnet test --filter \"Category=UI\" --no-build";
+                    }
+                }
+            }
+
             if (allPriorPassed && wsConfig.EnableUITests && _workspaceServices.PlaywrightRunner is not null && wsConfig.UITestCommand is not null)
             {
                 if (!_workspaceServices.PlaywrightRunner.IsReady)
@@ -3637,6 +3697,13 @@ You MUST output this file: `tests/{projectName}.Tests/{projectName}.Tests.csproj
         CancellationToken ct,
         int? prNumber = null)
     {
+        // Delegate UI tier to PlaywrightRunner which handles env vars, app startup, and artifact collection
+        if (tier == TestTier.UI && _workspaceServices.PlaywrightRunner != null)
+        {
+            return await _workspaceServices.PlaywrightRunner.RunUITestsAsync(
+                _workspace!.RepoPath, wsConfig, testCommand, wsConfig.UITestTimeoutSeconds, ct);
+        }
+
         UpdateStatus(AgentStatus.Working, prNumber.HasValue
             ? $"Running {tier} tests for PR #{prNumber.Value}"
             : $"Running {tier} tests");
