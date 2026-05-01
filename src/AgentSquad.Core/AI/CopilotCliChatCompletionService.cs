@@ -18,17 +18,20 @@ public sealed class CopilotCliChatCompletionService : IChatCompletionService
     private readonly CopilotCliProcessManager _processManager;
     private readonly CopilotCliConfig _config;
     private readonly AgentUsageTracker _usageTracker;
+    private readonly ActiveLlmCallTracker _llmCallTracker;
     private readonly ILogger<CopilotCliChatCompletionService> _logger;
 
     public CopilotCliChatCompletionService(
         CopilotCliProcessManager processManager,
         CopilotCliConfig config,
         AgentUsageTracker usageTracker,
+        ActiveLlmCallTracker llmCallTracker,
         ILogger<CopilotCliChatCompletionService> logger)
     {
         _processManager = processManager ?? throw new ArgumentNullException(nameof(processManager));
         _config = config ?? throw new ArgumentNullException(nameof(config));
         _usageTracker = usageTracker ?? throw new ArgumentNullException(nameof(usageTracker));
+        _llmCallTracker = llmCallTracker ?? throw new ArgumentNullException(nameof(llmCallTracker));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -57,69 +60,79 @@ public sealed class CopilotCliChatCompletionService : IChatCompletionService
         // Pick up CLI session ID from the ambient call context (set by the agent)
         var sessionId = AgentCallContext.CurrentSessionId;
 
-        // Retry loop for transient errors (auth failures, timeouts)
-        var maxRetries = _config.MaxRetries;
-        CopilotCliResult? result = null;
-        for (var attempt = 0; attempt <= maxRetries; attempt++)
-        {
-            result = await _processManager.ExecutePromptAsync(prompt, modelOverride, sessionId, cancellationToken);
-
-            if (result.IsSuccess)
-                break;
-
-            if (attempt < maxRetries && IsTransientError(result.Error))
-            {
-                var backoffSeconds = attempt switch { 0 => 5, 1 => 15, _ => 30 };
-                _logger.LogWarning(
-                    "Transient error on attempt {Attempt}/{MaxRetries}, retrying in {Backoff}s: {Error}",
-                    attempt + 1, maxRetries, backoffSeconds, result.Error);
-                await Task.Delay(TimeSpan.FromSeconds(backoffSeconds), cancellationToken);
-                continue;
-            }
-
-            // Non-transient error or retries exhausted
-            break;
-        }
-
-        if (!result!.IsSuccess)
-        {
-            _logger.LogWarning("Copilot CLI request failed after {Attempts} attempt(s): {Error}",
-                maxRetries + 1, result.Error);
-            throw new CopilotCliException(
-                $"Copilot CLI request failed: {result.Error}");
-        }
-
-        // Parse the output based on output mode
-        string parsedResponse;
-        if (_config.JsonOutput)
-        {
-            parsedResponse = CliOutputParser.ParseJsonOutput(result.Output)
-                ?? CliOutputParser.Parse(result.Output);
-        }
-        else
-        {
-            parsedResponse = CliOutputParser.Parse(result.Output);
-        }
-
-        if (string.IsNullOrWhiteSpace(parsedResponse))
-        {
-            _logger.LogWarning("Copilot CLI returned empty response. Raw length: {RawLength}",
-                result.Output.Length);
-            parsedResponse = "(No response from Copilot CLI)";
-        }
-
-        // Strip meta-commentary that the copilot CLI sometimes prepends
-        parsedResponse = StripMetaCommentary(parsedResponse);
-
-        _logger.LogDebug("Received copilot response ({Length} chars)", parsedResponse.Length);
-
-        // Record estimated usage for cost tracking
+        // Track active LLM call for dashboard visibility
         var agentId = AgentCallContext.CurrentAgentId ?? "unknown";
         var effectiveModel = modelOverride ?? _config.ModelName;
-        _usageTracker.RecordCall(agentId, effectiveModel, prompt.Length, parsedResponse.Length);
+        _llmCallTracker.NotifyCallStarted(agentId, effectiveModel);
 
-        var message = new ChatMessageContent(AuthorRole.Assistant, parsedResponse);
-        return [message];
+        try
+        {
+            // Retry loop for transient errors (auth failures, timeouts)
+            var maxRetries = _config.MaxRetries;
+            CopilotCliResult? result = null;
+            for (var attempt = 0; attempt <= maxRetries; attempt++)
+            {
+                result = await _processManager.ExecutePromptAsync(prompt, modelOverride, sessionId, cancellationToken);
+
+                if (result.IsSuccess)
+                    break;
+
+                if (attempt < maxRetries && IsTransientError(result.Error))
+                {
+                    var backoffSeconds = attempt switch { 0 => 5, 1 => 15, _ => 30 };
+                    _logger.LogWarning(
+                        "Transient error on attempt {Attempt}/{MaxRetries}, retrying in {Backoff}s: {Error}",
+                        attempt + 1, maxRetries, backoffSeconds, result.Error);
+                    await Task.Delay(TimeSpan.FromSeconds(backoffSeconds), cancellationToken);
+                    continue;
+                }
+
+                // Non-transient error or retries exhausted
+                break;
+            }
+
+            if (!result!.IsSuccess)
+            {
+                _logger.LogWarning("Copilot CLI request failed after {Attempts} attempt(s): {Error}",
+                    maxRetries + 1, result.Error);
+                throw new CopilotCliException(
+                    $"Copilot CLI request failed: {result.Error}");
+            }
+
+            // Parse the output based on output mode
+            string parsedResponse;
+            if (_config.JsonOutput)
+            {
+                parsedResponse = CliOutputParser.ParseJsonOutput(result.Output)
+                    ?? CliOutputParser.Parse(result.Output);
+            }
+            else
+            {
+                parsedResponse = CliOutputParser.Parse(result.Output);
+            }
+
+            if (string.IsNullOrWhiteSpace(parsedResponse))
+            {
+                _logger.LogWarning("Copilot CLI returned empty response. Raw length: {RawLength}",
+                    result.Output.Length);
+                parsedResponse = "(No response from Copilot CLI)";
+            }
+
+            // Strip meta-commentary that the copilot CLI sometimes prepends
+            parsedResponse = StripMetaCommentary(parsedResponse);
+
+            _logger.LogDebug("Received copilot response ({Length} chars)", parsedResponse.Length);
+
+            // Record estimated usage for cost tracking
+            _usageTracker.RecordCall(agentId, effectiveModel, prompt.Length, parsedResponse.Length);
+
+            var message = new ChatMessageContent(AuthorRole.Assistant, parsedResponse);
+            return [message];
+        }
+        finally
+        {
+            _llmCallTracker.NotifyCallCompleted(agentId);
+        }
     }
 
     public async IAsyncEnumerable<StreamingChatMessageContent> GetStreamingChatMessageContentsAsync(

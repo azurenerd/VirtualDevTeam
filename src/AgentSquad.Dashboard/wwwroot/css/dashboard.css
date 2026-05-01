@@ -566,6 +566,18 @@ main {
     font-style: italic;
 }
 
+.agent-detail .ai-badge {
+    font-size: 0.7rem;
+    margin-left: 0.35rem;
+    animation: ai-pulse 1.5s ease-in-out infinite;
+    cursor: default;
+}
+
+@keyframes ai-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
+
 /* ===== Metrics Page ===== */
 .metrics-section {
     margin-bottom: 2.5rem;

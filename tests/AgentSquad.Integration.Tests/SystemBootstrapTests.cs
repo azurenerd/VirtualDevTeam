@@ -66,6 +66,7 @@ public class SystemBootstrapTests : IDisposable
         // Core services
         services.AddInProcessMessageBus();
         services.AddSingleton<AgentUsageTracker>();
+        services.AddSingleton<ActiveLlmCallTracker>();
         services.AddSemanticKernelModels();
 
         // Persistence

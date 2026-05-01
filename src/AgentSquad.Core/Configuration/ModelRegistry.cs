@@ -18,6 +18,7 @@ public class ModelRegistry
     private readonly CopilotCliConfig _cliConfig;
     private readonly CopilotCliProcessManager? _processManager;
     private readonly AgentUsageTracker _usageTracker;
+    private readonly ActiveLlmCallTracker _llmCallTracker;
     private readonly HashSet<string> _cliFallbackTiers = new();
     private readonly object _overrideLock = new();
 
@@ -42,11 +43,13 @@ public class ModelRegistry
         AgentSquadConfig config,
         ILoggerFactory loggerFactory,
         AgentUsageTracker usageTracker,
+        ActiveLlmCallTracker llmCallTracker,
         CopilotCliProcessManager? processManager = null)
     {
         _modelConfigs = config.Models;
         _loggerFactory = loggerFactory;
         _usageTracker = usageTracker;
+        _llmCallTracker = llmCallTracker;
         _cliConfig = config.CopilotCli;
         _processManager = processManager;
     }
@@ -56,6 +59,9 @@ public class ModelRegistry
 
     /// <summary>Per-agent usage tracker for estimated cost display.</summary>
     public AgentUsageTracker UsageTracker => _usageTracker;
+
+    /// <summary>Tracks which agents have in-flight LLM calls.</summary>
+    public ActiveLlmCallTracker LlmCallTracker => _llmCallTracker;
 
     /// <summary>Get or create a Kernel instance for the given model tier.</summary>
     public Kernel GetKernel(string modelTier) => GetKernel(modelTier, agentId: null);
@@ -172,6 +178,7 @@ public class ModelRegistry
             _processManager!,
             _cliConfig,
             _usageTracker,
+            _llmCallTracker,
             _loggerFactory.CreateLogger<CopilotCliChatCompletionService>());
 
         builder.Services.AddKeyedSingleton<Microsoft.SemanticKernel.ChatCompletion.IChatCompletionService>(

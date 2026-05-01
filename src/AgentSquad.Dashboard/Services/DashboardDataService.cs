@@ -1,4 +1,6 @@
+using System.Text.RegularExpressions;
 using AgentSquad.Core.Agents;
+using AgentSquad.Core.AI;
 using AgentSquad.Core.Configuration;
 using AgentSquad.Core.Diagnostics;
 using AgentSquad.Core.GitHub;
@@ -7,6 +9,7 @@ using AgentSquad.Core.Persistence;
 using AgentSquad.Dashboard.Hubs;
 using AgentSquad.Orchestrator;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.Extensions.Options;
 
 namespace AgentSquad.Dashboard.Services;
 
@@ -23,6 +26,10 @@ public sealed record AgentSnapshot
     public string ActiveModel { get; init; } = "";
     public DateTime LastStatusChange { get; set; } = DateTime.UtcNow;
     public int ErrorCount { get; init; }
+
+    // Active LLM call indicator
+    public bool IsLlmCallActive { get; init; }
+    public string? LlmCallModel { get; init; }
 
     // Self-diagnostic
     public string? DiagnosticSummary { get; init; }
@@ -102,6 +109,7 @@ public sealed class DashboardDataService : BackgroundService
     private readonly AgentChatService _chatService;
     private readonly IHubContext<AgentHub> _hubContext;
     private readonly IGitHubService _github;
+    private readonly IOptions<AgentSquadConfig> _config;
     private readonly ILogger<DashboardDataService> _logger;
 
     private readonly Dictionary<string, AgentSnapshot> _agentCache = new();
@@ -114,6 +122,11 @@ public sealed class DashboardDataService : BackgroundService
     private readonly DateTime _startedAt = DateTime.UtcNow;
 
     private const int MaxDiagnosticHistory = 500;
+
+    // Matches step counter patterns: " (1/3)", " (2/5)", " step 2/4" (with leading space)
+    private static readonly Regex StepCounterPattern = new(
+        @" \(\d+/\d+\)| step \d+/\d+",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private AgentHealthSnapshot? _lastHealthSnapshot;
     private IReadOnlyList<AgentPullRequest> _cachedPullRequests = Array.Empty<AgentPullRequest>();
@@ -132,6 +145,7 @@ public sealed class DashboardDataService : BackgroundService
         AgentChatService chatService,
         IHubContext<AgentHub> hubContext,
         IGitHubService github,
+        IOptions<AgentSquadConfig> config,
         ILogger<DashboardDataService> logger)
     {
         _registry = registry;
@@ -143,6 +157,7 @@ public sealed class DashboardDataService : BackgroundService
         _chatService = chatService;
         _hubContext = hubContext;
         _github = github;
+        _config = config;
         _logger = logger;
     }
 
@@ -636,6 +651,15 @@ public sealed class DashboardDataService : BackgroundService
     {
         var usage = _modelRegistry.UsageTracker.GetStats(agent.Identity.Id);
         var diag = agent.CurrentDiagnostic;
+        var statusReason = agent.StatusReason;
+        var llmCall = _modelRegistry.LlmCallTracker.GetActiveCall(agent.Identity.Id);
+
+        // Strip step counters in single-pass mode (e.g., "Researching (1/3): ..." → "Researching: ...")
+        if (_config.Value.CopilotCli.SinglePassMode && !string.IsNullOrEmpty(statusReason))
+        {
+            statusReason = StepCounterPattern.Replace(statusReason, "");
+        }
+
         return new()
         {
             Id = agent.Identity.Id,
@@ -643,12 +667,14 @@ public sealed class DashboardDataService : BackgroundService
             Role = agent.Identity.Role,
             ModelTier = agent.Identity.ModelTier,
             Status = agent.Status,
-            StatusReason = agent.StatusReason,
+            StatusReason = statusReason,
             CreatedAt = agent.Identity.CreatedAt,
             AssignedPullRequest = agent.Identity.AssignedPullRequest,
             ActiveModel = _modelRegistry.GetEffectiveModel(agent.Identity.Id),
             LastStatusChange = DateTime.UtcNow,
             ErrorCount = agent.RecentErrors.Count,
+            IsLlmCallActive = llmCall is not null,
+            LlmCallModel = llmCall?.ModelName,
             DiagnosticSummary = diag?.Summary,
             DiagnosticJustification = diag?.Justification,
             DiagnosticCompliant = diag?.IsCompliant ?? true,
@@ -661,7 +687,7 @@ public sealed class DashboardDataService : BackgroundService
         };
     }
 
-    /// <summary>Refreshes usage stats for all cached agents from the usage tracker.</summary>
+    /// <summary>Refreshes usage stats and LLM call state for all cached agents.</summary>
     private void RefreshUsageStats()
     {
         lock (_cacheLock)
@@ -669,12 +695,15 @@ public sealed class DashboardDataService : BackgroundService
             foreach (var (agentId, snapshot) in _agentCache.ToList())
             {
                 var usage = _modelRegistry.UsageTracker.GetStats(agentId);
+                var llmCall = _modelRegistry.LlmCallTracker.GetActiveCall(agentId);
                 _agentCache[agentId] = snapshot with
                 {
                     EstPromptTokens = usage.PromptTokens,
                     EstCompletionTokens = usage.CompletionTokens,
                     AiCalls = usage.TotalCalls,
-                    EstimatedCost = usage.EstimatedCost
+                    EstimatedCost = usage.EstimatedCost,
+                    IsLlmCallActive = llmCall is not null,
+                    LlmCallModel = llmCall?.ModelName
                 };
             }
         }

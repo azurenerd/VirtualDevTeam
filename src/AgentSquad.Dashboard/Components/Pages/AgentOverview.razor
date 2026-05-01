@@ -104,10 +104,18 @@ else
                         @if (!string.IsNullOrEmpty(agent.StatusReason))
                         {
                             <span class="detail-value task-active" title="@agent.StatusReason">@TruncateTask(agent.StatusReason)</span>
+                            @if (agent.IsLlmCallActive)
+                            {
+                                <span class="ai-badge" title="AI call active: @agent.LlmCallModel">🤖</span>
+                            }
                         }
                         else if (agent.AssignedPullRequest is not null)
                         {
                             <span class="detail-value task-active">PR #@agent.AssignedPullRequest</span>
+                            @if (agent.IsLlmCallActive)
+                            {
+                                <span class="ai-badge" title="AI call active: @agent.LlmCallModel">🤖</span>
+                            }
                         }
                         else
                         {
