@@ -66,38 +66,49 @@ if (-not $SkipGitHub) {
             $headers = @{ Authorization = "token $pat"; Accept = "application/vnd.github+json" }
             Write-Host "  Repo: $repo" -ForegroundColor Gray
 
-            # Close all open issues (paginated, re-fetch page 1 each pass)
+            # Close AI-Generated open issues (paginated, re-fetch page 1 each pass)
             $closedIssues = 0
             do {
-                $issues = Invoke-RestMethod "https://api.github.com/repos/$repo/issues?state=open&per_page=100&page=1" -Headers $headers -ErrorAction SilentlyContinue
+                $issues = Invoke-RestMethod "https://api.github.com/repos/$repo/issues?state=open&labels=AI-Generated&per_page=100&page=1" -Headers $headers -ErrorAction SilentlyContinue
                 $issueOnly = @($issues | Where-Object { -not $_.pull_request })
                 foreach ($i in $issueOnly) {
                     Invoke-RestMethod "https://api.github.com/repos/$repo/issues/$($i.number)" -Method Patch -Headers $headers -Body '{"state":"closed"}' -ContentType 'application/json' -ErrorAction SilentlyContinue | Out-Null
                     $closedIssues++
                 }
             } while ($issueOnly.Count -gt 0)
-            Write-Host "  Closed $closedIssues issues" -ForegroundColor Green
+            Write-Host "  Closed $closedIssues AI-Generated issues" -ForegroundColor Green
 
-            # Close all open PRs (paginated, re-fetch page 1 each pass)
+            # Close AI-Generated open PRs (paginated, re-fetch page 1 each pass)
             $closedPrs = 0
             do {
                 $prs = Invoke-RestMethod "https://api.github.com/repos/$repo/pulls?state=open&per_page=100&page=1" -Headers $headers -ErrorAction SilentlyContinue
-                foreach ($pr in $prs) {
+                $aiPrs = @($prs | Where-Object { ($_.labels | ForEach-Object { $_.name }) -contains "AI-Generated" })
+                foreach ($pr in $aiPrs) {
                     Invoke-RestMethod "https://api.github.com/repos/$repo/pulls/$($pr.number)" -Method Patch -Headers $headers -Body '{"state":"closed"}' -ContentType 'application/json' -ErrorAction SilentlyContinue | Out-Null
                     $closedPrs++
                 }
-            } while ($prs.Count -gt 0)
-            Write-Host "  Closed $closedPrs PRs" -ForegroundColor Green
+            } while ($aiPrs.Count -gt 0)
+            Write-Host "  Closed $closedPrs AI-Generated PRs" -ForegroundColor Green
 
-            # Delete all non-main branches
+            # Delete agent/ branches only (not all non-main branches)
             $deletedBranches = 0
-            $branches = Invoke-RestMethod "https://api.github.com/repos/$repo/branches?per_page=100" -Headers $headers -ErrorAction SilentlyContinue
-            foreach ($b in $branches) {
-                if ($b.name -eq "main" -or $b.name -eq "master") { continue }
-                Invoke-RestMethod "https://api.github.com/repos/$repo/git/refs/heads/$($b.name)" -Method Delete -Headers $headers -ErrorAction SilentlyContinue | Out-Null
-                $deletedBranches++
+            try {
+                $agentRefs = Invoke-RestMethod "https://api.github.com/repos/$repo/git/matching-refs/heads/agent/" -Headers $headers -ErrorAction SilentlyContinue
+                foreach ($b in $agentRefs) {
+                    $brName = $b.ref -replace "refs/heads/", ""
+                    Invoke-RestMethod "https://api.github.com/repos/$repo/git/refs/heads/$brName" -Method Delete -Headers $headers -ErrorAction SilentlyContinue | Out-Null
+                    $deletedBranches++
+                }
+            } catch { }
+            # Also delete the working branch if it starts with a known runner pattern
+            $workingBranch = $settings.AgentSquad.Project.WorkingBranch
+            if ($workingBranch -and $workingBranch -ne "main" -and $workingBranch -ne "master") {
+                try {
+                    Invoke-RestMethod "https://api.github.com/repos/$repo/git/refs/heads/$workingBranch" -Method Delete -Headers $headers -ErrorAction SilentlyContinue | Out-Null
+                    $deletedBranches++
+                } catch { }
             }
-            Write-Host "  Deleted $deletedBranches branches" -ForegroundColor Green
+            Write-Host "  Deleted $deletedBranches agent branches" -ForegroundColor Green
 
             # Delete repo files not in preserve list
             Write-Host "  Cleaning repo files (preserving: $($preserveList -join ', '))..." -ForegroundColor Cyan

@@ -246,14 +246,14 @@ else {
             Write-Host "      No agent branches found or error: $($_.Exception.Message)" -ForegroundColor DarkGray
         }
 
-        # ── Step 7: Close all open issues (with verify-and-retry) ──
-        Write-Host "[7/8] Closing all open issues..." -ForegroundColor Yellow
+        # ── Step 7: Close AI-Generated open issues (with verify-and-retry) ──
+        Write-Host "[7/8] Closing AI-Generated open issues..." -ForegroundColor Yellow
         $maxRetries = 3
         for ($attempt = 1; $attempt -le $maxRetries; $attempt++) {
             $issueClosed = 0
             $page = 1
             do {
-                $issues = Invoke-RestMethod -Uri "$baseUrl/issues?state=open&per_page=100&page=$page" -Headers $headers
+                $issues = Invoke-RestMethod -Uri "$baseUrl/issues?state=open&labels=AI-Generated&per_page=100&page=$page" -Headers $headers
                 foreach ($issue in $issues) {
                     if ($issue.pull_request) { continue } # skip PRs
                     try {
@@ -268,29 +268,32 @@ else {
                 $page++
             } while ($issues.Count -eq 100)
 
-            # Verify: re-check for any remaining open issues
+            # Verify: re-check for any remaining open AI-Generated issues
             Start-Sleep -Seconds 2
-            $remaining = Invoke-RestMethod -Uri "$baseUrl/issues?state=open&per_page=100" -Headers $headers
+            $remaining = Invoke-RestMethod -Uri "$baseUrl/issues?state=open&labels=AI-Generated&per_page=100" -Headers $headers
             $remainingIssues = @($remaining | Where-Object { -not $_.pull_request })
             if ($remainingIssues.Count -eq 0) {
-                Write-Host "      Closed $issueClosed issue(s) — verified 0 open remain" -ForegroundColor Green
+                Write-Host "      Closed $issueClosed AI-Generated issue(s) — verified 0 remain" -ForegroundColor Green
                 break
             }
             Write-Host "      Attempt ${attempt}/${maxRetries}: closed $issueClosed but $($remainingIssues.Count) still open, retrying..." -ForegroundColor DarkYellow
         }
         if ($remainingIssues.Count -gt 0) {
-            Write-Host "      WARNING: $($remainingIssues.Count) issue(s) still open after $maxRetries attempts!" -ForegroundColor Red
+            Write-Host "      WARNING: $($remainingIssues.Count) AI-Generated issue(s) still open after $maxRetries attempts!" -ForegroundColor Red
             $remainingIssues | ForEach-Object { Write-Host "        #$($_.number): $($_.title)" -ForegroundColor Red }
         }
 
-        # ── Step 8: Close all open PRs (with verify-and-retry) ──
-        Write-Host "[8/8] Closing all open PRs..." -ForegroundColor Yellow
+        # ── Step 8: Close AI-Generated open PRs (with verify-and-retry) ──
+        Write-Host "[8/8] Closing AI-Generated open PRs..." -ForegroundColor Yellow
         for ($attempt = 1; $attempt -le $maxRetries; $attempt++) {
             $prClosed = 0
             $page = 1
             do {
                 $prs = Invoke-RestMethod -Uri "$baseUrl/pulls?state=open&per_page=100&page=$page" -Headers $headers
                 foreach ($pr in $prs) {
+                    # Only close PRs with AI-Generated label
+                    $prLabels = @($pr.labels | ForEach-Object { $_.name })
+                    if ($prLabels -notcontains "AI-Generated") { continue }
                     try {
                         Invoke-RestMethod -Uri "$baseUrl/pulls/$($pr.number)" -Method Patch -Headers $headers `
                             -Body '{"state":"closed"}' -ContentType "application/json" | Out-Null
@@ -303,17 +306,23 @@ else {
                 $page++
             } while ($prs.Count -eq 100)
 
-            # Verify: re-check for any remaining open PRs
+            # Verify: re-check for any remaining open AI-Generated PRs
             Start-Sleep -Seconds 2
-            $remainingPrs = Invoke-RestMethod -Uri "$baseUrl/pulls?state=open&per_page=100" -Headers $headers
+            $remainingPrs = @()
+            $vPage = 1
+            do {
+                $vPrs = Invoke-RestMethod -Uri "$baseUrl/pulls?state=open&per_page=100&page=$vPage" -Headers $headers
+                $remainingPrs += @($vPrs | Where-Object { ($_.labels | ForEach-Object { $_.name }) -contains "AI-Generated" })
+                $vPage++
+            } while ($vPrs.Count -eq 100)
             if ($remainingPrs.Count -eq 0) {
-                Write-Host "      Closed $prClosed PR(s) — verified 0 open remain" -ForegroundColor Green
+                Write-Host "      Closed $prClosed AI-Generated PR(s) — verified 0 remain" -ForegroundColor Green
                 break
             }
             Write-Host "      Attempt ${attempt}/${maxRetries}: closed $prClosed but $($remainingPrs.Count) still open, retrying..." -ForegroundColor DarkYellow
         }
         if ($remainingPrs.Count -gt 0) {
-            Write-Host "      WARNING: $($remainingPrs.Count) PR(s) still open after $maxRetries attempts!" -ForegroundColor Red
+            Write-Host "      WARNING: $($remainingPrs.Count) AI-Generated PR(s) still open after $maxRetries attempts!" -ForegroundColor Red
             $remainingPrs | ForEach-Object { Write-Host "        #$($_.number): $($_.title)" -ForegroundColor Red }
         }
     }
@@ -383,21 +392,22 @@ if (-not $SkipGitHub -and $GitHubToken) {
     $headers2 = @{ "Authorization" = "Bearer $GitHubToken"; "Accept" = "application/vnd.github+json"; "X-GitHub-Api-Version" = "2022-11-28" }
     $baseUrl2 = "https://api.github.com/repos/$GitHubRepo"
 
-    $openIssues = Invoke-RestMethod -Uri "$baseUrl2/issues?state=open&per_page=1" -Headers $headers2
+    $openIssues = Invoke-RestMethod -Uri "$baseUrl2/issues?state=open&labels=AI-Generated&per_page=1" -Headers $headers2
     $openIssueCount = @($openIssues | Where-Object { -not $_.pull_request }).Count
     if ($openIssueCount -gt 0) {
-        Write-Host "      FAIL: $openIssueCount open issue(s) remain!" -ForegroundColor Red
+        Write-Host "      FAIL: $openIssueCount open AI-Generated issue(s) remain!" -ForegroundColor Red
         $allGood = $false
     } else {
-        Write-Host "      OK: No open issues" -ForegroundColor Green
+        Write-Host "      OK: No open AI-Generated issues" -ForegroundColor Green
     }
 
-    $openPrs2 = Invoke-RestMethod -Uri "$baseUrl2/pulls?state=open&per_page=1" -Headers $headers2
-    if ($openPrs2.Count -gt 0) {
-        Write-Host "      FAIL: $($openPrs2.Count) open PR(s) remain!" -ForegroundColor Red
+    $openPrs2 = Invoke-RestMethod -Uri "$baseUrl2/pulls?state=open&per_page=100" -Headers $headers2
+    $aiPrs2 = @($openPrs2 | Where-Object { ($_.labels | ForEach-Object { $_.name }) -contains "AI-Generated" })
+    if ($aiPrs2.Count -gt 0) {
+        Write-Host "      FAIL: $($aiPrs2.Count) open AI-Generated PR(s) remain!" -ForegroundColor Red
         $allGood = $false
     } else {
-        Write-Host "      OK: No open PRs" -ForegroundColor Green
+        Write-Host "      OK: No open AI-Generated PRs" -ForegroundColor Green
     }
 
     $agBranches = Invoke-RestMethod -Uri "$baseUrl2/git/matching-refs/heads/agent/" -Headers $headers2 -ErrorAction SilentlyContinue
