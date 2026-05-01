@@ -313,6 +313,9 @@ public sealed class CopilotCliChatCompletionService : IChatCompletionService
                lower.Contains("network") ||
                lower.Contains("502") ||
                lower.Contains("503") ||
-               lower.Contains("504");
+               lower.Contains("504") ||
+               lower.Contains("-1073740791") || // STATUS_STACK_BUFFER_OVERRUN (process crash)
+               lower.Contains("-1073741819") || // STATUS_ACCESS_VIOLATION (process crash)
+               lower.Contains("exited with code -");  // Any negative exit code = process crash
     }
 }

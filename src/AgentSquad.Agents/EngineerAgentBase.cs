@@ -29,6 +29,23 @@ public abstract class EngineerAgentBase : AgentBase
     protected readonly AgentSquadConfig Config;
     protected readonly AgentStateStore StateStore;
 
+    /// <summary>
+    /// Instruction appended to implementation prompts to prevent whole-file rewrites
+    /// that cause merge conflicts when multiple engineers work in parallel.
+    /// </summary>
+    protected const string AdditiveEditingGuidance =
+        "## CRITICAL: Additive Editing Rules (Merge Conflict Prevention)\n" +
+        "Multiple engineers work in parallel on the same repository. To prevent merge conflicts:\n" +
+        "- **NEVER rewrite an entire file** if it already exists. Only ADD or MODIFY the specific " +
+        "sections your task requires (new functions, new imports, new routes).\n" +
+        "- **Shared files** (types, models, routes, config, index/barrel files): ONLY append your " +
+        "additions. Do not reorganize, reformat, or reorder existing content.\n" +
+        "- **New files you own exclusively**: You may write the full content.\n" +
+        "- **Existing files**: Show the COMPLETE file content but preserve ALL existing code exactly " +
+        "as-is, adding your new code in logical locations (imports at top, exports at bottom, etc.).\n" +
+        "- If your task description says 'Modify' a file, you MUST keep the existing content intact " +
+        "and only add/change the minimum required for your task.";
+
     protected readonly HashSet<int> ProcessedIssueIds = new();
     protected readonly ConcurrentQueue<ReworkItem> ReworkQueue = new();
     protected readonly ConcurrentQueue<IssueAssignmentMessage> AssignmentQueue = new();
@@ -663,6 +680,8 @@ public abstract class EngineerAgentBase : AgentBase
                 "Do NOT use (APPEND) or similar suffixes — always output the complete file content.");
             if (completedSteps.Count > 0)
                 contextBuilder.AppendLine("If you need to update a file from a previous step, include the COMPLETE updated file content.");
+            contextBuilder.AppendLine();
+            contextBuilder.AppendLine(AdditiveEditingGuidance);
 
             stepHistory.AddUserMessage(contextBuilder.ToString());
 
@@ -875,6 +894,8 @@ public abstract class EngineerAgentBase : AgentBase
             "Every file MUST use the FILE: marker format. " +
             "File paths must be valid filesystem paths (e.g., src/Models/User.cs). " +
             "Do NOT put code, directives, brackets, or instructions in the file path.");
+        promptBuilder.AppendLine();
+        promptBuilder.AppendLine(AdditiveEditingGuidance);
 
         history.AddUserMessage(promptBuilder.ToString());
 
@@ -1517,7 +1538,8 @@ public abstract class EngineerAgentBase : AgentBase
                     "Include all source code files, configuration, and tests. " +
                     "Every file MUST use the FILE: marker format. " +
                     "File paths must be valid filesystem paths (e.g., src/Models/User.cs). " +
-                    "Do NOT put code, directives, brackets, or instructions in the file path.");
+                    "Do NOT put code, directives, brackets, or instructions in the file path.\n\n" +
+                    AdditiveEditingGuidance);
 
                 var implResponse = await chat.GetChatMessageContentAsync(history, cancellationToken: ct);
                 history.AddAssistantMessage(implResponse.Content ?? "");

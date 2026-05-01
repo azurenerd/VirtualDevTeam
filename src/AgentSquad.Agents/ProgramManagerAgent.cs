@@ -105,6 +105,7 @@ public class ProgramManagerAgent : AgentBase
                 await ProcessClarificationRequestsAsync(ct);
                 await ReviewPullRequestsAsync(ct);
                 await ReviewEnhancementIssueCompletionAsync(ct);
+                await CheckAllReviewsCompleteAsync(ct);
                 await UpdateProjectTrackingAsync(ct);
 
                 await RefreshDiagnosticWithMemoryAsync(ct);
@@ -848,6 +849,10 @@ public class ProgramManagerAgent : AgentBase
 
             foreach (var prNumber in prNumbersToReview)
             {
+                // Force-approval PRs always get re-processed even if previously reviewed
+                if (_forceApprovalPrs.Contains(prNumber))
+                    _reviewedPrNumbers.Remove(prNumber);
+
                 // Skip if we've already reviewed this PR in this session
                 if (_reviewedPrNumbers.Contains(prNumber))
                     continue;
@@ -1079,6 +1084,36 @@ public class ProgramManagerAgent : AgentBase
         catch (Exception ex)
         {
             Logger.LogWarning(ex, "Error reviewing enhancement issue completion");
+        }
+    }
+
+    /// <summary>
+    /// Detects when all engineering work is complete (no open tasks, no open PRs)
+    /// and updates status to trigger the HealthMonitor's AllReviewsApproved signal.
+    /// </summary>
+    private async Task CheckAllReviewsCompleteAsync(CancellationToken ct)
+    {
+        try
+        {
+            var openPrs = await _github.GetOpenPullRequestsAsync(ct);
+            if (openPrs.Count > 0)
+                return; // Still have open PRs
+
+            var openIssues = await _github.GetOpenIssuesAsync(ct);
+            var openEngineeringTasks = openIssues
+                .Where(i => i.Labels.Any(l => string.Equals(l, "engineering-task", StringComparison.OrdinalIgnoreCase)))
+                .ToList();
+
+            if (openEngineeringTasks.Count > 0)
+                return; // Still have open tasks
+
+            // All tasks closed and no open PRs — signal completion
+            UpdateStatus(AgentStatus.Idle, "All PRs approved and merged — project reviews complete");
+            Logger.LogInformation("PM detected all engineering tasks closed and all PRs merged");
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Error checking review completion status");
         }
     }
 

@@ -72,5 +72,14 @@ _ReSharper.Caches/
 
 appsettings.OG.json
 
+## Agent workspaces (cloned repos, test artifacts)
+.agents/
+**//.agents/
+
+## Runner runtime files
+runner.pid
+fake-cli-marker.txt
+develop-settings.json
+
 # Dashboard user data - contains project-specific info, use data.template.json as reference
 src/ReportingDashboard/wwwroot/data/data.json

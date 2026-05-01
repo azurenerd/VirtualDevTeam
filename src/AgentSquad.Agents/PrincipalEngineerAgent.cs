@@ -3030,24 +3030,75 @@ public class PrincipalEngineerAgent : EngineerAgentBase
             }
         }
 
-        // Log overlap warnings: detect tasks that create the same files
-        var fileOwnership = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var task in tasks)
+        // Detect file overlap and serialize tasks that touch the same files.
+        // When two tasks modify/create the same file, the later one gets a dependency
+        // on the earlier one to prevent merge conflicts from concurrent whole-file rewrites.
+        SerializeOverlappingTasks(tasks);
+    }
+
+    /// <summary>
+    /// Detects file overlap between tasks and adds dependency links to serialize them.
+    /// When multiple tasks touch the same file (create or modify), the later task
+    /// gets a dependency on the earlier one to prevent merge conflicts.
+    /// </summary>
+    private void SerializeOverlappingTasks(List<EngineeringTask> tasks)
+    {
+        // Skip T1 (index 0) — it's already the foundation and everything depends on it
+        if (tasks.Count <= 2) return;
+
+        // Map each file to the first task (by list position) that touches it
+        var fileOwner = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+        for (var i = 1; i < tasks.Count; i++)
         {
-            var createFiles = ExtractCreateFilesFromDescription(task.Description);
-            foreach (var file in createFiles)
+            var task = tasks[i];
+            var touchedFiles = ExtractTouchedFilesFromDescription(task.Description);
+
+            foreach (var file in touchedFiles)
             {
-                if (fileOwnership.TryGetValue(file, out var owner))
+                if (fileOwner.TryGetValue(file, out var ownerIdx))
                 {
-                    Logger.LogWarning("File overlap detected: '{File}' is created by both {Task1} and {Task2}",
-                        file, owner, task.Id);
+                    var ownerTask = tasks[ownerIdx];
+                    // Add dependency: this task depends on the file owner
+                    if (!task.Dependencies.Contains(ownerTask.Id, StringComparer.OrdinalIgnoreCase))
+                    {
+                        task.Dependencies.Add(ownerTask.Id);
+                        Logger.LogInformation(
+                            "Serializing tasks: {Later} now depends on {Earlier} (shared file: {File})",
+                            task.Id, ownerTask.Id, file);
+                    }
+                    // DON'T update fileOwner — keep the original owner so chains form:
+                    // T3→T5→T7 rather than T3→T7, T5→T7 (fan-in creates bottleneck)
+                    // Actually, update to the LATEST task so the chain is linear:
+                    fileOwner[file] = i;
                 }
                 else
                 {
-                    fileOwnership[file] = task.Id;
+                    fileOwner[file] = i;
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Extracts all file paths (both CREATE and MODIFY) from a task description.
+    /// </summary>
+    private static List<string> ExtractTouchedFilesFromDescription(string description)
+    {
+        var files = new List<string>();
+        foreach (var line in description.Split('\n'))
+        {
+            var trimmed = line.Trim();
+            // Match both "**Create:**" and "**Modify:**" file references
+            if (trimmed.Contains("**Create:**") || trimmed.Contains("**Modify:**"))
+            {
+                var backtickStart = trimmed.IndexOf('`');
+                var backtickEnd = trimmed.LastIndexOf('`');
+                if (backtickStart >= 0 && backtickEnd > backtickStart)
+                    files.Add(trimmed[(backtickStart + 1)..backtickEnd]);
+            }
+        }
+        return files;
     }
 
     /// <summary>
