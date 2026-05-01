@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using AgentSquad.Core.Agents;
+using AgentSquad.Core.AI;
 using AgentSquad.Core.Configuration;
 using AgentSquad.Core.DevPlatform.Capabilities;
 using AgentSquad.Core.Persistence;
@@ -23,6 +24,7 @@ public sealed class ConfigurationService : IConfigurationService
     private readonly AgentSpawnManager _spawnManager;
     private readonly WorkflowStateMachine _workflow;
     private readonly IDashboardDataService _dashboard;
+    private readonly RoleContextProvider? _roleContextProvider;
     private readonly ILogger<ConfigurationService> _logger;
     private readonly IConfiguration _rootConfiguration;
     private readonly string _appSettingsPath;
@@ -57,7 +59,8 @@ public sealed class ConfigurationService : IConfigurationService
         IDashboardDataService dashboard,
         ILogger<ConfigurationService> logger,
         IConfiguration rootConfiguration,
-        IWebHostEnvironment env)
+        IWebHostEnvironment env,
+        RoleContextProvider? roleContextProvider = null)
     {
         _config = config;
         _workItems = workItems;
@@ -70,6 +73,7 @@ public sealed class ConfigurationService : IConfigurationService
         _runCoordinator = runCoordinator;
         _stateStore = stateStore;
         _dashboard = dashboard;
+        _roleContextProvider = roleContextProvider;
         _logger = logger;
         _rootConfiguration = rootConfiguration;
         _env = env;
@@ -728,6 +732,9 @@ public sealed class ConfigurationService : IConfigurationService
 
             // Reset workflow to Initialization phase, clear all signals and checkpoints
             await _workflow.ResetAsync(ct);
+
+            // Clear in-memory role description overrides (DB rows already cleared by ResetAsync)
+            _roleContextProvider?.ClearAllOverrides();
 
             // Reset spawn slot counters so agents can be re-spawned
             _spawnManager.ResetSlots();

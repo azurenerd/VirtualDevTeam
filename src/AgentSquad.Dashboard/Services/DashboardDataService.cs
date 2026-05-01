@@ -361,11 +361,12 @@ public sealed class DashboardDataService : BackgroundService, IDashboardDataServ
     /// </summary>
     private static string? ResolveCustomAgentName(AgentIdentity identity)
     {
-        if (identity.Role == AgentSquad.Core.Agents.AgentRole.Custom)
+        // Use CustomAgentName (same key the agent uses when calling GetRoleSystemContext)
+        // For Custom agents: CustomAgentName is the custom name
+        // For SME agents: CustomAgentName is "sme:{definitionId}"
+        // For built-in agents: CustomAgentName is null
+        if (!string.IsNullOrWhiteSpace(identity.CustomAgentName))
             return identity.CustomAgentName;
-        // SME agents have Role=SoftwareEngineer but a custom DisplayName
-        if (identity.DisplayName != identity.Role.ToString())
-            return identity.DisplayName;
         return null;
     }
 

@@ -478,6 +478,14 @@ promptApi.MapPost("/reset/{**templatePath}", async (string templatePath, IPrompt
 // ── Agent Role Description REST API (run-scoped overrides) ──
 var roleApi = app.MapGroup("/api/agents").WithTags("AgentRoles");
 
+// Helper: resolve customAgentName using the same key the agent uses internally
+static string? ResolveCustomAgentNameForApi(AgentSquad.Core.Agents.AgentIdentity identity)
+{
+    if (!string.IsNullOrWhiteSpace(identity.CustomAgentName))
+        return identity.CustomAgentName;
+    return null;
+}
+
 roleApi.MapGet("/{agentId}/role-description", (string agentId,
     AgentSquad.Orchestrator.AgentRegistry registry,
     AgentSquad.Core.AI.RoleContextProvider roleContext) =>
@@ -486,9 +494,7 @@ roleApi.MapGet("/{agentId}/role-description", (string agentId,
     if (agent is null) return Results.NotFound(new { error = "Agent not found" });
 
     var identity = agent.Identity;
-    var customName = identity.Role == AgentSquad.Core.Agents.AgentRole.Custom
-        ? identity.CustomAgentName
-        : (identity.DisplayName != identity.Role.ToString() ? identity.DisplayName : null);
+    var customName = ResolveCustomAgentNameForApi(identity);
 
     var hasOverride = roleContext.TryGetRoleDescriptionOverride(identity.Role, customName, out var overrideText);
     var configuredDescription = roleContext.GetConfiguredRoleDescription(identity.Role, customName);
@@ -506,7 +512,7 @@ roleApi.MapGet("/{agentId}/role-description", (string agentId,
     });
 });
 
-roleApi.MapPut("/{agentId}/role-description", (string agentId, HttpContext ctx,
+roleApi.MapPut("/{agentId}/role-description", async (string agentId, HttpContext ctx,
     AgentSquad.Orchestrator.AgentRegistry registry,
     AgentSquad.Core.AI.RoleContextProvider roleContext,
     AgentStateStore stateStoreForRole) =>
@@ -514,13 +520,11 @@ roleApi.MapPut("/{agentId}/role-description", (string agentId, HttpContext ctx,
     var agent = registry.GetAgent(agentId);
     if (agent is null) return Results.NotFound(new { error = "Agent not found" });
 
-    var body = ctx.Request.ReadFromJsonAsync<RoleDescriptionRequest>().GetAwaiter().GetResult();
+    var body = await ctx.Request.ReadFromJsonAsync<RoleDescriptionRequest>();
     var description = body?.Description?.Trim();
 
     var identity = agent.Identity;
-    var customName = identity.Role == AgentSquad.Core.Agents.AgentRole.Custom
-        ? identity.CustomAgentName
-        : (identity.DisplayName != identity.Role.ToString() ? identity.DisplayName : null);
+    var customName = ResolveCustomAgentNameForApi(identity);
 
     // Blank/whitespace normalizes to a clear (revert to default)
     if (string.IsNullOrWhiteSpace(description))
@@ -544,9 +548,7 @@ roleApi.MapDelete("/{agentId}/role-description", (string agentId,
     if (agent is null) return Results.NotFound(new { error = "Agent not found" });
 
     var identity = agent.Identity;
-    var customName = identity.Role == AgentSquad.Core.Agents.AgentRole.Custom
-        ? identity.CustomAgentName
-        : (identity.DisplayName != identity.Role.ToString() ? identity.DisplayName : null);
+    var customName = ResolveCustomAgentNameForApi(identity);
 
     var cleared = roleContext.ClearRoleDescriptionOverride(identity.Role, customName);
     roleContext.ClearPersistedOverride(stateStoreForRole, identity.Role, customName);

@@ -163,6 +163,51 @@ public class RoleContextProviderTests
         Assert.Contains("PM-assigned SE role", context);
     }
 
+    // ── ClearAllOverrides ──
+
+    [Fact]
+    public void ClearAllOverrides_RemovesAllInMemoryOverrides()
+    {
+        // Set overrides for multiple agents
+        _provider.SetRoleDescriptionOverride(AgentRole.ProgramManager, "Custom PM");
+        _provider.SetRoleDescriptionOverride(AgentRole.SoftwareEngineer, "Custom SE", "sme:game-engine");
+        _provider.SetRoleDescriptionOverride(AgentRole.Architect, "Custom Architect");
+
+        // All should exist
+        Assert.True(_provider.TryGetRoleDescriptionOverride(AgentRole.ProgramManager, null, out _));
+        Assert.True(_provider.TryGetRoleDescriptionOverride(AgentRole.SoftwareEngineer, "sme:game-engine", out _));
+        Assert.True(_provider.TryGetRoleDescriptionOverride(AgentRole.Architect, null, out _));
+
+        // Clear all
+        _provider.ClearAllOverrides();
+
+        // None should remain
+        Assert.False(_provider.TryGetRoleDescriptionOverride(AgentRole.ProgramManager, null, out _));
+        Assert.False(_provider.TryGetRoleDescriptionOverride(AgentRole.SoftwareEngineer, "sme:game-engine", out _));
+        Assert.False(_provider.TryGetRoleDescriptionOverride(AgentRole.Architect, null, out _));
+
+        // Config defaults should still be accessible
+        var context = _provider.GetRoleSystemContext(AgentRole.ProgramManager);
+        Assert.Contains("PM default role", context);
+    }
+
+    // ── SME key alignment ──
+
+    [Fact]
+    public void SME_Override_WithDefinitionId_MatchesAgentReadPath()
+    {
+        // SME agents use Identity.CustomAgentName = "sme:{definitionId}" for reads
+        // The UI/API must save with the same key for overrides to reach the agent
+        var smeCustomName = "sme:game-engine";
+
+        _provider.SetRoleDescriptionOverride(AgentRole.SoftwareEngineer, "Game engine specialist focus", smeCustomName);
+
+        // This simulates what AgentBase.BuildSystemPrompt does:
+        // RoleContext.GetRoleSystemContext(Identity.Role, Identity.CustomAgentName)
+        var context = _provider.GetRoleSystemContext(AgentRole.SoftwareEngineer, smeCustomName);
+        Assert.Contains("Game engine specialist focus", context);
+    }
+
     // ── Helper ──
     private class TestOptionsMonitor<T> : IOptionsMonitor<T>
     {

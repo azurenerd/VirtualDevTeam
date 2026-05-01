@@ -449,4 +449,17 @@ public class RoleContextProvider
         var cacheKey = GetCacheKey(role, customAgentName);
         stateStore.DeleteRunMetadata($"{RoleOverridePrefix}{cacheKey}");
     }
+
+    /// <summary>
+    /// Clears all in-memory role description overrides. Call during project reset
+    /// alongside <see cref="Persistence.AgentStateStore.ClearAllCheckpointsAsync"/> to ensure
+    /// both DB rows and in-memory state are cleared together.
+    /// </summary>
+    public void ClearAllOverrides()
+    {
+        var count = _roleDescriptionOverrides.Count;
+        _roleDescriptionOverrides.Clear();
+        if (count > 0)
+            _logger.LogInformation("Cleared {Count} in-memory role description overrides", count);
+    }
 }

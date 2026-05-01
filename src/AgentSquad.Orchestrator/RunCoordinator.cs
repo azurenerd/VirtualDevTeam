@@ -1,4 +1,5 @@
 using AgentSquad.Core.Agents;
+using AgentSquad.Core.AI;
 using AgentSquad.Core.Configuration;
 using AgentSquad.Core.DevPlatform.Capabilities;
 using AgentSquad.Core.GitHub;
@@ -29,6 +30,7 @@ public class RunCoordinator
     private readonly IGitHubService _gitHubService;
     private readonly ConflictResolver _conflictResolver;
     private readonly CandidateStateStore _candidateStateStore;
+    private readonly RoleContextProvider? _roleContextProvider;
     private readonly ILogger<RunCoordinator> _logger;
     private readonly AgentSquadConfig _config;
 
@@ -53,7 +55,8 @@ public class RunCoordinator
         ConflictResolver conflictResolver,
         CandidateStateStore candidateStateStore,
         ILogger<RunCoordinator> logger,
-        IOptions<AgentSquadConfig> config)
+        IOptions<AgentSquadConfig> config,
+        RoleContextProvider? roleContextProvider = null)
     {
         _spawnManager = spawnManager ?? throw new ArgumentNullException(nameof(spawnManager));
         _registry = registry ?? throw new ArgumentNullException(nameof(registry));
@@ -68,6 +71,7 @@ public class RunCoordinator
         _gitHubService = gitHubService ?? throw new ArgumentNullException(nameof(gitHubService));
         _conflictResolver = conflictResolver ?? throw new ArgumentNullException(nameof(conflictResolver));
         _candidateStateStore = candidateStateStore ?? throw new ArgumentNullException(nameof(candidateStateStore));
+        _roleContextProvider = roleContextProvider;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _config = config?.Value ?? throw new ArgumentNullException(nameof(config));
     }
@@ -213,6 +217,7 @@ public class RunCoordinator
 
         // Clear any stale state from a previous run and set the new run ID
         await _stateStore.ClearAllCheckpointsAsync(ct);
+        _roleContextProvider?.ClearAllOverrides();
         _stateStore.ResetRunStartedUtc(); // Advance run scope so queries don't see prior project's items
         _workflow.RunId = run.RunId;
 
@@ -353,6 +358,7 @@ public class RunCoordinator
 
             // Clear any stale state from a previous run and set the new run ID
             await _stateStore.ClearAllCheckpointsAsync(ct);
+            _roleContextProvider?.ClearAllOverrides();
             _workflow.RunId = run.RunId;
 
             await _stateStore.SaveActiveRunAsync(run, ct);
