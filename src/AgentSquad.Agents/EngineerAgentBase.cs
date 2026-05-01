@@ -3713,7 +3713,21 @@ public abstract class EngineerAgentBase : AgentBase
             || fileName.Equals("appsettings.json", StringComparison.OrdinalIgnoreCase)
             || fileName.Equals("appsettings.Development.json", StringComparison.OrdinalIgnoreCase)
             || fileName.Equals("launchSettings.json", StringComparison.OrdinalIgnoreCase)
-            || fileName.Equals("Program.cs", StringComparison.OrdinalIgnoreCase);
+            || fileName.Equals("Program.cs", StringComparison.OrdinalIgnoreCase)
+            // Node.js / web project infrastructure
+            || fileName.Equals("package.json", StringComparison.OrdinalIgnoreCase)
+            || fileName.Equals("package-lock.json", StringComparison.OrdinalIgnoreCase)
+            || fileName.Equals("tsconfig.json", StringComparison.OrdinalIgnoreCase)
+            || fileName.Equals("tsconfig.node.json", StringComparison.OrdinalIgnoreCase)
+            || fileName.StartsWith("vite.config", StringComparison.OrdinalIgnoreCase)
+            || fileName.StartsWith("vitest.config", StringComparison.OrdinalIgnoreCase)
+            || fileName.Equals(".eslintrc.json", StringComparison.OrdinalIgnoreCase)
+            || fileName.Equals(".eslintrc.cjs", StringComparison.OrdinalIgnoreCase)
+            || fileName.Equals(".prettierrc", StringComparison.OrdinalIgnoreCase)
+            || fileName.Equals("tailwind.config.js", StringComparison.OrdinalIgnoreCase)
+            || fileName.Equals("tailwind.config.ts", StringComparison.OrdinalIgnoreCase)
+            || fileName.Equals("postcss.config.js", StringComparison.OrdinalIgnoreCase)
+            || fileName.Equals("postcss.config.cjs", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsFileAllowed(string normalizedPath, HashSet<string> allowed)

@@ -3718,6 +3718,24 @@ public partial class SoftwareEngineerAgent : EngineerAgentBase
                     var result = await PrWorkflow.ApproveAndMaybeMergeAsync(
                         pr.Number, "SoftwareEngineer", reviewBody, requireTests, deferMerge, ct);
 
+                    // Signal TE that code review is complete: add architect-approved label
+                    // when the Architect is not a required reviewer (specialist PRs).
+                    // Must happen AFTER ApproveAndMaybeMergeAsync (which posts the approval
+                    // comment) to avoid a race where TE starts before the comment exists.
+                    if (result != MergeAttemptResult.Merged)
+                    {
+                        var prAuthorRole = PullRequestWorkflow.DetectAuthorRole(pr.Title);
+                        var prRequiredReviewers = PullRequestWorkflow.GetRequiredReviewers(prAuthorRole);
+                        if (!prRequiredReviewers.Any(r => r.Contains("Architect", StringComparison.OrdinalIgnoreCase))
+                            && !pr.Labels.Contains(PullRequestWorkflow.Labels.ArchitectApproved, StringComparer.OrdinalIgnoreCase))
+                        {
+                            await PrService.AddLabelAsync(pr.Number, PullRequestWorkflow.Labels.ArchitectApproved, ct);
+                            Logger.LogInformation(
+                                "SE added architect-approved to PR #{Number} (SE is code reviewer, Architect not required)",
+                                pr.Number);
+                        }
+                    }
+
                     // All reviewers approved and merge was deferred for human gate
                     if (result == MergeAttemptResult.ReadyToMerge)
                     {
