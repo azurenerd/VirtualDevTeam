@@ -43,6 +43,10 @@ public sealed class SquadReadinessChecker : IFrameworkLifecycle
         if (!await IsCommandAvailableAsync("npm", "--version", ct))
             missing.Add("npm (not found)");
 
+        // 2b. npx (required for MCP servers like WorkIQ)
+        if (!await IsCommandAvailableAsync("npx", "--version", ct))
+            missing.Add("npx (not found — required for MCP tool servers)");
+
         // 3. GitHub CLI
         if (!await IsCommandAvailableAsync("gh", "--version", ct))
             missing.Add("GitHub CLI 'gh' (not found)");

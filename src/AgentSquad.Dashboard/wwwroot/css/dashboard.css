@@ -9096,6 +9096,16 @@ a.ntl-detail-pr-num:hover { text-decoration: underline; color: #79c0ff; }
     border: 1px solid rgba(255,255,255,0.08);
     border-radius: 10px;
 }
+.project-control-repo {
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    opacity: 0.8;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 280px;
+}
 .project-control-actions {
     display: flex;
     gap: 0.5rem;

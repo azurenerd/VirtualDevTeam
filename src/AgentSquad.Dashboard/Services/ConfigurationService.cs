@@ -564,16 +564,18 @@ public sealed class ConfigurationService : IConfigurationService
             // Parse caveats to find files to preserve
             var preserveFiles = ParseCaveats(caveats);
 
-            // 2a. Delete ALL work items (open + closed) — with verify-and-retry
-            _logger.LogWarning("CLEANUP: Deleting all work items in {Repo}", config.GitHubRepo);
+            // 2a. Delete work items with AI-Generated label (open + closed) — with verify-and-retry
+            _logger.LogWarning("CLEANUP: Deleting AI-Generated work items in {Repo}", config.GitHubRepo);
             const int maxCleanupRetries = 3;
             for (var attempt = 1; attempt <= maxCleanupRetries; attempt++)
             {
                 var allItems = await _workItems.ListAllAsync(ct);
-                if (allItems.Count == 0) break;
+                var aiItems = allItems.Where(i =>
+                    i.Labels.Contains("AI-Generated", StringComparer.OrdinalIgnoreCase)).ToList();
+                if (aiItems.Count == 0) break;
 
-                var countBefore = allItems.Count;
-                foreach (var item in allItems)
+                var countBefore = aiItems.Count;
+                foreach (var item in aiItems)
                 {
                     try
                     {
@@ -590,44 +592,48 @@ public sealed class ConfigurationService : IConfigurationService
                     }
                 }
 
-                // Verify: re-check for any remaining items
+                // Verify: re-check for any remaining AI-Generated items
                 await Task.Delay(2000, ct);
                 var remaining = await _workItems.ListAllAsync(ct);
-                if (remaining.Count == 0)
+                var remainingAi = remaining.Where(i =>
+                    i.Labels.Contains("AI-Generated", StringComparer.OrdinalIgnoreCase)).ToList();
+                if (remainingAi.Count == 0)
                 {
-                    _logger.LogInformation("Work item cleanup verified — all items permanently deleted");
+                    _logger.LogInformation("Work item cleanup verified — all AI-Generated items permanently deleted");
                     break;
                 }
 
                 // If hard delete removed some but not all, retry the remainder
-                var openRemaining = remaining.Where(i => i.State == "open").ToList();
+                var openRemaining = remainingAi.Where(i => i.State == "open").ToList();
                 if (openRemaining.Count == 0)
                 {
-                    _logger.LogInformation("Work item cleanup verified — {Total} items closed (hard delete may have fallen back), 0 open remain",
-                        remaining.Count);
+                    _logger.LogInformation("Work item cleanup verified — {Total} AI-Generated items closed (hard delete may have fallen back), 0 open remain",
+                        remainingAi.Count);
                     break;
                 }
 
                 // If no progress was made, stop retrying
-                if (remaining.Count >= countBefore)
+                if (remainingAi.Count >= countBefore)
                 {
                     _logger.LogWarning("Work item cleanup: no progress on attempt {Attempt}/{Max}, stopping", attempt, maxCleanupRetries);
                     break;
                 }
 
-                _logger.LogWarning("Work item cleanup attempt {Attempt}/{Max}: {Count} items still remain, retrying...",
-                    attempt, maxCleanupRetries, remaining.Count);
+                _logger.LogWarning("Work item cleanup attempt {Attempt}/{Max}: {Count} AI-Generated items still remain, retrying...",
+                    attempt, maxCleanupRetries, remainingAi.Count);
             }
 
-            // 2b. Close all open PRs (with verify-and-retry) and label merged PRs
-            _logger.LogWarning("CLEANUP: Closing open PRs and labeling merged PRs in {Repo}", config.GitHubRepo);
+            // 2b. Close AI-Generated open PRs (with verify-and-retry) and label merged PRs
+            _logger.LogWarning("CLEANUP: Closing AI-Generated open PRs and labeling merged PRs in {Repo}", config.GitHubRepo);
             for (var attempt = 1; attempt <= maxCleanupRetries; attempt++)
             {
                 var allPrs = await _pullRequests.ListAllAsync(ct);
-                var openPrs = allPrs.Where(p => p.State == "open" && !p.IsMerged).ToList();
-                if (openPrs.Count == 0 && attempt > 1) break; // skip label pass on retries
+                var aiPrs = allPrs.Where(p =>
+                    p.Labels.Contains("AI-Generated", StringComparer.OrdinalIgnoreCase)).ToList();
+                var openAiPrs = aiPrs.Where(p => p.State == "open" && !p.IsMerged).ToList();
+                if (openAiPrs.Count == 0 && attempt > 1) break; // skip label pass on retries
 
-                foreach (var pr in allPrs)
+                foreach (var pr in aiPrs)
                 {
                     try
                     {
@@ -654,16 +660,17 @@ public sealed class ConfigurationService : IConfigurationService
                     }
                 }
 
-                // Verify: re-check for any remaining open PRs
+                // Verify: re-check for any remaining open AI-Generated PRs
                 await Task.Delay(2000, ct);
                 var remainingPrs = await _pullRequests.ListAllAsync(ct);
-                var stillOpen = remainingPrs.Where(p => p.State == "open" && !p.IsMerged).ToList();
+                var stillOpen = remainingPrs.Where(p => p.State == "open" && !p.IsMerged &&
+                    p.Labels.Contains("AI-Generated", StringComparer.OrdinalIgnoreCase)).ToList();
                 if (stillOpen.Count == 0)
                 {
-                    _logger.LogInformation("PR cleanup verified — 0 open PRs remain");
+                    _logger.LogInformation("PR cleanup verified — 0 open AI-Generated PRs remain");
                     break;
                 }
-                _logger.LogWarning("PR cleanup attempt {Attempt}/{Max}: {Count} open PRs still remain, retrying...",
+                _logger.LogWarning("PR cleanup attempt {Attempt}/{Max}: {Count} open AI-Generated PRs still remain, retrying...",
                     attempt, maxCleanupRetries, stillOpen.Count);
             }
 

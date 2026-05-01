@@ -360,11 +360,18 @@ public abstract class AgentBase : IAgent, IDisposable
     /// <summary>Record an error or warning that will be visible in the dashboard.</summary>
     protected void RecordError(string message, LogLevel level = LogLevel.Error, Exception? exception = null)
     {
+        // Enrich MCP errors with fix suggestions
+        var displayMessage = message;
+        if (exception is AI.CopilotCliException cliEx && cliEx.McpError.HasValue && cliEx.McpFixSuggestion is not null)
+        {
+            displayMessage = $"{message}\n💡 Fix: {cliEx.McpFixSuggestion}";
+        }
+
         var entry = new AgentLogEntry
         {
             Timestamp = DateTime.UtcNow,
             Level = level,
-            Message = message,
+            Message = displayMessage,
             ExceptionDetails = exception?.ToString()
         };
 

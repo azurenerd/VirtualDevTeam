@@ -20,7 +20,8 @@ namespace AgentSquad.Core.AI;
 /// </summary>
 public sealed class CopilotCliProcessManager : IHostedService, IDisposable
 {
-    private readonly CopilotCliConfig _config;
+    private readonly CopilotCliConfig _initialConfig;
+    private readonly IOptionsMonitor<AgentSquadConfig>? _configMonitor;
     private readonly StrategyFrameworkConfig _frameworkConfig;
     private readonly ILogger<CopilotCliProcessManager> _logger;
     private readonly SemaphoreSlim _singleShotPool;
@@ -39,10 +40,13 @@ public sealed class CopilotCliProcessManager : IHostedService, IDisposable
     private bool _copilotAvailable;
     private bool _disposed;
 
+    /// <summary>Gets the current config — hot-reloaded if IOptionsMonitor was provided.</summary>
+    private CopilotCliConfig _config => _configMonitor?.CurrentValue.CopilotCli ?? _initialConfig;
+
     public CopilotCliProcessManager(
         IOptions<AgentSquadConfig> config,
         ILogger<CopilotCliProcessManager> logger)
-        : this(config, Options.Create(new StrategyFrameworkConfig()), NewDefaultGate(), logger)
+        : this(config, Options.Create(new StrategyFrameworkConfig()), NewDefaultGate(), logger, null)
     {
     }
 
@@ -50,7 +54,7 @@ public sealed class CopilotCliProcessManager : IHostedService, IDisposable
         IOptions<AgentSquadConfig> config,
         IOptions<StrategyFrameworkConfig> frameworkConfig,
         ILogger<CopilotCliProcessManager> logger)
-        : this(config, frameworkConfig, NewDefaultGate(frameworkConfig.Value), logger)
+        : this(config, frameworkConfig, NewDefaultGate(frameworkConfig.Value), logger, null)
     {
     }
 
@@ -58,9 +62,11 @@ public sealed class CopilotCliProcessManager : IHostedService, IDisposable
         IOptions<AgentSquadConfig> config,
         IOptions<StrategyFrameworkConfig> frameworkConfig,
         StrategyConcurrencyGate globalGate,
-        ILogger<CopilotCliProcessManager> logger)
+        ILogger<CopilotCliProcessManager> logger,
+        IOptionsMonitor<AgentSquadConfig>? configMonitor = null)
     {
-        _config = config.Value.CopilotCli;
+        _initialConfig = config.Value.CopilotCli;
+        _configMonitor = configMonitor;
         _frameworkConfig = frameworkConfig.Value;
         _logger = logger;
         _globalGate = globalGate;
@@ -71,7 +77,7 @@ public sealed class CopilotCliProcessManager : IHostedService, IDisposable
         var concurrency = _frameworkConfig.Concurrency;
         var singleShotSize = concurrency.SingleShotSlots > 0
             ? concurrency.SingleShotSlots
-            : _config.MaxConcurrentRequests;
+            : _initialConfig.MaxConcurrentRequests;
         _singleShotPool = new SemaphoreSlim(singleShotSize, singleShotSize);
         _candidatePool = new SemaphoreSlim(
             Math.Max(1, concurrency.CandidateSlots),
@@ -80,7 +86,7 @@ public sealed class CopilotCliProcessManager : IHostedService, IDisposable
             Math.Max(1, concurrency.AgenticSlots),
             Math.Max(1, concurrency.AgenticSlots));
 
-        _watchdog = new CliInteractiveWatchdog(logger, _config.AutoApprovePrompts);
+        _watchdog = new CliInteractiveWatchdog(logger, _initialConfig.AutoApprovePrompts);
     }
 
     private static StrategyConcurrencyGate NewDefaultGate(StrategyFrameworkConfig? cfg = null)
@@ -976,4 +982,61 @@ public class CopilotCliException : Exception
 {
     public CopilotCliException(string message) : base(message) { }
     public CopilotCliException(string message, Exception inner) : base(message, inner) { }
+
+    /// <summary>If set, indicates the error is MCP-related with a specific category.</summary>
+    public McpErrorCategory? McpError { get; init; }
+
+    /// <summary>User-friendly fix suggestion for MCP errors.</summary>
+    public string? McpFixSuggestion { get; init; }
+
+    /// <summary>
+    /// Creates a CopilotCliException with MCP error details parsed from the error message.
+    /// </summary>
+    public static CopilotCliException FromCliError(string rawError)
+    {
+        var (category, suggestion) = ClassifyMcpError(rawError);
+        return new CopilotCliException(
+            category.HasValue ? $"MCP Error ({category}): {rawError}" : $"Copilot CLI request failed: {rawError}")
+        {
+            McpError = category,
+            McpFixSuggestion = suggestion
+        };
+    }
+
+    private static (McpErrorCategory?, string?) ClassifyMcpError(string error)
+    {
+        if (string.IsNullOrEmpty(error)) return (null, null);
+
+        var lower = error.ToLowerInvariant();
+        if (lower.Contains("eula") || lower.Contains("license agreement") || lower.Contains("accept"))
+            return (McpErrorCategory.EulaNotAccepted,
+                "Accept the WorkIQ EULA: run 'copilot' interactively and accept when prompted, or visit https://github.com/microsoft/work-iq");
+
+        if (lower.Contains("npx") && (lower.Contains("not found") || lower.Contains("not recognized") || lower.Contains("enoent")))
+            return (McpErrorCategory.NpxNotFound,
+                "Install Node.js (v18+) and ensure 'npx' is on your PATH");
+
+        if (lower.Contains("auth") || lower.Contains("unauthorized") || lower.Contains("401") || lower.Contains("credential"))
+            return (McpErrorCategory.AuthFailure,
+                "MCP server authentication failed. Ensure you are signed in (run 'copilot auth login' or check Microsoft 365 auth)");
+
+        if (lower.Contains("mcp") && (lower.Contains("connect") || lower.Contains("spawn") || lower.Contains("timeout") || lower.Contains("crash")))
+            return (McpErrorCategory.ServerStartupFailure,
+                "MCP server failed to start. Check that the server package is accessible and Node.js is working");
+
+        return (null, null);
+    }
+}
+
+/// <summary>Categories of MCP-related errors for structured error surfacing.</summary>
+public enum McpErrorCategory
+{
+    /// <summary>WorkIQ EULA has not been accepted.</summary>
+    EulaNotAccepted,
+    /// <summary>npx command not found on PATH.</summary>
+    NpxNotFound,
+    /// <summary>Authentication/authorization failure with MCP server.</summary>
+    AuthFailure,
+    /// <summary>MCP server process failed to start or crashed.</summary>
+    ServerStartupFailure
 }

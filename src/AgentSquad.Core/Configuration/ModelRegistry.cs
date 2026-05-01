@@ -4,6 +4,7 @@ using AgentSquad.Core.AI;
 using Microsoft.SemanticKernel;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 /// <summary>
 /// Maps model tier names (premium, standard, budget, local) to configured Kernel instances.
@@ -11,11 +12,11 @@ using Microsoft.Extensions.Logging;
 /// </summary>
 public class ModelRegistry
 {
-    private readonly Dictionary<string, ModelConfig> _modelConfigs;
     private readonly Dictionary<string, Kernel> _kernelCache = new();
     private readonly Dictionary<string, string> _agentModelOverrides = new();
     private readonly ILoggerFactory _loggerFactory;
-    private readonly CopilotCliConfig _cliConfig;
+    private readonly CopilotCliConfig _initialCliConfig;
+    private readonly IOptionsMonitor<AgentSquadConfig>? _configMonitor;
     private readonly CopilotCliProcessManager? _processManager;
     private readonly AgentUsageTracker _usageTracker;
     private readonly ActiveLlmCallTracker _llmCallTracker;
@@ -25,6 +26,15 @@ public class ModelRegistry
     // strategy candidates (e.g. baseline + mcp-enhanced running in Task.WhenAll), so
     // a plain Dictionary read/write is unsafe without synchronization.
     private readonly object _kernelCacheLock = new();
+
+    /// <summary>Gets the current model configs — hot-reloaded when IOptionsMonitor is available.</summary>
+    private Dictionary<string, ModelConfig> _modelConfigs =>
+        _configMonitor?.CurrentValue.Models ?? _initialModelConfigs;
+    private readonly Dictionary<string, ModelConfig> _initialModelConfigs;
+
+    /// <summary>Gets the current CLI config — hot-reloaded when IOptionsMonitor is available.</summary>
+    private CopilotCliConfig _cliConfig =>
+        _configMonitor?.CurrentValue.CopilotCli ?? _initialCliConfig;
 
     /// <summary>Well-known models available via Copilot CLI.</summary>
     public static readonly IReadOnlyList<string> AvailableCopilotModels =
@@ -49,14 +59,16 @@ public class ModelRegistry
         ILoggerFactory loggerFactory,
         AgentUsageTracker usageTracker,
         ActiveLlmCallTracker llmCallTracker,
-        CopilotCliProcessManager? processManager = null)
+        CopilotCliProcessManager? processManager = null,
+        IOptionsMonitor<AgentSquadConfig>? configMonitor = null)
     {
-        _modelConfigs = config.Models;
+        _initialModelConfigs = config.Models;
         _loggerFactory = loggerFactory;
         _usageTracker = usageTracker;
         _llmCallTracker = llmCallTracker;
-        _cliConfig = config.CopilotCli;
+        _initialCliConfig = config.CopilotCli;
         _processManager = processManager;
+        _configMonitor = configMonitor;
     }
 
     /// <summary>Fired when a tier falls back from Copilot CLI to API-key provider.</summary>

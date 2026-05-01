@@ -86,6 +86,17 @@ if ($LASTEXITCODE -eq 0) {
     Write-Host "    Install: https://nodejs.org/" -ForegroundColor Yellow
 }
 
+# npx (required for MCP servers)
+Write-Host -NoNewline "  npx... "
+$npxVersion = npx --version 2>&1
+if ($LASTEXITCODE -eq 0) {
+    Write-Host -ForegroundColor Green "PASS (v$npxVersion)"
+    $passed++
+} else {
+    Write-Host -ForegroundColor Yellow "SKIP (optional — needed for MCP tool servers like WorkIQ)"
+    Write-Host "    Install Node.js (npx is included): https://nodejs.org/" -ForegroundColor Yellow
+}
+
 Write-Host ""
 
 # ── Configuration ──

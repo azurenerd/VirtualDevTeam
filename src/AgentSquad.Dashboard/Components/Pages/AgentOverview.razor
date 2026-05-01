@@ -115,6 +115,14 @@
                     <span>No Active Run</span>
                 }
             </span>
+            @{
+                var repoName = Config.Value.Project.GitHubRepo;
+                var branchName = Config.Value.Project.DefaultBranch;
+            }
+            @if (!string.IsNullOrEmpty(repoName))
+            {
+                <span class="project-control-repo" title="@repoName (@branchName)">📦 @repoName@(!string.IsNullOrEmpty(branchName) ? $" ({branchName})" : "")</span>
+            }
             <span class="project-control-status status-@_runState.ToLowerInvariant()">@_runState</span>
             @if (!string.IsNullOrEmpty(_runMode))
             {
@@ -281,12 +289,13 @@ else
                     }
                     @if (!string.IsNullOrEmpty(stepName))
                     {
-                        var stepText = stepInfo.total > 0 ? $"Step {stepInfo.completed}/{stepInfo.total}: {TruncateTask(stepName)}" : TruncateTask(stepName);
+                        var isSinglePass = Config.Value.CopilotCli.SinglePassMode && stepInfo.total <= 1;
+                        var stepText = (stepInfo.total > 0 && !isSinglePass) ? $"Step {stepInfo.completed}/{stepInfo.total}: {TruncateTask(stepName)}" : TruncateTask(stepName);
                         <div class="agent-detail">
                             <span class="detail-label">⚡ Step</span>
                             <span class="detail-value step-active" title="@stepDescription">@stepText</span>
                         </div>
-                        @if (stepInfo.total > 0)
+                        @if (stepInfo.total > 0 && !isSinglePass)
                         {
                             var stepPct = (int)(100.0 * stepInfo.completed / stepInfo.total);
                             <div class="step-compact-bar">

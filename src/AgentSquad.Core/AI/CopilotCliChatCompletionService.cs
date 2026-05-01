@@ -102,8 +102,7 @@ public sealed class CopilotCliChatCompletionService : IChatCompletionService
         {
             _logger.LogWarning("Copilot CLI request failed after {Attempts} attempt(s): {Error}",
                 maxRetries + 1, result.Error);
-            throw new CopilotCliException(
-                $"Copilot CLI request failed: {result.Error}");
+            throw CopilotCliException.FromCliError(result.Error ?? "Unknown error");
         }
 
         // Parse the output based on output mode

@@ -24,7 +24,15 @@ public static class SemanticKernelExtensions
         services.TryAddSingleton<StrategyConcurrencyGate>();
 
         // Register the Copilot CLI process manager (checks availability at startup)
-        services.AddSingleton<CopilotCliProcessManager>();
+        services.AddSingleton<CopilotCliProcessManager>(sp =>
+        {
+            var config = sp.GetRequiredService<IOptions<AgentSquadConfig>>();
+            var frameworkConfig = sp.GetRequiredService<IOptions<StrategyFrameworkConfig>>();
+            var gate = sp.GetRequiredService<StrategyConcurrencyGate>();
+            var logger = sp.GetRequiredService<ILogger<CopilotCliProcessManager>>();
+            var monitor = sp.GetRequiredService<IOptionsMonitor<AgentSquadConfig>>();
+            return new CopilotCliProcessManager(config, frameworkConfig, gate, logger, monitor);
+        });
         services.AddHostedService(sp => sp.GetRequiredService<CopilotCliProcessManager>());
 
         // Register ModelRegistry with optional CopilotCliProcessManager
@@ -35,7 +43,8 @@ public static class SemanticKernelExtensions
             var usageTracker = sp.GetRequiredService<AgentUsageTracker>();
             var llmCallTracker = sp.GetRequiredService<ActiveLlmCallTracker>();
             var processManager = sp.GetRequiredService<CopilotCliProcessManager>();
-            return new ModelRegistry(config, loggerFactory, usageTracker, llmCallTracker, processManager);
+            var monitor = sp.GetRequiredService<IOptionsMonitor<AgentSquadConfig>>();
+            return new ModelRegistry(config, loggerFactory, usageTracker, llmCallTracker, processManager, monitor);
         });
 
         return services;
