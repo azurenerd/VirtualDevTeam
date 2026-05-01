@@ -8,9 +8,9 @@ namespace AgentSquad.StrategyFramework.Tests;
 
 /// <summary>
 /// End-to-end orchestrator test against a real (throwaway) git repo. Creates a temp
-/// repo, seeds a commit, runs the orchestrator with a dummy strategy alongside
-/// BaselineStrategy, and verifies: both worktrees created, patches extracted,
-/// evaluator picks a winner, experiment record is written, worktrees cleaned up.
+/// repo, seeds a commit, runs the orchestrator with two dummy strategies, and
+/// verifies: both worktrees created, patches extracted, evaluator picks a winner,
+/// experiment record is written, worktrees cleaned up.
 /// </summary>
 public class OrchestratorIntegrationTests : IDisposable
 {
@@ -39,10 +39,12 @@ public class OrchestratorIntegrationTests : IDisposable
     public async Task Orchestrator_runs_baseline_plus_dummy_and_writes_record()
     {
         var baseSha = Git(_repo, "rev-parse", "HEAD").Trim();
+        // Baseline is excluded from orchestration (removed from UI — never compete),
+        // so use two dummy strategies to verify multi-candidate evaluation.
         var cfg = new StrategyFrameworkConfig
         {
             Enabled = true,
-            EnabledStrategies = new() { "baseline", "dummy-good" },
+            EnabledStrategies = new() { "dummy-alpha", "dummy-good" },
             ExperimentDataDirectory = _expDir,
         };
         var monitor = new StaticMonitor(cfg);
@@ -54,7 +56,7 @@ public class OrchestratorIntegrationTests : IDisposable
 
         var strategies = new ICodeGenerationStrategy[]
         {
-            new BaselineStrategy(NullLogger<BaselineStrategy>.Instance),
+            new DummyStrategy("dummy-alpha"),
             new DummyStrategy("dummy-good"),
         };
 
