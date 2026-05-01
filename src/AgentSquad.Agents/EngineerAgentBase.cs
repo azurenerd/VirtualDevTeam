@@ -728,7 +728,7 @@ public abstract class EngineerAgentBase : AgentBase
                 $"## Implementation Steps\n{ExtractSection(planContent, "task", "plan", "step")}";
 
             var branchName = await PrWorkflow.CreateTaskBranchAsync(
-                Identity.Id,
+                Identity.DisplayName,
                 $"issue-{issue.Number}-{Slugify(issue.Title)}",
                 ct);
 

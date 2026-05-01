@@ -545,6 +545,17 @@ public partial class PullRequestWorkflow
 
         var agentSlug = Slugify(agentName);
         var normalizedTaskSlug = Slugify(taskSlug);
+
+        // Cap segment lengths to avoid Windows path length issues (260 char limit).
+        // refs/remotes/origin/ = 20 chars prefix, agent/ = 6, slashes = 3, runScope = 8
+        // Budget: ~220 chars for the branch name leaves room for .git path overhead
+        const int maxAgentSlug = 30;
+        const int maxTaskSlug = 60;
+        if (agentSlug.Length > maxAgentSlug)
+            agentSlug = agentSlug[..maxAgentSlug].TrimEnd('-');
+        if (normalizedTaskSlug.Length > maxTaskSlug)
+            normalizedTaskSlug = normalizedTaskSlug[..maxTaskSlug].TrimEnd('-');
+
         var runScope = _branchProvider?.RunScope;
         var branchName = runScope is not null
             ? $"agent/{runScope}/{agentSlug}/{normalizedTaskSlug}"

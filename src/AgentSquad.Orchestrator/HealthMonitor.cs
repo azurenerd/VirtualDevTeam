@@ -223,11 +223,29 @@ public class HealthMonitor : IHostedService, IDisposable
         }
 
         // --- Engineering Planning signals ---
-        // Infer plan ready if: PE is actively orchestrating tasks, OR any engineers are spawned
+        // Infer plan ready if: SE leader has created the plan (specific plan-complete phrases),
+        // OR the SE leader is actively implementing tasks (proves plan exists),
+        // OR any SME engineers have been spawned (proves plan exists and is being executed).
         if (!_workflow.HasSignal(WorkflowStateMachine.Signals.EngineeringPlanReady))
         {
+            // Check SE leader (Rank 0) for specific plan-complete or active-work indicators
+            bool HasLeaderReasonContaining(params string[] keywords) =>
+                agents.Where(a => a.Identity.Role == AgentRole.SoftwareEngineer && a.Identity.Rank == 0)
+                      .Any(a => keywords.Any(k =>
+                          (a.StatusReason ?? "").Contains(k, StringComparison.OrdinalIgnoreCase)));
+
             bool planReady =
-                HasReasonContaining(AgentRole.SoftwareEngineer, "orchestrating", "tasks complete", "assigned task", "task done", "plan complete", "development loop", "working on task");
+                HasLeaderReasonContaining(
+                    "engineering plan created", "plan complete", "tasks assigned",
+                    "loaded", "tasks remaining", "orchestrating",
+                    "implementing", "assigned task", "task done",
+                    "tasks complete", "development loop", "working on task");
+
+            // Durable condition: if any SME workers exist, the plan was definitely created
+            if (!planReady)
+            {
+                planReady = agents.Any(a => a.Identity.Role == AgentRole.SoftwareEngineer && a.Identity.Rank > 0);
+            }
 
             if (planReady)
             {
