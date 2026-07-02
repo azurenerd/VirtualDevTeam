@@ -2,10 +2,10 @@
 # install.ps1 — VirtualDevTeam installer
 #
 # Usage:
-#   irm https://raw.githubusercontent.com/azure-core/VirtualDevTeam/main/scripts/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/azurenerd/VirtualDevTeam/main/scripts/install.ps1 | iex
 #
 # Or download and inspect first:
-#   Invoke-WebRequest https://raw.githubusercontent.com/azure-core/VirtualDevTeam/main/scripts/install.ps1 -OutFile install.ps1
+#   Invoke-WebRequest https://raw.githubusercontent.com/azurenerd/VirtualDevTeam/main/scripts/install.ps1 -OutFile install.ps1
 #   Get-Content install.ps1
 #   .\install.ps1
 #
@@ -31,7 +31,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'  # Speed up Invoke-WebRequest
 
-$RepoOwner = "azure-core"
+$RepoOwner = "azurenerd"
 $RepoName = "VirtualDevTeam"
 $ExeName = if ($IsWindows -or [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)) { "vdt.exe" } else { "vdt" }
 

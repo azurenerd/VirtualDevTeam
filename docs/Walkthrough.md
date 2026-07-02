@@ -1,4 +1,4 @@
-﻿<div align="center">
+<div align="center">
 
 # 🎬 VirtualDevTeam — Interactive Walkthrough
 
@@ -277,7 +277,7 @@ Real-time watchdog with detector plugins that identify stuck states, deadlocks, 
 ## 🚀 Try It Yourself
 ```bash
 # Quick install
-irm https://raw.githubusercontent.com/azure-core/VirtualDevTeam/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/azurenerd/VirtualDevTeam/main/scripts/install.ps1 | iex
 
 # Or run from source
 cd src/VirtualDevTeam.Runner && dotnet run

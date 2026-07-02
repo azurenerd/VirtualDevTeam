@@ -234,7 +234,7 @@ dotnet user-secrets set "VirtualDevTeam:Models:budget:ApiKey"       "<OpenAI API
 
 ### 1 — Clone and build
 ```bash
-git clone https://github.com/azure-core/VirtualDevTeam.git
+git clone https://github.com/azurenerd/VirtualDevTeam.git
 cd VirtualDevTeam
 dotnet build VirtualDevTeam.sln
 ```

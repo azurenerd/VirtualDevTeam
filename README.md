@@ -31,7 +31,7 @@ The easiest path **and** always the latest code — let GitHub Copilot set every
 
 1. Create a folder, e.g. `C:\Git\VirtualDevTeam\`.
 2. Open that folder in **GitHub Copilot** (CLI or VS Code) and say:
-   > *"Clone this repo https://github.com/azure-core/VirtualDevTeam and run the solution."*
+   > *"Clone this repo https://github.com/azurenerd/VirtualDevTeam and run the solution."*
 3. When it's running, open your browser to **http://localhost:5050** (default port).
 4. Click the **Develop** tab and start building.
 
@@ -46,10 +46,10 @@ Prefer a prebuilt binary? Install the `vdt` CLI:
 
 ```powershell
 # One-liner: downloads and installs the latest released vdt.exe
-irm https://raw.githubusercontent.com/azure-core/VirtualDevTeam/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/azurenerd/VirtualDevTeam/main/scripts/install.ps1 | iex
 ```
 
-Or download the latest `vdt-win-x64.zip` from [GitHub Releases](https://github.com/azure-core/VirtualDevTeam/releases), extract (e.g., to `%LOCALAPPDATA%\VDT`), and add it to PATH.
+Or download the latest `vdt-win-x64.zip` from [GitHub Releases](https://github.com/azurenerd/VirtualDevTeam/releases), extract (e.g., to `%LOCALAPPDATA%\VDT`), and add it to PATH.
 
 > ⚠️ **Heads-up:** the CLI install comes from **GitHub Releases**, so it can **lag behind the latest fixes on `main`**, and because you're running a packaged binary (not the source) it's **harder to debug, customize, or contribute improvements**. For the most up-to-date and hackable experience, use the Copilot clone-and-run path above.
 

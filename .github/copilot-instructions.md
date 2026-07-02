@@ -521,7 +521,7 @@ Dashboard action buttons now use explicit tooltips: strategy **Reset** explains 
 - The operator signs off on all merges to `main`. No exceptions.
 
 ### Repository moves & remote hygiene
-- The repo migrated from `behumphr_microsoft/VirtualDevTeam` to `azure-core/VirtualDevTeam` on 2026-05-08. `origin` points to azure-core; `behumphr-old` is a backup remote.
+- This repository is hosted at `azurenerd/VirtualDevTeam`. `origin` points to `https://github.com/azurenerd/VirtualDevTeam.git`.
 - When in doubt about a remote operation, run `git remote -v` first and confirm the URL.
 
 ## Dev Platform Parity Rule (GitHub ↔ Azure DevOps)
