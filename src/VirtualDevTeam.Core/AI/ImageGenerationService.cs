@@ -147,7 +147,7 @@ public sealed class ImageGenerationService : IImageGenerationService
         // PER-DEPLOYMENT probe instead of LIST. The data-plane LIST endpoint
         // (/openai/deployments?api-version=...) returns empty for Foundry-managed resources
         // even when deployments exist + work for actual generation calls. Observed 2026-05-12:
-        // user's behumphr-imgen-65518 resource had gpt-image-2/1.5/1/1-mini all Succeeded in
+        // a Foundry-managed resource had gpt-image-2/1.5/1/1-mini all Succeeded in
         // the Azure portal but our LIST returned [] → dashboard incorrectly reported "no
         // deployments found". The PER-DEPLOYMENT GET (/openai/deployments/{id}?api-version=...)
         // works for both classic + Foundry resources because it talks to the same data plane
@@ -185,7 +185,7 @@ public sealed class ImageGenerationService : IImageGenerationService
     ///   <item>5xx / network error → infrastructure issue → not Passed, raw status in Detail</item>
     /// </list>
     /// Why POST instead of GET: observed 2026-05-12 on a Foundry-managed resource
-    /// (behumphr-imgen-65518) — the Azure data-plane GET endpoints
+    /// — the Azure data-plane GET endpoints
     /// (<c>/openai/deployments</c> for LIST and <c>/openai/deployments/{id}</c> for individual)
     /// both return HTTP 404 "Resource not found" even when the deployments DO exist + work
     /// for actual generation calls. The POST to the generation endpoint is the SAME path

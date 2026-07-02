@@ -48,7 +48,7 @@ VDT registers MCP servers under the `VirtualDevTeam:McpServers` section. Drop in
   "ProvidedCapabilities": ["image-generation"],
   "AllowedTools": ["generate_image"],
   "Env": {
-    "AZURE_IMAGE_ENDPOINT": "https://behumphr-imgen-65518.openai.azure.com/",
+    "AZURE_IMAGE_ENDPOINT": "https://<your-resource>.openai.azure.com/",
     "AZURE_IMAGE_DEPLOYMENTS_JSON": "[\"gpt-image-2\",\"gpt-image-1\",\"gpt-image-1-mini\"]",
     "AZURE_IMAGE_API_VERSION": "2025-04-01-preview",
     "AZURE_IMAGE_AUTH_METHOD": "ApiKey",
