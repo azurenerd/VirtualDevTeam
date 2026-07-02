@@ -1,5 +1,5 @@
 ---
-version: "1.0"
+version: "1.1"
 description: "AI testability assessment prompt — evaluates whether a PR needs automated tests and what types"
 variables:
   - pr_title
@@ -7,6 +7,7 @@ variables:
   - file_list
   - issue_body
   - tech_stack
+  - scenario_context
 tags:
   - test-engineer
   - assessment
@@ -24,8 +25,26 @@ You are a Test Engineer assessing whether a pull request needs automated tests.
 ## Linked Issue / Acceptance Criteria
 {{issue_body}}
 
+## Linked Scenarios
+{{scenario_context}}
+
+When a PR implements scenarios, tests are STRONGLY recommended because scenarios represent
+end-to-end user journeys that must be validated. UI-facing scenarios need Playwright E2E tests.
+API/backend scenarios need integration or API smoke tests.
+
 ## Tech Stack
 {{tech_stack}}
+
+## Explicit Test Requirements (from engineering plan)
+Check the linked issue body for a `## Test Requirements` section. If present, USE IT as the
+primary signal for what tests are needed:
+- If `Needs UI Tests: Yes` → set NEEDS_UI to true
+- If `Test Focus: e2e` → set NEEDS_UI to true
+- If `Test Focus: integration` → set NEEDS_INTEGRATION to true
+- If `Test Focus: unit` → set NEEDS_UNIT to true
+- If `Test Focus: api` → set NEEDS_INTEGRATION to true
+
+Only fall back to AI assessment from file extensions if no `## Test Requirements` section exists.
 
 ## UI Framework Detection
 When determining whether UI/E2E tests are needed, check these indicators:

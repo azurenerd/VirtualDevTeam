@@ -1,0 +1,224 @@
+using System.Globalization;
+using VirtualDevTeam.Core.DevPlatform.Models;
+
+namespace VirtualDevTeam.Core.DevPlatform.Providers.AzureDevOps;
+
+/// <summary>
+/// Maps Azure DevOps REST API DTOs to platform-agnostic models.
+/// </summary>
+internal static class AdoModelMapper
+{
+    public static PlatformPullRequest ToPlatform(AdoPullRequest pr, string organization, string project, string? repository = null)
+    {
+        var state = pr.Status switch
+        {
+            "completed" => "closed",
+            "abandoned" => "closed",
+            _ => "open"
+        };
+
+        var isMerged = pr.Status == "completed";
+        var headBranch = StripRefsPrefix(pr.SourceBranch);
+        var baseBranch = StripRefsPrefix(pr.TargetBranch);
+
+        var org = organization.TrimEnd('/');
+        var repoName = !string.IsNullOrEmpty(repository) ? repository : project;
+        var webUrl = $"https://dev.azure.com/{org}/{project}/_git/{Uri.EscapeDataString(repoName)}/pullrequest/{pr.PullRequestId}";
+
+        return new PlatformPullRequest
+        {
+            Number = pr.PullRequestId,
+            Title = pr.Title,
+            Body = pr.Description ?? "",
+            State = state,
+            HeadBranch = headBranch,
+            HeadSha = pr.LastMergeSourceCommit?.CommitId ?? "",
+            BaseBranch = baseBranch,
+            AssignedAgent = pr.CreatedBy?.DisplayName,
+            Url = webUrl,
+            CreatedAt = pr.CreationDate,
+            UpdatedAt = pr.ClosedDate,
+            MergedAt = isMerged ? pr.ClosedDate : null,
+            Labels = pr.Labels?.Where(l => l.Active).Select(l => l.Name).ToList() ?? new(),
+            MergeableState = pr.MergeStatus
+        };
+    }
+
+    public static PlatformWorkItem ToPlatform(AdoWorkItem wi, string organization, string project)
+    {
+        var fields = wi.Fields;
+
+        var title = GetFieldString(fields, "System.Title");
+        var description = GetFieldString(fields, "System.Description") ?? "";
+        var acceptanceCriteria = GetFieldString(fields, "Microsoft.VSTS.Common.AcceptanceCriteria") ?? "";
+        var state = GetFieldString(fields, "System.State") ?? "New";
+        var assignedTo = GetFieldString(fields, "System.AssignedTo");
+        var createdDate = GetFieldDateTime(fields, "System.CreatedDate") ?? DateTime.UtcNow;
+        var changedDate = GetFieldDateTime(fields, "System.ChangedDate");
+        var closedDate = GetFieldDateTime(fields, "Microsoft.VSTS.Common.ClosedDate");
+        var commentCount = GetFieldInt(fields, "System.CommentCount");
+        var workItemType = GetFieldString(fields, "System.WorkItemType") ?? "Task";
+        var tags = GetFieldString(fields, "System.Tags") ?? "";
+
+        // ADO "State" mapping to open/closed
+        var normalizedState = state.ToLowerInvariant() switch
+        {
+            "new" or "active" or "design" => "open",
+            "resolved" or "closed" or "removed" or "done" => "closed",
+            _ => "open"
+        };
+
+        var webUrl = $"https://dev.azure.com/{organization.TrimEnd('/')}/{project}/_workitems/edit/{wi.Id}";
+        var labels = string.IsNullOrEmpty(tags)
+            ? new List<string>()
+            : tags.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+
+        // Extract display name from ADO identity field (format: "Display Name <unique@name>")
+        string? agentName = null;
+        if (!string.IsNullOrEmpty(assignedTo))
+        {
+            var bracketIdx = assignedTo.IndexOf('<');
+            agentName = bracketIdx > 0 ? assignedTo[..bracketIdx].Trim() : assignedTo;
+        }
+
+        return new PlatformWorkItem
+        {
+            PlatformId = wi.Id,
+            Number = wi.Id, // ADO uses ID as the display number
+            Title = title ?? "",
+            Body = BuildAdoBody(description, acceptanceCriteria),
+            State = normalizedState,
+            AssignedAgent = agentName,
+            Url = webUrl,
+            CreatedAt = createdDate,
+            UpdatedAt = changedDate,
+            ClosedAt = closedDate,
+            CommentCount = commentCount,
+            Labels = labels,
+            WorkItemType = workItemType
+        };
+    }
+
+    public static PlatformComment ToPlatform(AdoPrComment comment)
+    {
+        return new PlatformComment
+        {
+            Id = comment.Id,
+            Author = comment.Author?.DisplayName ?? "",
+            Body = comment.Content,
+            CreatedAt = comment.PublishedDate
+        };
+    }
+
+    public static PlatformReviewThread ToPlatform(AdoPrThread thread)
+    {
+        var firstComment = thread.Comments.FirstOrDefault(c => c.CommentType != "system");
+        return new PlatformReviewThread
+        {
+            Id = thread.Id,
+            ThreadId = thread.Id.ToString(),
+            FilePath = thread.ThreadContext?.FilePath ?? "",
+            Line = thread.ThreadContext?.RightFileStart?.Line,
+            Body = firstComment?.Content ?? "",
+            Author = firstComment?.Author?.DisplayName ?? "",
+            IsResolved = thread.Status is "fixed" or "closed" or "byDesign" or "wontFix",
+            CreatedAt = thread.PublishedDate
+        };
+    }
+
+    private static string? GetFieldString(Dictionary<string, object?> fields, string key)
+    {
+        if (fields.TryGetValue(key, out var val) && val is not null)
+        {
+            // ADO identity fields come as objects with displayName
+            if (val is System.Text.Json.JsonElement je)
+            {
+                if (je.ValueKind == System.Text.Json.JsonValueKind.String)
+                    return je.GetString();
+                if (je.ValueKind == System.Text.Json.JsonValueKind.Object && je.TryGetProperty("displayName", out var dn))
+                    return dn.GetString();
+            }
+            return val.ToString();
+        }
+        return null;
+    }
+
+    private static DateTime? GetFieldDateTime(Dictionary<string, object?> fields, string key)
+    {
+        if (fields.TryGetValue(key, out var val) && val is not null)
+        {
+            if (val is System.Text.Json.JsonElement je && je.ValueKind == System.Text.Json.JsonValueKind.String)
+            {
+                // RoundtripKind preserves the UTC 'Z' suffix from ADO dates.
+                // Without it, DateTime.TryParse converts UTC dates to local time,
+                // breaking post-fetch comparisons against UTC timestamps.
+                if (DateTime.TryParse(je.GetString(), CultureInfo.InvariantCulture,
+                        DateTimeStyles.RoundtripKind, out var dt))
+                    return dt.ToUniversalTime();
+            }
+            if (val is DateTime dt2) return dt2.ToUniversalTime();
+        }
+        return null;
+    }
+
+    private static int GetFieldInt(Dictionary<string, object?> fields, string key)
+    {
+        if (fields.TryGetValue(key, out var val) && val is not null)
+        {
+            if (val is System.Text.Json.JsonElement je && je.ValueKind == System.Text.Json.JsonValueKind.Number)
+                return je.GetInt32();
+            if (val is int i) return i;
+        }
+        return 0;
+    }
+
+    private static string StripRefsPrefix(string refName)
+    {
+        if (refName.StartsWith("refs/heads/", StringComparison.OrdinalIgnoreCase))
+            return refName["refs/heads/".Length..];
+        return refName;
+    }
+
+    /// <summary>
+    /// Aggregates ADO Description + Acceptance Criteria into a single body string.
+    /// Both fields may contain HTML; tags are stripped to produce clean text.
+    /// </summary>
+    private static string BuildAdoBody(string description, string acceptanceCriteria)
+    {
+        var cleanDesc = StripHtmlTags(description).Trim();
+        var cleanAc = StripHtmlTags(acceptanceCriteria).Trim();
+
+        if (string.IsNullOrEmpty(cleanAc))
+            return cleanDesc;
+
+        if (string.IsNullOrEmpty(cleanDesc))
+            return $"## Acceptance Criteria\n{cleanAc}";
+
+        return $"{cleanDesc}\n\n## Acceptance Criteria\n{cleanAc}";
+    }
+
+    /// <summary>
+    /// Simple HTML tag stripping for ADO rich-text fields.
+    /// Converts common HTML entities, replaces block tags with newlines, and removes all tags.
+    /// </summary>
+    internal static string StripHtmlTags(string html)
+    {
+        if (string.IsNullOrEmpty(html))
+            return "";
+
+        var text = html;
+        text = System.Text.RegularExpressions.Regex.Replace(text, @"<br\s*/?>", "\n", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        text = System.Text.RegularExpressions.Regex.Replace(text, @"</(?:p|div|li|tr|h[1-6])>", "\n", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        text = System.Text.RegularExpressions.Regex.Replace(text, @"<li[^>]*>", "- ", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        text = System.Text.RegularExpressions.Regex.Replace(text, @"<[^>]+>", "");
+        text = text
+            .Replace("&amp;", "&")
+            .Replace("&lt;", "<")
+            .Replace("&gt;", ">")
+            .Replace("&quot;", "\"")
+            .Replace("&#39;", "'")
+            .Replace("&nbsp;", " ");
+        text = System.Text.RegularExpressions.Regex.Replace(text, @"\n{3,}", "\n\n");
+        return text.Trim();
+    }
+}

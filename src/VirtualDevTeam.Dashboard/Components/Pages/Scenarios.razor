@@ -1,0 +1,405 @@
+@page "/scenarios"
+@rendermode InteractiveServer
+@using VirtualDevTeam.Core.Scenarios
+@using VirtualDevTeam.Core.Configuration
+@using Microsoft.Extensions.Options
+@implements IDisposable
+@inject IScenarioRegistry ScenarioRegistry
+@inject IOptions<VirtualDevTeamConfig> Config
+
+<PageTitle>Virtual Dev Team — Scenarios</PageTitle>
+
+<div class="dashboard-header" data-testid="page-scenarios">
+    <h1>📋 Scenarios</h1>
+    <div class="header-badges">
+        <span class="header-badge" title="Total scenarios defined for this project">
+            @TotalCount total
+        </span>
+        @if (VerifiedCount > 0)
+        {
+            <span class="header-badge healthy" title="Scenarios verified by T-FINAL">
+                ✓ @VerifiedCount verified
+            </span>
+        }
+        @if (BrokenCount > 0)
+        {
+            <span class="header-badge danger" title="Scenarios that failed T-FINAL playtest">
+                ✗ @BrokenCount broken
+            </span>
+        }
+        @if (InconclusiveCount > 0)
+        {
+            <span class="header-badge warning" title="Inconclusive T-FINAL results (flaky app, missing fixture)">
+                ? @InconclusiveCount inconclusive
+            </span>
+        }
+    </div>
+</div>
+
+@* ── Project context bar ── *@
+@if (!string.IsNullOrWhiteSpace(Config.Value.Project.Name) || !string.IsNullOrWhiteSpace(Config.Value.Project.GitHubRepo))
+{
+    <div class="scenario-context-bar">
+        <span class="scenario-project-name">
+            📁 @(Config.Value.Project.Name ?? Config.Value.Project.GitHubRepo)
+        </span>
+        @if (!string.IsNullOrWhiteSpace(Config.Value.Project.Name) && !string.IsNullOrWhiteSpace(Config.Value.Project.GitHubRepo))
+        {
+            <span class="scenario-project-repo">@Config.Value.Project.GitHubRepo</span>
+        }
+    </div>
+}
+
+@* ── Progress strip ── *@
+<div class="scenario-progress-strip">
+    <div class="scenario-progress-ring">
+        <svg width="56" height="56" viewBox="0 0 56 56">
+            <circle cx="28" cy="28" r="24" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="5"/>
+            <circle cx="28" cy="28" r="24" fill="none" stroke="#3fb950" stroke-width="5"
+                    stroke-linecap="round" transform="rotate(-90 28 28)"
+                    stroke-dasharray="@(2 * Math.PI * 24)"
+                    stroke-dashoffset="@((1 - (double)VerifiedCount / Math.Max(TotalCount, 1)) * 2 * Math.PI * 24)"/>
+        </svg>
+        <span class="scenario-progress-label">@VerifiedCount/@TotalCount</span>
+    </div>
+    <div class="scenario-progress-meta">
+        <div class="scenario-progress-title">@(VerifiedCount == 0 ? "Verification not started" : $"{VerifiedCount} of {TotalCount} verified")</div>
+        <div class="scenario-progress-subtitle">Autonomous verification workflows across UI, API, and pipeline flows</div>
+        <div class="scenario-progress-pills">
+            <span class="metric-pill"><span class="metric-dot green"></span> @VerifiedCount verified</span>
+            <span class="metric-pill"><span class="metric-dot red"></span> @BrokenCount broken</span>
+            <span class="metric-pill"><span class="metric-dot amber"></span> @InconclusiveCount inconclusive</span>
+            <span class="metric-pill"><span class="metric-dot"></span> @NotYetVerifiedCount pending</span>
+            <span class="metric-pill critical"><span class="metric-dot gold"></span> @CriticalCount critical</span>
+        </div>
+    </div>
+</div>
+
+@* ── Filter row ── *@
+<div class="scenario-filters">
+    <div class="scenario-filter-group">
+        <span class="scenario-filter-label">Priority</span>
+        <button class="filter-btn @(_priorityFilter == null ? "active" : "")"
+                @onclick="() => SetPriorityFilter(null)">All</button>
+        <button class="filter-btn @(_priorityFilter == ScenarioPriority.Critical ? "active" : "")"
+                @onclick="() => SetPriorityFilter(ScenarioPriority.Critical)">Critical</button>
+        <button class="filter-btn @(_priorityFilter == ScenarioPriority.Important ? "active" : "")"
+                @onclick="() => SetPriorityFilter(ScenarioPriority.Important)">Important</button>
+        <button class="filter-btn @(_priorityFilter == ScenarioPriority.NiceToHave ? "active" : "")"
+                @onclick="() => SetPriorityFilter(ScenarioPriority.NiceToHave)">Nice to Have</button>
+    </div>
+    <div class="scenario-filter-group">
+        <span class="scenario-filter-label">Status</span>
+        <button class="filter-btn @(_statusFilter == null ? "active" : "")"
+                @onclick="() => SetStatusFilter(null)">All</button>
+        <button class="filter-btn @(_statusFilter == VerificationStatus.Verified ? "active" : "")"
+                @onclick="() => SetStatusFilter(VerificationStatus.Verified)">Verified</button>
+        <button class="filter-btn @(_statusFilter == VerificationStatus.Broken ? "active" : "")"
+                @onclick="() => SetStatusFilter(VerificationStatus.Broken)">Broken</button>
+        <button class="filter-btn @(_statusFilter == VerificationStatus.Inconclusive ? "active" : "")"
+                @onclick="() => SetStatusFilter(VerificationStatus.Inconclusive)">Inconclusive</button>
+        <button class="filter-btn @(_statusFilter == VerificationStatus.NotYetVerified ? "active" : "")"
+                @onclick="() => SetStatusFilter(VerificationStatus.NotYetVerified)">Not Yet Verified</button>
+    </div>
+</div>
+
+@* ── Body ── *@
+@if (_loading)
+{
+    <div class="empty-state">
+        <div class="empty-icon">⏳</div>
+        <div class="empty-text">Loading scenarios&hellip;</div>
+    </div>
+}
+else if (_scenarios.Count == 0)
+{
+    <div class="empty-state" data-testid="scenarios-empty">
+        <div class="empty-icon">📋</div>
+        <div class="empty-text">No scenarios in this project yet</div>
+        <div class="empty-sub">
+            Run the <a href="/develop" style="color: var(--accent-cyan);">Develop wizard</a> to define
+            scenarios for your project. Scenarios appear here once the PM specification is complete.
+        </div>
+    </div>
+}
+else if (_filteredScenarios.Count == 0)
+{
+    <div class="empty-state" data-testid="scenarios-no-match">
+        <div class="empty-icon">🔍</div>
+        <div class="empty-text">No scenarios match the current filters</div>
+        <div class="empty-sub">Try changing the priority or status filter above.</div>
+    </div>
+}
+else
+{
+    <div class="scenario-table-wrap" data-testid="scenarios-table-wrap">
+        <table class="scenario-table" data-testid="scenarios-table">
+            <thead>
+                <tr>
+                    <th title="Stable scenario ID — never changed after approval">ID</th>
+                    <th>Title</th>
+                    <th>Kind</th>
+                    <th>Priority</th>
+                    <th>Status</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var scenario in _filteredScenarios)
+                {
+                    var isExpanded = _expandedIds.Contains(scenario.Id);
+                    <tr class="scenario-row @(isExpanded ? "expanded" : "") priority-border-@scenario.Priority.ToString().ToLowerInvariant()"
+                        @onclick="() => ToggleExpand(scenario.Id)"
+                        data-testid="scenario-row-@scenario.Id"
+                        title="Click to @(isExpanded ? "collapse" : "expand") details">
+                        <td class="scenario-id">@scenario.Id</td>
+                        <td class="scenario-title">
+                            @scenario.Title
+                            @if (scenario.Infrastructure)
+                            {
+                                <span class="scenario-infra-badge" title="Infrastructure scenario — exempt from orphan detection">infra</span>
+                            }
+                        </td>
+                        <td class="scenario-kind">@FormatJourneyKind(scenario.JourneyKind)</td>
+                        <td>
+                            <span class="priority-pill priority-pill-@scenario.Priority.ToString().ToLowerInvariant()">@scenario.Priority</span>
+                        </td>
+                        <td>
+                            <span class="verification-badge verification-badge-@GetStatusCssKey(scenario.VerificationStatus)"
+                                  title="@(scenario.VerificationReason ?? FormatVerificationStatus(scenario.VerificationStatus))">
+                                @FormatVerificationStatus(scenario.VerificationStatus)
+                            </span>
+                        </td>
+                        <td class="scenario-chevron">@(isExpanded ? "▲" : "▼")</td>
+                    </tr>
+                    @if (isExpanded)
+                    {
+                        <tr class="scenario-details-row" data-testid="scenario-details-@scenario.Id">
+                            <td colspan="6">
+                                <div class="scenario-details">
+                                    <div class="scenario-detail-grid">
+                                        <div class="scenario-detail-col">
+                                            <div class="scenario-detail-section">
+                                                <span class="scenario-detail-label">Actor</span>
+                                                <span class="scenario-detail-value">@scenario.Actor</span>
+                                            </div>
+                                            <div class="scenario-detail-section">
+                                                <span class="scenario-detail-label">Trigger</span>
+                                                <span class="scenario-detail-value">@scenario.Trigger</span>
+                                            </div>
+                                            @if (scenario.Preconditions.Count > 0)
+                                            {
+                                                <div class="scenario-detail-section">
+                                                    <span class="scenario-detail-label">Preconditions</span>
+                                                    <ul class="scenario-detail-list">
+                                                        @foreach (var pre in scenario.Preconditions)
+                                                        {
+                                                            <li>@pre</li>
+                                                        }
+                                                    </ul>
+                                                </div>
+                                            }
+                                            @if (scenario.Steps.Count > 0)
+                                            {
+                                                <div class="scenario-detail-section">
+                                                    <span class="scenario-detail-label">Steps</span>
+                                                    <ol class="scenario-steps-timeline">
+                                                        @foreach (var step in scenario.Steps)
+                                                        {
+                                                            <li class="step-item">
+                                                                <div class="step-dot"></div>
+                                                                <div class="step-text">@step</div>
+                                                            </li>
+                                                        }
+                                                    </ol>
+                                                </div>
+                                            }
+                                        </div>
+                                        <div class="scenario-detail-col">
+                                            @if (scenario.ExpectedTerminalState.Count > 0)
+                                            {
+                                                <div class="scenario-detail-section">
+                                                    <span class="scenario-detail-label">Expected Terminal State</span>
+                                                    <ul class="scenario-detail-list">
+                                                        @foreach (var state in scenario.ExpectedTerminalState)
+                                                        {
+                                                            <li>@state</li>
+                                                        }
+                                                    </ul>
+                                                </div>
+                                            }
+                                            @if (scenario.ObservationSurfaces.Count > 0)
+                                            {
+                                                <div class="scenario-detail-section">
+                                                    <span class="scenario-detail-label">Observation Surfaces</span>
+                                                    <div class="scenario-chip-row">
+                                                        @foreach (var surface in scenario.ObservationSurfaces)
+                                                        {
+                                                            <span class="scenario-chip">@FormatObservationSurface(surface)</span>
+                                                        }
+                                                    </div>
+                                                </div>
+                                            }
+                                            @if (scenario.SubsystemsInvolved.Count > 0)
+                                            {
+                                                <div class="scenario-detail-section">
+                                                    <span class="scenario-detail-label">Subsystems Involved</span>
+                                                    <div class="scenario-chip-row">
+                                                        @foreach (var sub in scenario.SubsystemsInvolved)
+                                                        {
+                                                            <span class="scenario-chip">@sub</span>
+                                                        }
+                                                    </div>
+                                                </div>
+                                            }
+                                            @if (scenario.ImplementingTasks.Count > 0)
+                                            {
+                                                <div class="scenario-detail-section">
+                                                    <span class="scenario-detail-label">Implementing Tasks</span>
+                                                    <ul class="scenario-detail-list">
+                                                        @foreach (var task in scenario.ImplementingTasks)
+                                                        {
+                                                            <li>@task</li>
+                                                        }
+                                                    </ul>
+                                                </div>
+                                            }
+                                            @if (!string.IsNullOrWhiteSpace(scenario.VerificationReason))
+                                            {
+                                                <div class="scenario-detail-section">
+                                                    <span class="scenario-detail-label">Verification Reason</span>
+                                                    <span class="scenario-detail-value scenario-verification-reason">@scenario.VerificationReason</span>
+                                                </div>
+                                            }
+                                            @if (!string.IsNullOrWhiteSpace(scenario.VerificationEvidenceUrl))
+                                            {
+                                                <div class="scenario-detail-section">
+                                                    <span class="scenario-detail-label">Verification Evidence</span>
+                                                    <a href="@scenario.VerificationEvidenceUrl"
+                                                       target="_blank" rel="noopener"
+                                                       class="scenario-evidence-link"
+                                                       @onclick:stopPropagation="true">
+                                                        Open evidence ↗
+                                                    </a>
+                                                </div>
+                                            }
+                                        </div>
+                                    </div>
+                                </div>
+                            </td>
+                        </tr>
+                    }
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@code {
+    private IReadOnlyList<Scenario> _scenarios = Array.Empty<Scenario>();
+    private ScenarioPriority? _priorityFilter;
+    private VerificationStatus? _statusFilter;
+    private readonly HashSet<string> _expandedIds = new(StringComparer.Ordinal);
+    private bool _loading = true;
+
+    private IReadOnlyList<Scenario> _filteredScenarios =>
+        _scenarios
+            .Where(s => _priorityFilter == null || s.Priority == _priorityFilter)
+            .Where(s => _statusFilter == null || s.VerificationStatus == _statusFilter)
+            .ToList();
+
+    private int TotalCount => _scenarios.Count;
+    private int VerifiedCount => _scenarios.Count(s => s.VerificationStatus == VerificationStatus.Verified);
+    private int BrokenCount => _scenarios.Count(s => s.VerificationStatus == VerificationStatus.Broken);
+    private int InconclusiveCount => _scenarios.Count(s => s.VerificationStatus == VerificationStatus.Inconclusive);
+    private int NotYetVerifiedCount => _scenarios.Count(s => s.VerificationStatus == VerificationStatus.NotYetVerified);
+    private int CriticalCount => _scenarios.Count(s => s.Priority == ScenarioPriority.Critical);
+
+    protected override void OnInitialized()
+    {
+        _scenarios = ScenarioRegistry.Current;
+        ScenarioRegistry.Changed += OnRegistryChanged;
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (_scenarios.Count == 0)
+        {
+            try { _scenarios = await ScenarioRegistry.LoadAsync(); }
+            catch { /* Non-fatal — show empty state */ }
+        }
+        _loading = false;
+    }
+
+    private void OnRegistryChanged(object? sender, ScenarioRegistryChangedEventArgs e)
+    {
+        InvokeAsync(() =>
+        {
+            _scenarios = e.Scenarios;
+            StateHasChanged();
+        });
+    }
+
+    private void SetPriorityFilter(ScenarioPriority? priority) => _priorityFilter = priority;
+
+    private void SetStatusFilter(VerificationStatus? status) => _statusFilter = status;
+
+    private void ToggleExpand(string id)
+    {
+        if (!_expandedIds.Remove(id))
+            _expandedIds.Add(id);
+    }
+
+    private static string GetStatusCssKey(VerificationStatus status) => status switch
+    {
+        VerificationStatus.NotYetVerified => "notyetverified",
+        _ => status.ToString().ToLowerInvariant(),
+    };
+
+    private static string FormatJourneyKind(JourneyKind kind) => kind switch
+    {
+        JourneyKind.UiInteraction => "🖱 UI",
+        JourneyKind.ApiCall => "🔌 API",
+        JourneyKind.ScheduledJob => "⏰ Scheduled",
+        JourneyKind.EventArrival => "📨 Event",
+        JourneyKind.Webhook => "🪝 Webhook",
+        JourneyKind.MessageConsume => "📬 Message",
+        JourneyKind.CliInvocation => "💻 CLI",
+        JourneyKind.SystemInitiated => "⚙ System",
+        JourneyKind.DataPipeline => "🔄 Pipeline",
+        _ => kind.ToString(),
+    };
+
+    private static string FormatVerificationStatus(VerificationStatus status) => status switch
+    {
+        VerificationStatus.Verified => "✓ Verified",
+        VerificationStatus.Broken => "✗ Broken",
+        VerificationStatus.Inconclusive => "? Inconclusive",
+        VerificationStatus.NotYetVerified => "— Not Yet Verified",
+        _ => status.ToString(),
+    };
+
+    private static string FormatObservationSurface(ObservationSurface surface)
+    {
+        var icon = surface.Kind switch
+        {
+            "dom_query" => "\U0001F50D",
+            "dom_text" => "\U0001F4DD",
+            "http_response" => "\U0001F310",
+            "db_row" or "db_count" => "\U0001F5C4",
+            "event_bus" => "\U0001F4E1",
+            "log_line" => "\U0001F4DC",
+            "file_artifact" => "\U0001F4C4",
+            "stdout_pattern" => "\U0001F4AC",
+            _ => "\U0001F441"
+        };
+        if (surface.Fields.Count == 0) return icon + " " + surface.Kind;
+        var primary = surface.Fields.FirstOrDefault();
+        return icon + " " + surface.Kind + ": " + primary.Value;
+    }
+
+    public void Dispose()
+    {
+        ScenarioRegistry.Changed -= OnRegistryChanged;
+    }
+}

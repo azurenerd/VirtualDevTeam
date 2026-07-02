@@ -1,0 +1,1057 @@
+@using VirtualDevTeam.Core.Configuration
+@using VirtualDevTeam.Core.Scenarios
+@using VirtualDevTeam.Core.Frameworks
+@using VirtualDevTeam.Dashboard.Services
+@using Markdig
+@inject ScenarioGenerationService ScenarioSvc
+@inject DevelopSettingsService SettingsService
+@inject ILogger<ScenarioReview> Logger
+
+<div class="scenario-review-root">
+    @if (_generating)
+    {
+        <div class="scenario-generating-state">
+            <div class="config-spinner"></div>
+            <p class="scenario-generating-label">Generating scenarios from your project description…</p>
+            <p class="scenario-generating-sub">Analysing requirements via AI</p>
+        </div>
+        var recentActivity = _activityEvents.TakeLast(50).ToList();
+        if (recentActivity.Count > 0)
+        {
+            <div style="max-height: 300px; overflow-y: auto; background: var(--bg-secondary); border-radius: 8px; padding: 12px; margin-top: 16px; font-family: monospace; font-size: 0.85rem;">
+                @foreach (var evt in recentActivity)
+                {
+                    <div style="margin-bottom: 4px; color: var(--text-secondary);">
+                        <LocalTimeText Value="evt.Timestamp" CssClass="scenario-activity-time" IncludeSeconds="true" style="color: var(--text-muted); margin-right: 8px;" />
+                        <span style="color: @GetActivityColor(evt.Activity);">@FormatActivity(evt.Activity)</span>
+                    </div>
+                }
+            </div>
+        }
+    }
+    else if (_generateError is not null)
+    {
+        <div class="scenario-error-state">
+            <p>⚠ @_generateError</p>
+            <p style="color:var(--text-secondary); font-size:0.85rem;">
+                You can proceed without scenarios — the AI agents will derive scope from your description.
+            </p>
+            <div style="display:flex; gap:0.75rem; margin-top:0.75rem;">
+                <button class="config-btn-secondary" @onclick="TryGenerateAsync">↺ Retry</button>
+                <button class="config-btn-secondary" @onclick="SkipGeneration">Skip Scenarios</button>
+            </div>
+        </div>
+    }
+    else
+    {
+        @* ── Bulk actions ── *@
+        <div class="scenario-bulk-actions">
+            <button class="config-btn-primary scenario-approve-critical-btn" @onclick="ApproveAllCritical"
+                    title="Approve all Critical scenarios at once">
+                ✓ Approve All Critical
+            </button>
+            <button class="config-btn-secondary" @onclick="ApproveAll"
+                    title="Approve every scenario (including non-critical)">
+                ✓ Approve All
+            </button>
+            <button class="config-btn-secondary" @onclick="RegenerateAsync"
+                    disabled="@_generating"
+                    title="Discard all current scenarios and re-generate from scratch using your project description. Use this if you changed requirements or want a fresh set of scenarios.">
+                🔄 Regenerate
+            </button>
+            <span class="scenario-count-summary">
+                @_scenarios.Count(s => s.Status == ScenarioStatus.Approved || s.Status == ScenarioStatus.Edited) approved
+                / @_scenarios.Count total
+            </span>
+        </div>
+
+        @* ── Scenario cards ── *@
+        @if (_scenarios.Count == 0)
+        {
+            <div class="scenario-empty-state">
+                <span style="font-size:2rem;">📋</span>
+                <p>No scenarios yet. Click <strong>Add Scenario</strong> below to define your first one, or regenerate via AI.</p>
+            </div>
+        }
+        else
+        {
+            <div class="scenario-card-list">
+                @foreach (var s in _scenarios)
+                {
+                    var idx = _scenarios.IndexOf(s);
+                    <div class="scenario-card @(s.Status == ScenarioStatus.Rejected ? "scenario-card-rejected" : "") @(_editIdx == idx ? "scenario-card-edit-mode" : "")">
+                        @if (_editIdx == idx)
+                        {
+                            @* ── Edit form ── *@
+                            <div class="scenario-edit-form">
+                                <div class="scenario-edit-row">
+                                    <div class="scenario-edit-field scenario-edit-field-sm">
+                                        <label>ID</label>
+                                        <input type="text" class="config-input" value="@_editDraft!.Id" disabled />
+                                    </div>
+                                    <div class="scenario-edit-field">
+                                        <label>Title <span class="req">*</span></label>
+                                        <input type="text" class="config-input"
+                                               @bind="_editDraft!.Title" @bind:event="oninput" />
+                                    </div>
+                                </div>
+                                <div class="scenario-edit-row">
+                                    <div class="scenario-edit-field">
+                                        <label>Journey Kind</label>
+                                        <select class="config-input" @bind="_editDraft!.JourneyKind">
+                                            @foreach (var kind in Enum.GetValues<JourneyKind>())
+                                            {
+                                                <option value="@kind">@kind</option>
+                                            }
+                                        </select>
+                                    </div>
+                                    <div class="scenario-edit-field">
+                                        <label>Priority</label>
+                                        <select class="config-input" @bind="_editDraft!.Priority">
+                                            @foreach (var p in Enum.GetValues<ScenarioPriority>())
+                                            {
+                                                <option value="@p">@p</option>
+                                            }
+                                        </select>
+                                    </div>
+                                </div>
+                                <div class="scenario-edit-row">
+                                    <div class="scenario-edit-field">
+                                        <label>Actor <span class="req">*</span></label>
+                                        <input type="text" class="config-input"
+                                               @bind="_editDraft!.Actor" @bind:event="oninput" />
+                                    </div>
+                                    <div class="scenario-edit-field">
+                                        <label>Trigger <span class="req">*</span></label>
+                                        <textarea class="config-textarea" rows="2"
+                                                  @bind="_editDraft!.Trigger" @bind:event="oninput"></textarea>
+                                    </div>
+                                </div>
+                                <div class="scenario-edit-field scenario-edit-field-full">
+                                    <label>Steps (one per line)</label>
+                                    <textarea class="config-textarea" rows="4"
+                                              value="@_editDraft!.StepsText" @oninput="e => _editDraft!.StepsText = e.Value?.ToString() ?? string.Empty"></textarea>
+                                </div>
+                                <div class="scenario-edit-field scenario-edit-field-full">
+                                    <label>Expected Terminal State (one per line)</label>
+                                    <textarea class="config-textarea" rows="3"
+                                              value="@_editDraft!.TerminalStateText" @oninput="e => _editDraft!.TerminalStateText = e.Value?.ToString() ?? string.Empty"></textarea>
+                                </div>
+                                <div class="scenario-edit-field scenario-edit-field-full">
+                                    <label>Subsystems Involved <span style="color:var(--text-muted); font-weight:normal;">(optional, comma-separated)</span>
+                                        <span style="cursor:help; margin-left:4px;" title="Logical modules of YOUR project that this scenario exercises (e.g., api-controller, auth-service, dashboard-component). T-FINAL uses these to verify coverage. Leave blank and the AI will infer them.">ⓘ</span>
+                                    </label>
+                                    <input type="text" class="config-input"
+                                           placeholder="@_subsystemPlaceholder"
+                                           @bind="_editDraft!.SubsystemsText" @bind:event="oninput" />
+                                </div>
+                                <div class="scenario-edit-field scenario-edit-field-full" style="margin-top:0.5rem;">
+                                    <label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer;">
+                                        <input type="checkbox" @bind="_editDraft!.InteractiveValidationSafe"
+                                               style="accent-color:var(--accent-green, #47b584);" />
+                                        <span>Interactive Testing Safe</span>
+                                        <span style="cursor:help;" title="When enabled, the automated verifier can fully interact with the running app. Disable for scenarios with destructive/irreversible actions.">ⓘ</span>
+                                    </label>
+                                </div>
+                                <div class="scenario-edit-actions">
+                                    <button class="config-btn-primary" @onclick="() => SaveEdit(idx)">Save Edits</button>
+                                    <button class="config-btn-secondary" @onclick="CancelEdit">Cancel</button>
+                                </div>
+                            </div>
+                        }
+                        else
+                        {
+                            @* ── Display mode ── *@
+                            <div class="scenario-card-header">
+                                <span class="scenario-id">@s.Id</span>
+                                <span class="scenario-title">@s.Title</span>
+                                <span class="journey-kind-badge">@s.JourneyKind</span>
+                                <span class="@GetPriorityClass(s.Priority)">@s.Priority</span>
+                                @if (s.Status == ScenarioStatus.Edited)
+                                {
+                                    <span class="scenario-status-badge edited">edited</span>
+                                }
+                                else if (s.Status == ScenarioStatus.Approved)
+                                {
+                                    <span class="scenario-status-badge approved">✓ approved</span>
+                                }
+                                else if (s.Status == ScenarioStatus.Rejected)
+                                {
+                                    <span class="scenario-status-badge rejected">✗ rejected</span>
+                                }
+                            </div>
+
+                            <div class="scenario-card-body">
+                                <div class="scenario-meta-row">
+                                    <span class="scenario-meta-label">Actor</span>
+                                    <span class="scenario-meta-value">@((MarkupString)RenderInlineMarkdown(s.Actor))</span>
+                                </div>
+                                <div class="scenario-meta-row">
+                                    <span class="scenario-meta-label">Trigger</span>
+                                    <span class="scenario-meta-value">@((MarkupString)RenderInlineMarkdown(s.Trigger))</span>
+                                </div>
+
+                                @if (s.Steps.Count > 0)
+                                {
+                                    <div class="scenario-meta-row scenario-meta-block">
+                                        <span class="scenario-meta-label">Steps</span>
+                                        <ol class="scenario-steps-list">
+                                            @foreach (var step in s.Steps)
+                                            {
+                                                <li>@((MarkupString)RenderInlineMarkdown(step))</li>
+                                            }
+                                        </ol>
+                                    </div>
+                                }
+
+                                @if (s.ExpectedTerminalState.Count > 0)
+                                {
+                                    <div class="scenario-meta-row scenario-meta-block">
+                                        <span class="scenario-meta-label">Expected Outcome</span>
+                                        <ul class="scenario-terminal-list">
+                                            @foreach (var ts in s.ExpectedTerminalState)
+                                            {
+                                                <li><span style="color:var(--accent-green, #47b584); margin-right:0.3rem;">✓</span> @((MarkupString)RenderInlineMarkdown(ts))</li>
+                                            }
+                                        </ul>
+                                    </div>
+                                }
+
+                                @if (s.ObservationSurfaces.Count > 0)
+                                {
+                                    <div class="scenario-meta-row scenario-meta-block">
+                                        <span class="scenario-meta-label">Observations</span>
+                                        <div style="display:flex; flex-direction:column; gap:0.25rem;">
+                                            @foreach (var obs in s.ObservationSurfaces)
+                                            {
+                                                <div style="display:flex; align-items:baseline; gap:0.4rem; font-size:0.8rem;">
+                                                    <span class="scenario-chip" style="font-family:monospace; font-size:0.72rem;">@obs.Kind</span>
+                                                    @if (obs.Fields.Count > 0)
+                                                    {
+                                                        <span style="color:var(--text-muted); font-family:monospace; font-size:0.72rem;">
+                                                            @string.Join(" · ", obs.Fields.Select(f => $"{f.Key}: {f.Value}"))
+                                                        </span>
+                                                    }
+                                                </div>
+                                            }
+                                        </div>
+                                    </div>
+                                }
+
+                                @if (s.SubsystemsInvolved.Count > 0)
+                                {
+                                    <div class="scenario-meta-row scenario-meta-chips">
+                                        <span class="scenario-meta-label">Subsystems</span>
+                                        <div class="scenario-chips">
+                                            @foreach (var sub in s.SubsystemsInvolved)
+                                            {
+                                                <span class="scenario-chip">@sub</span>
+                                            }
+                                        </div>
+                                    </div>
+                                }
+
+                                @{
+                                    var capturedIdx = idx;
+                                }
+                                <div class="scenario-meta-row" style="align-items:center;">
+                                    <span class="scenario-meta-label" style="white-space:nowrap;">
+                                        Interactive Testing
+                                        <span style="cursor:help; margin-left:4px;" title="When enabled, the automated verifier can fully interact with the running app for this scenario (click buttons, submit forms, call APIs). Disable for scenarios involving destructive or irreversible actions (delete, archive, purge) — the verifier will still test as much as possible but stop before the destructive action.">ⓘ</span>
+                                    </span>
+                                    <label style="display:flex; align-items:center; gap:0.4rem; cursor:pointer; font-size:0.82rem; color:var(--text-secondary);">
+                                        <input type="checkbox" checked="@s.InteractiveValidationSafe"
+                                               @onchange="e => ToggleInteractiveValidation(capturedIdx, (bool)(e.Value ?? false))"
+                                               style="accent-color:var(--accent-green, #47b584);" />
+                                        @(s.InteractiveValidationSafe ? "✅ Safe — full automated validation" : "⚠️ Destructive — validation stops before irreversible action")
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div class="scenario-card-actions">
+                                @if (s.Status != ScenarioStatus.Rejected)
+                                {
+                                    <button class="scenario-btn scenario-btn-approve @(s.Status is ScenarioStatus.Approved or ScenarioStatus.Edited ? "active" : "")"
+                                            @onclick="() => Approve(idx)"
+                                            title="Approve this scenario">
+                                        ✓ Approve
+                                    </button>
+                                    <button class="scenario-btn scenario-btn-edit"
+                                            @onclick="() => BeginEdit(idx)"
+                                            title="Edit this scenario">
+                                        ✎ Edit
+                                    </button>
+                                    <button class="scenario-btn scenario-btn-reject"
+                                            @onclick="() => Reject(idx)"
+                                            title="Reject this scenario">
+                                        ✗ Reject
+                                    </button>
+                                }
+                                else
+                                {
+                                    <button class="scenario-btn scenario-btn-unreject"
+                                            @onclick="() => UnReject(idx)"
+                                            title="Un-reject — restore this scenario to review">
+                                        ↩ Restore
+                                    </button>
+                                }
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+        }
+
+        @* ── Add Scenario ── *@
+        <div style="margin-top:1rem;">
+            <button class="config-btn-secondary" @onclick="OpenAddModal"
+                    title="Manually define a new end-to-end scenario. Use this to add scenarios the AI missed or to cover specific edge cases.">＋ Add Scenario</button>
+        </div>
+
+        @* ── Add Scenario modal ── *@
+        @if (_showAddModal)
+        {
+            <div class="scenario-modal-backdrop" @onclick="CloseAddModal">
+                <div class="scenario-modal" @onclick:stopPropagation="true">
+                    <div class="scenario-modal-header">
+                        <h3>Add Scenario</h3>
+                        <button class="config-btn-remove" @onclick="CloseAddModal">✕</button>
+                    </div>
+                    <div class="scenario-modal-body">
+                        <div class="scenario-edit-row">
+                            <div class="scenario-edit-field scenario-edit-field-sm">
+                                <label title="Auto-generated stable ID (S01, S02...). Cannot be changed.">ID (auto)</label>
+                                <input type="text" class="config-input" value="@_newDraft!.Id" disabled />
+                            </div>
+                            <div class="scenario-edit-field">
+                                <label title="Short descriptive name for this scenario. Use the user's own language so they recognize it.">Title <span class="req">*</span></label>
+                                <input type="text" class="config-input"
+                                       placeholder="e.g., User searches services by name"
+                                       @bind="_newDraft!.Title" @bind:event="oninput" />
+                            </div>
+                        </div>
+                        <div class="scenario-edit-row">
+                            <div class="scenario-edit-field">
+                                <label title="How the scenario is triggered: UI click, API call, scheduled job, CLI command, etc. Determines which observation surfaces are valid.">Journey Kind</label>
+                                <select class="config-input" @bind="_newDraft!.JourneyKind">
+                                    @foreach (var kind in Enum.GetValues<JourneyKind>())
+                                    {
+                                        <option value="@kind">@kind</option>
+                                    }
+                                </select>
+                            </div>
+                            <div class="scenario-edit-field">
+                                <label title="Critical = must work for the project to be useful. Important = secondary flow. Nice-to-have = stretch goal.">Priority</label>
+                                <select class="config-input" @bind="_newDraft!.Priority">
+                                    @foreach (var p in Enum.GetValues<ScenarioPriority>())
+                                    {
+                                        <option value="@p">@p</option>
+                                    }
+                                </select>
+                            </div>
+                        </div>
+                        <div class="scenario-edit-row">
+                            <div class="scenario-edit-field">
+                                <label title="Who performs this action — e.g., 'End user', 'Admin', 'API caller', 'Scheduled task'.">Actor <span class="req">*</span></label>
+                                <input type="text" class="config-input"
+                                       placeholder="e.g., Privacy Manager user"
+                                       @bind="_newDraft!.Actor" @bind:event="oninput" />
+                            </div>
+                            <div class="scenario-edit-field">
+                                <label title="What initiates this scenario — the specific action or event that starts the flow.">Trigger <span class="req">*</span></label>
+                                <textarea class="config-textarea" rows="2"
+                                          placeholder="e.g., User clicks the 'Export CSV' button on the dashboard"
+                                          @bind="_newDraft!.Trigger" @bind:event="oninput"></textarea>
+                            </div>
+                        </div>
+                        <div class="scenario-edit-field scenario-edit-field-full">
+                            <label title="Ordered list of what happens in this scenario, from trigger to completion. One step per line.">Steps (one per line)</label>
+                            <textarea class="config-textarea" rows="4"
+                                      placeholder="1. User clicks Export button&#10;2. Frontend generates CSV from current filtered data&#10;3. Browser downloads the file"
+                                      value="@_newDraft!.StepsText" @oninput="e => _newDraft!.StepsText = e.Value?.ToString() ?? string.Empty"></textarea>
+                        </div>
+                        <div class="scenario-edit-field scenario-edit-field-full">
+                            <label title="Concrete, checkable outcomes that prove the scenario succeeded. T-FINAL verifies these. Be specific — e.g., 'HTTP 200 with JSON body containing id field' not just 'request succeeds'.">Expected Terminal State (one per line)</label>
+                            <textarea class="config-textarea" rows="3"
+                                      placeholder="CSV file downloaded with correct headers&#10;File contains only the filtered rows, not all data"
+                                      value="@_newDraft!.TerminalStateText" @oninput="e => _newDraft!.TerminalStateText = e.Value?.ToString() ?? string.Empty"></textarea>
+                        </div>
+                        <div class="scenario-edit-field scenario-edit-field-full">
+                            <label>Subsystems Involved <span style="color:var(--text-muted); font-weight:normal;">(optional, comma-separated)</span>
+                                <span style="cursor:help; margin-left:4px;" title="Logical modules of YOUR project that this scenario exercises (e.g., api-controller, auth-service, dashboard-component). T-FINAL uses these to verify coverage. Leave blank and the AI will infer them.">ⓘ</span>
+                            </label>
+                            <input type="text" class="config-input"
+                                   placeholder="@_subsystemPlaceholder"
+                                   @bind="_newDraft!.SubsystemsText" @bind:event="oninput" />
+                        </div>
+                        <div class="scenario-edit-field scenario-edit-field-full" style="margin-top:0.5rem;">
+                            <label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer;">
+                                <input type="checkbox" @bind="_newDraft!.InteractiveValidationSafe"
+                                       style="accent-color:var(--accent-green, #47b584);" />
+                                <span>Interactive Testing Safe</span>
+                                <span style="cursor:help;" title="When enabled, the automated verifier can fully interact with the running app. Disable for scenarios with destructive/irreversible actions.">ⓘ</span>
+                            </label>
+                        </div>
+                        @if (_addError is not null)
+                        {
+                            <div class="config-pat-result config-pat-error" style="margin-top:0.5rem;">
+                                ⚠ @_addError
+                            </div>
+                        }
+                        <div class="scenario-edit-actions" style="margin-top:1rem;">
+                            <button class="config-btn-primary" @onclick="CommitAddScenario">Add Scenario</button>
+                            <button class="config-btn-secondary" @onclick="CloseAddModal">Cancel</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        }
+
+        @* ── Footer: Continue button ── *@
+        <div class="scenario-continue-footer" style="margin-top:1.5rem; padding:1.25rem; border-radius:10px; background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.06);">
+            <div style="display:flex; align-items:center; justify-content:space-between; width:100%; gap:1.5rem; flex-wrap:wrap;">
+                <span class="scenario-continue-hint" style="font-size:0.9rem;">
+                    @{
+                        var approved = _scenarios.Count(s => s.Status is ScenarioStatus.Approved or ScenarioStatus.Edited);
+                        var total = _scenarios.Count;
+                    }
+                    @if (approved == 0)
+                    {
+                        <span style="color:var(--text-muted);">Approve at least one scenario to continue, or skip.</span>
+                    }
+                    else
+                    {
+                        <span style="color:var(--accent-green); font-weight:600;">✓ @approved / @total scenario@(total != 1 ? "s" : "") approved</span>
+                    }
+                </span>
+                <div style="display:flex; gap:0.75rem; align-items:center;">
+                    <button class="wizard-skip-btn" @onclick="SkipStep"
+                            style="padding:0.5rem 1.25rem; font-size:0.85rem;">
+                        Skip →
+                    </button>
+                    <button class="wizard-nav-btn wizard-next-btn"
+                            disabled="@(approved == 0)"
+                            @onclick="HandleContinue"
+                            title="@(approved == 0 ? "Approve or edit at least one scenario before continuing" : $"{approved} scenario{(approved != 1 ? "s" : "")} approved — click to continue")"
+                            style="padding:0.6rem 1.5rem; font-size:0.95rem;">
+                        Continue to PMSpec →
+                    </button>
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    // ── Parameters ──────────────────────────────────────────────────────────
+
+    /// <summary>Full project description from wizard step 0.</summary>
+    [Parameter, EditorRequired] public string ProjectDescription { get; set; } = "";
+
+    /// <summary>Optional project name (inferred when blank).</summary>
+    [Parameter] public string? ProjectName { get; set; }
+
+    /// <summary>Clarifying Q&A answers from wizard step 1.</summary>
+    [Parameter] public IReadOnlyList<ClarifyingQA> QaPairs { get; set; } = [];
+
+    /// <summary>Called when the operator clicks "Continue to PMSpec".</summary>
+    [Parameter] public EventCallback<IReadOnlyList<Scenario>> OnContinue { get; set; }
+
+    /// <summary>Called when the operator clicks "Skip".</summary>
+    [Parameter] public EventCallback OnSkip { get; set; }
+
+    /// <summary>Workspace root used when saving scenarios.yaml scratch file.</summary>
+    [Parameter] public string? WorkspaceRoot { get; set; }
+
+    /// <summary>
+    /// Pre-loaded scenarios from the parent's develop-settings.json.
+    /// When provided, these are used directly instead of re-reading from disk,
+    /// avoiding stale-copy issues between src and bin develop-settings.json.
+    /// </summary>
+    [Parameter] public IReadOnlyList<PersistedScenario>? PersistedScenarios { get; set; }
+
+    /// <summary>
+    /// Scenario source hash from the parent's develop-settings.json.
+    /// Used to verify the persisted scenarios match the current description.
+    /// </summary>
+    [Parameter] public string? PersistedScenarioHash { get; set; }
+
+    // ── State ────────────────────────────────────────────────────────────────
+
+    private bool _generating;
+    private string? _generateError;
+    private readonly List<WizardActivityEvent> _activityEvents = new();
+    private DateTime _lastActivityRender = DateTime.MinValue;
+
+    private List<ScenarioDraft> _scenarios = new();
+    private int _editIdx = -1;
+    private ScenarioDraftModel? _editDraft;
+
+    private bool _showAddModal;
+    private ScenarioDraftModel? _newDraft;
+    private string? _addError;
+
+    /// <summary>
+    /// Placeholder for subsystems field: shows examples from existing AI-generated scenarios.
+    /// </summary>
+    private string _subsystemPlaceholder =>
+        _scenarios.Count == 0
+            ? "e.g., api-controller, auth-service, dashboard-component"
+            : "e.g., " + string.Join(", ",
+                _scenarios.SelectMany(s => s.SubsystemsInvolved)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Take(4));
+
+    // ── Lifecycle ────────────────────────────────────────────────────────────
+
+    protected override void OnInitialized()
+    {
+        if (!string.IsNullOrWhiteSpace(ProjectDescription))
+        {
+            var descHash = ComputeDescriptionHash(ProjectDescription);
+
+            // 0. Check parent-provided persisted scenarios (no disk read needed)
+            if (PersistedScenarios is not null && PersistedScenarios.Count > 0
+                && (string.IsNullOrEmpty(PersistedScenarioHash) || PersistedScenarioHash == descHash))
+            {
+                _scenarios = PersistedScenarios.Select(p => new ScenarioDraft
+                {
+                    Id = p.Id,
+                    Title = p.Title,
+                    JourneyKind = Enum.TryParse<JourneyKind>(p.JourneyKind, true, out var jk) ? jk : JourneyKind.UiInteraction,
+                    Priority = Enum.TryParse<ScenarioPriority>(p.Priority, true, out var pr) ? pr : ScenarioPriority.Important,
+                    Status = Enum.TryParse<ScenarioStatus>(p.Status, true, out var st) ? st : ScenarioStatus.Proposed,
+                    Actor = p.Actor,
+                    Trigger = p.Trigger,
+                    Steps = p.Steps,
+                    ExpectedTerminalState = p.ExpectedTerminalState,
+                    SubsystemsInvolved = p.SubsystemsInvolved,
+                    ObservationSurfaces = new List<ObservationSurface>(),
+                    InteractiveValidationSafe = p.InteractiveValidationSafe,
+                }).ToList();
+                Logger.LogInformation("ScenarioReview: loaded {Count} scenarios from parent parameter", _scenarios.Count);
+                return;
+            }
+
+            // 1. Check service memory cache (survives within same Runner session)
+            var cached = ScenarioSvc.GetCachedScenarios(descHash);
+            if (cached is not null && cached.Count > 0)
+            {
+                _scenarios = cached.Select(ToDraft).ToList();
+                Logger.LogDebug("ScenarioReview: loaded {Count} scenarios from service cache", _scenarios.Count);
+                return;
+            }
+
+            // 2. Check develop-settings.json (survives across restarts)
+            _ = TryLoadFromSettingsOrGenerateAsync(descHash);
+        }
+    }
+
+    private async Task TryLoadFromSettingsOrGenerateAsync(string descHash)
+    {
+        try
+        {
+            var settings = await SettingsService.LoadAsync();
+            if (settings.GeneratedScenarios.Count > 0
+                && (string.IsNullOrEmpty(settings.ScenarioSourceHash) || settings.ScenarioSourceHash == descHash))
+            {
+                _scenarios = settings.GeneratedScenarios.Select(p => new ScenarioDraft
+                {
+                    Id = p.Id,
+                    Title = p.Title,
+                    JourneyKind = Enum.TryParse<JourneyKind>(p.JourneyKind, true, out var jk) ? jk : JourneyKind.UiInteraction,
+                    Priority = Enum.TryParse<ScenarioPriority>(p.Priority, true, out var pr) ? pr : ScenarioPriority.Important,
+                    Status = Enum.TryParse<ScenarioStatus>(p.Status, true, out var st) ? st : ScenarioStatus.Proposed,
+                    Actor = p.Actor,
+                    Trigger = p.Trigger,
+                    Steps = p.Steps,
+                    ExpectedTerminalState = p.ExpectedTerminalState,
+                    SubsystemsInvolved = p.SubsystemsInvolved,
+                    ObservationSurfaces = new List<ObservationSurface>(),
+                    InteractiveValidationSafe = p.InteractiveValidationSafe,
+                }).ToList();
+                Logger.LogInformation("ScenarioReview: loaded {Count} scenarios from develop-settings.json", _scenarios.Count);
+                await InvokeAsync(StateHasChanged);
+                return;
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex, "ScenarioReview: failed to load from develop-settings (will generate fresh)");
+        }
+
+        // 3. Generate fresh
+        await GenerateInBackgroundAsync();
+    }
+
+    private static string ComputeDescriptionHash(string description)
+    {
+        var bytes = System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(description ?? ""));
+        return Convert.ToHexString(bytes)[..16];
+    }
+
+    private async Task GenerateInBackgroundAsync()
+    {
+        // Yield to allow the page to render the "Generating..." spinner first
+        await Task.Yield();
+        await TryGenerateAsync();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    // ── Generation ───────────────────────────────────────────────────────────
+
+    private async Task TryGenerateAsync()
+    {
+        if (!ScenarioSvc.IsAvailable)
+        {
+            _generateError = "Copilot CLI is not available. You can add scenarios manually or skip this step.";
+            return;
+        }
+
+        _generating = true;
+        _generateError = null;
+        _activityEvents.Clear();
+        StateHasChanged();
+
+        var sink = new Progress<VirtualDevTeam.Core.Frameworks.FrameworkActivityEvent>(evt =>
+        {
+            _activityEvents.Add(new WizardActivityEvent(DateTime.UtcNow, evt));
+            if (_activityEvents.Count > 200)
+                _activityEvents.RemoveRange(0, _activityEvents.Count - 200);
+            if ((DateTime.UtcNow - _lastActivityRender).TotalMilliseconds > 100)
+            {
+                _lastActivityRender = DateTime.UtcNow;
+                _ = InvokeAsync(StateHasChanged);
+            }
+        });
+
+        try
+        {
+            var raw = await ScenarioSvc.GenerateAsync(
+                ProjectDescription, ProjectName, QaPairs, CancellationToken.None, sink);
+
+            _scenarios = raw.Select(ToDraft).ToList();
+            if (_scenarios.Count == 0)
+                _generateError = ScenarioSvc.LastError
+                    ?? "No scenarios generated. You can add them manually.";
+            else
+                await PersistScenariosAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Scenario generation failed");
+            _generateError = $"Generation failed: {ex.Message}. You can retry or skip this step.";
+        }
+        finally
+        {
+            _generating = false;
+            StateHasChanged();
+        }
+    }
+
+    private void SkipGeneration()
+    {
+        _generateError = null;
+        _scenarios = new List<ScenarioDraft>();
+        StateHasChanged();
+    }
+
+    private async Task RegenerateAsync()
+    {
+        // Clear existing scenarios and force a fresh generation
+        _scenarios = new List<ScenarioDraft>();
+        _generateError = null;
+        // Clear the service cache so it doesn't return stale results
+        ScenarioSvc.ClearCache();
+        await TryGenerateAsync();
+    }
+
+    /// <summary>
+    /// Persist current scenarios to develop-settings.json so they survive page refresh / restart.
+    /// </summary>
+    private async Task PersistScenariosAsync()
+    {
+        try
+        {
+            var settings = await SettingsService.LoadAsync();
+            settings.GeneratedScenarios = _scenarios.Select(s => new PersistedScenario
+            {
+                Id = s.Id,
+                Title = s.Title,
+                JourneyKind = s.JourneyKind.ToString(),
+                Priority = s.Priority.ToString(),
+                Status = s.Status.ToString(),
+                Actor = s.Actor,
+                Trigger = s.Trigger,
+                Steps = s.Steps.ToList(),
+                ExpectedTerminalState = s.ExpectedTerminalState.ToList(),
+                SubsystemsInvolved = s.SubsystemsInvolved.ToList(),
+                InteractiveValidationSafe = s.InteractiveValidationSafe,
+            }).ToList();
+            settings.ScenarioSourceHash = ComputeDescriptionHash(ProjectDescription ?? "");
+            await SettingsService.SaveAsync(settings);
+            Logger.LogInformation("ScenarioReview: persisted {Count} scenarios to develop-settings.json", _scenarios.Count);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "ScenarioReview: failed to persist scenarios (non-fatal)");
+        }
+    }
+
+    // ── Card actions ─────────────────────────────────────────────────────────
+
+    private void Approve(int idx)
+    {
+        var s = _scenarios[idx];
+        _scenarios[idx] = s with { Status = s.Status == ScenarioStatus.Edited ? ScenarioStatus.Edited : ScenarioStatus.Approved };
+        _ = PersistScenariosAsync();
+    }
+
+    private void ApproveAllCritical()
+    {
+        for (var i = 0; i < _scenarios.Count; i++)
+        {
+            var s = _scenarios[i];
+            if (s.Priority == ScenarioPriority.Critical && s.Status != ScenarioStatus.Rejected)
+                _scenarios[i] = s with { Status = s.Status == ScenarioStatus.Edited ? ScenarioStatus.Edited : ScenarioStatus.Approved };
+        }
+        _ = PersistScenariosAsync();
+    }
+
+    private void ApproveAll()
+    {
+        for (var i = 0; i < _scenarios.Count; i++)
+        {
+            var s = _scenarios[i];
+            if (s.Status != ScenarioStatus.Rejected)
+                _scenarios[i] = s with { Status = s.Status == ScenarioStatus.Edited ? ScenarioStatus.Edited : ScenarioStatus.Approved };
+        }
+        _ = PersistScenariosAsync();
+    }
+
+    private void Reject(int idx)
+    {
+        var s = _scenarios[idx];
+        if (_editIdx == idx)
+        {
+            _editIdx = -1;
+            _editDraft = null;
+        }
+        _scenarios[idx] = s with { Status = ScenarioStatus.Rejected };
+        _ = PersistScenariosAsync();
+    }
+
+    private void UnReject(int idx) =>
+        _scenarios[idx] = _scenarios[idx] with { Status = ScenarioStatus.Proposed };
+
+    private void ToggleInteractiveValidation(int idx, bool safe)
+    {
+        _scenarios[idx] = _scenarios[idx] with { InteractiveValidationSafe = safe };
+        _ = PersistScenariosAsync();
+    }
+
+    // ── Edit flow ────────────────────────────────────────────────────────────
+
+    private void BeginEdit(int idx)
+    {
+        _editIdx = idx;
+        _editDraft = new ScenarioDraftModel(_scenarios[idx]);
+    }
+
+    private void CancelEdit()
+    {
+        _editIdx = -1;
+        _editDraft = null;
+    }
+
+    private void SaveEdit(int idx)
+    {
+        if (_editDraft is null) return;
+        _scenarios[idx] = _editDraft.ToScenarioDraft(ScenarioStatus.Edited);
+        _editIdx = -1;
+        _editDraft = null;
+        _ = PersistScenariosAsync();
+    }
+
+    // ── Add Scenario modal ───────────────────────────────────────────────────
+
+    private void OpenAddModal()
+    {
+        var nextNum = _scenarios.Count + 1;
+        var nextId = $"S{nextNum:D2}";
+        _newDraft = new ScenarioDraftModel
+        {
+            Id = nextId,
+            Priority = ScenarioPriority.Important,
+            JourneyKind = JourneyKind.UiInteraction
+        };
+        _addError = null;
+        _showAddModal = true;
+    }
+
+    private void CloseAddModal()
+    {
+        _showAddModal = false;
+        _newDraft = null;
+        _addError = null;
+    }
+
+    private void CommitAddScenario()
+    {
+        if (_newDraft is null) return;
+        if (string.IsNullOrWhiteSpace(_newDraft.Title))
+        {
+            _addError = "Title is required.";
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(_newDraft.Actor))
+        {
+            _addError = "Actor is required.";
+            return;
+        }
+        var draft = _newDraft.ToScenarioDraft(ScenarioStatus.Approved);
+        _scenarios.Add(draft);
+        _showAddModal = false;
+        _newDraft = null;
+        _addError = null;
+    }
+
+    // ── Continue ─────────────────────────────────────────────────────────────
+
+    private async Task HandleContinue()
+    {
+        var approved = _scenarios
+            .Where(s => s.Status is ScenarioStatus.Approved or ScenarioStatus.Edited)
+            .Select(ToScenario)
+            .ToList()
+            .AsReadOnly();
+
+        await TrySaveScratchAsync(approved);
+        await OnContinue.InvokeAsync(approved);
+    }
+
+    private async Task SkipStep() => await OnSkip.InvokeAsync();
+
+    private async Task TrySaveScratchAsync(IReadOnlyList<Scenario> scenarios)
+    {
+        if (string.IsNullOrWhiteSpace(WorkspaceRoot)) return;
+        try
+        {
+            var dir = Path.Combine(WorkspaceRoot, ".wizard");
+            Directory.CreateDirectory(dir);
+            var path = Path.Combine(dir, "scenarios.yaml");
+            var lines = new List<string> { "# scenarios" };
+            foreach (var s in scenarios)
+            {
+                lines.Add($"- id: {s.Id}");
+                lines.Add($"  title: \"{EscapeYaml(s.Title)}\"");
+                lines.Add($"  journey_kind: {ToYamlKind(s.JourneyKind)}");
+                lines.Add($"  priority: {s.Priority.ToString().ToLowerInvariant()}");
+                lines.Add($"  status: {s.Status.ToString().ToLowerInvariant()}");
+                lines.Add($"  actor: \"{EscapeYaml(s.Actor)}\"");
+                lines.Add($"  trigger: \"{EscapeYaml(s.Trigger)}\"");
+                AppendYamlList(lines, "  steps", s.Steps);
+                AppendYamlList(lines, "  expected_terminal_state", s.ExpectedTerminalState);
+                AppendYamlList(lines, "  subsystems_involved", s.SubsystemsInvolved);
+            }
+            await File.WriteAllTextAsync(path, string.Join('\n', lines) + '\n');
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "ScenarioReview: failed to save scratch scenarios.yaml");
+        }
+    }
+
+    // ── Helpers ──────────────────────────────────────────────────────────────
+
+    private static string GetPriorityClass(ScenarioPriority p) => p switch
+    {
+        ScenarioPriority.Critical => "priority-badge priority-badge-critical",
+        ScenarioPriority.Important => "priority-badge priority-badge-important",
+        _ => "priority-badge priority-badge-nice-to-have"
+    };
+
+    private static ScenarioDraft ToDraft(Scenario s) => new()
+    {
+        Id = s.Id,
+        Title = s.Title,
+        JourneyKind = s.JourneyKind,
+        Priority = s.Priority,
+        Status = s.Status,
+        Actor = s.Actor,
+        Trigger = s.Trigger,
+        Steps = [.. s.Steps],
+        ExpectedTerminalState = [.. s.ExpectedTerminalState],
+        ObservationSurfaces = [.. s.ObservationSurfaces],
+        SubsystemsInvolved = [.. s.SubsystemsInvolved],
+        Preconditions = [.. s.Preconditions],
+        InteractiveValidationSafe = s.InteractiveValidationSafe,
+    };
+
+    private static Scenario ToScenario(ScenarioDraft d) => new()
+    {
+        Id = d.Id,
+        Title = d.Title,
+        JourneyKind = d.JourneyKind,
+        Priority = d.Priority,
+        Status = d.Status,
+        Actor = d.Actor,
+        Trigger = d.Trigger,
+        Steps = d.Steps.AsReadOnly(),
+        ExpectedTerminalState = d.ExpectedTerminalState.AsReadOnly(),
+        ObservationSurfaces = d.ObservationSurfaces.AsReadOnly(),
+        SubsystemsInvolved = d.SubsystemsInvolved.AsReadOnly(),
+        Preconditions = d.Preconditions.AsReadOnly(),
+        InteractiveValidationSafe = d.InteractiveValidationSafe,
+    };
+
+    private static string EscapeYaml(string s) => s.Replace("\"", "\\\"");
+    private static string ToYamlKind(JourneyKind k)
+    {
+        var s = k.ToString();
+        var sb = new System.Text.StringBuilder(s.Length + 4);
+        for (int i = 0; i < s.Length; i++)
+        {
+            if (i > 0 && char.IsUpper(s[i]))
+                sb.Append('_');
+            sb.Append(char.ToLower(s[i]));
+        }
+        return sb.ToString();
+    }
+
+    private static void AppendYamlList(List<string> lines, string key, IEnumerable<string> items)
+    {
+        var list = items.ToList();
+        if (list.Count == 0)
+        {
+            lines.Add($"{key}: []");
+            return;
+        }
+        lines.Add($"{key}:");
+        foreach (var item in list)
+            lines.Add($"    - \"{EscapeYaml(item)}\"");
+    }
+
+    // ── Inner types ──────────────────────────────────────────────────────────
+
+    /// <summary>Mutable draft for list binding.</summary>
+    private sealed record ScenarioDraft
+    {
+        public string Id { get; init; } = "";
+        public string Title { get; init; } = "";
+        public JourneyKind JourneyKind { get; init; }
+        public ScenarioPriority Priority { get; init; }
+        public ScenarioStatus Status { get; init; }
+        public string Actor { get; init; } = "";
+        public string Trigger { get; init; } = "";
+        public List<string> Steps { get; init; } = new();
+        public List<string> ExpectedTerminalState { get; init; } = new();
+        public List<ObservationSurface> ObservationSurfaces { get; init; } = new();
+        public List<string> SubsystemsInvolved { get; init; } = new();
+        public List<string> Preconditions { get; init; } = new();
+        public bool InteractiveValidationSafe { get; init; } = true;
+    }
+
+    /// <summary>Edit-mode view-model for two-way binding across all scalar fields.</summary>
+    private sealed class ScenarioDraftModel
+    {
+        public ScenarioDraftModel() { }
+
+        public ScenarioDraftModel(ScenarioDraft src)
+        {
+            Id = src.Id;
+            Title = src.Title;
+            JourneyKind = src.JourneyKind;
+            Priority = src.Priority;
+            Actor = src.Actor;
+            Trigger = src.Trigger;
+            StepsText = string.Join('\n', src.Steps);
+            TerminalStateText = string.Join('\n', src.ExpectedTerminalState);
+            SubsystemsText = string.Join(", ", src.SubsystemsInvolved);
+            ObservationSurfaces = src.ObservationSurfaces;
+            InteractiveValidationSafe = src.InteractiveValidationSafe;
+        }
+
+        public string Id { get; set; } = "";
+        public string Title { get; set; } = "";
+        public JourneyKind JourneyKind { get; set; }
+        public ScenarioPriority Priority { get; set; }
+        public string Actor { get; set; } = "";
+        public string Trigger { get; set; } = "";
+        public string StepsText { get; set; } = "";
+        public string TerminalStateText { get; set; } = "";
+        public string SubsystemsText { get; set; } = "";
+        public List<ObservationSurface> ObservationSurfaces { get; set; } = new();
+        public bool InteractiveValidationSafe { get; set; } = true;
+
+        public ScenarioDraft ToScenarioDraft(ScenarioStatus status) => new()
+        {
+            Id = Id,
+            Title = Title,
+            JourneyKind = JourneyKind,
+            Priority = Priority,
+            Status = status,
+            Actor = Actor,
+            Trigger = Trigger,
+            Steps = SplitLines(StepsText),
+            ExpectedTerminalState = SplitLines(TerminalStateText),
+            SubsystemsInvolved = SubsystemsText
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .ToList(),
+            ObservationSurfaces = ObservationSurfaces,
+            InteractiveValidationSafe = InteractiveValidationSafe,
+        };
+
+        private static List<string> SplitLines(string text) =>
+            text.Split(['\n', '\r'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .ToList();
+    }
+
+    // ── Markdown rendering ──────────────────────────────────────────────────
+
+    private static readonly MarkdownPipeline _mdPipeline = new MarkdownPipelineBuilder()
+        .UseEmphasisExtras()
+        .Build();
+
+    /// <summary>
+    /// Render inline markdown (bold, italic, code) to HTML. Strips wrapping &lt;p&gt; tags
+    /// since these values render inside spans/divs. Safe for trusted AI-generated content.
+    /// </summary>
+    private static string RenderInlineMarkdown(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return "";
+        var html = Markdown.ToHtml(text, _mdPipeline).Trim();
+        // Strip wrapping <p>...</p> to keep inline
+        if (html.StartsWith("<p>", StringComparison.OrdinalIgnoreCase) && html.EndsWith("</p>", StringComparison.OrdinalIgnoreCase))
+            html = html[3..^4];
+        return html;
+    }
+
+    private sealed record WizardActivityEvent(DateTime Timestamp, FrameworkActivityEvent Activity);
+
+    private string GetActivityColor(FrameworkActivityEvent evt) => evt.Category switch
+    {
+        "intent" => "#00b0ff",
+        "complete" => "#00e676",
+        "error" => "#ff5252",
+        "assistant" => "#ce93d8",
+        "reasoning" => "#ce93d8",
+        "warning" => "#ffd54f",
+        _ => "var(--text-secondary)"
+    };
+
+    private string FormatActivity(FrameworkActivityEvent evt) => evt.Category switch
+    {
+        "intent" => $"🔧 {TruncateText(evt.Message, 100)}",
+        "complete" => $"✅ {TruncateText(evt.Message, 120)}",
+        "assistant" => $"💬 {TruncateText(evt.Message, 120)}",
+        "reasoning" => $"💬 {TruncateText(evt.Message, 120)}",
+        "error" => $"❌ {TruncateText(evt.Message, 120)}",
+        "warning" => $"⚠️ {TruncateText(evt.Message, 120)}",
+        _ => $"[{evt.Category}] {TruncateText(evt.Message, 100)}"
+    };
+
+    private static string TruncateText(string? value, int max) =>
+        string.IsNullOrEmpty(value) ? "" : value.Length <= max ? value : value[..max] + "…";
+}

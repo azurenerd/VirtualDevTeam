@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.2" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="Moq" Version="4.20.72" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <!-- Used by ImageRegenAnomalyDetectorTests to synthesize PNG fixtures and to share the
+         pHash code path with the production detector (which lives in Orchestrator). -->
+    <PackageReference Include="System.Drawing.Common" Version="10.0.*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\VirtualDevTeam.Core\VirtualDevTeam.Core.csproj" />
+    <!-- ImageRegenAnomalyDetector lives in the Orchestrator project (matching DeadlockFlowDetector's
+         pattern). Test code references it directly; the reference is downstream of Core so it
+         creates no circularity. -->
+    <ProjectReference Include="..\..\src\VirtualDevTeam.Orchestrator\VirtualDevTeam.Orchestrator.csproj" />
+  </ItemGroup>
+
+</Project>

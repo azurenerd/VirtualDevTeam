@@ -1,0 +1,128 @@
+@page "/repository/issue/{Number:int}"
+@using VirtualDevTeam.Core.DevPlatform.Capabilities
+@using VirtualDevTeam.Core.DevPlatform.Models
+@inject IWorkItemService WiService
+@inject NavigationManager Nav
+@rendermode InteractiveServer
+
+@*
+    In-dashboard issue / work-item detail page.
+    Calls IWorkItemService directly (same delegate shape as the
+    /api/dashboard/platform/work-item/{n} endpoint).
+*@
+
+<PageTitle>@($"Issue #{Number}") · VirtualDevTeam</PageTitle>
+
+<div class="issue-detail-page">
+    <div class="pr-detail-breadcrumb">
+        <a href="/repository/issues">← Back to Issues</a>
+    </div>
+
+    @if (_error is not null)
+    {
+        <div class="pr-detail-error">
+            <h2>Could not load issue #@Number</h2>
+            <p>@_error</p>
+        </div>
+    }
+    else if (_item is null)
+    {
+        <div class="pr-detail-loading">
+            <p>Loading issue #@Number…</p>
+        </div>
+    }
+    else
+    {
+        var item = _item;
+        <div class="pr-detail-header">
+            <div class="pr-detail-header-left">
+                <StateBadge State="@item.State" IsMerged="false" IsPullRequest="false" />
+                @if (!string.IsNullOrWhiteSpace(item.WorkItemType) && !item.WorkItemType.Equals("Issue", System.StringComparison.OrdinalIgnoreCase))
+                {
+                    <span class="work-item-type-badge">@item.WorkItemType</span>
+                }
+                <span class="pr-detail-number">#@item.Number</span>
+                <h1 class="pr-detail-title">@item.Title</h1>
+            </div>
+            <div class="pr-detail-header-right">
+                <PlatformLinkButton Url="@item.Url" />
+            </div>
+        </div>
+
+        <div class="pr-detail-subheader">
+            <span class="pr-detail-author">@(string.IsNullOrWhiteSpace(item.Author) ? "(unknown)" : item.Author)</span>
+            <span class="pr-detail-sep">·</span>
+            <span class="pr-detail-time" title="@item.CreatedAt.ToString("u")">opened <LocalTimeText Value="item.CreatedAt" /></span>
+            @if (item.ClosedAt is { } closedAt)
+            {
+                <span class="pr-detail-sep">·</span>
+                <span class="pr-detail-time" title="@closedAt.ToString("u")">closed <LocalTimeText Value="closedAt" /></span>
+            }
+            else if (item.UpdatedAt is { } updatedAt && updatedAt > item.CreatedAt)
+            {
+                <span class="pr-detail-sep">·</span>
+                <span class="pr-detail-time" title="@updatedAt.ToString("u")">updated <LocalTimeText Value="updatedAt" /></span>
+            }
+        </div>
+
+        <LabelChips Labels="@item.Labels" />
+
+        <div class="pr-detail-tabs">
+            <button class="pr-detail-tab @(_activeTab == "description" ? "active" : "")" @onclick='() => _activeTab = "description"'>
+                Description
+            </button>
+            <button class="pr-detail-tab @(_activeTab == "comments" ? "active" : "")" @onclick='() => _activeTab = "comments"'>
+                Comments <span class="pr-detail-tab-count">@_comments.Count</span>
+            </button>
+        </div>
+
+        <div class="pr-detail-tab-body">
+            @if (_activeTab == "description")
+            {
+                <MarkdownBody Markdown="@item.Body" />
+            }
+            else if (_activeTab == "comments")
+            {
+                <CommentList Items="@_comments" />
+            }
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public int Number { get; set; }
+
+    private PlatformWorkItem? _item;
+    private IReadOnlyList<PlatformComment> _comments = Array.Empty<PlatformComment>();
+    private string? _error;
+    private string _activeTab = "description";
+    private int _loadedNumber = -1;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_loadedNumber == Number) return;
+        _loadedNumber = Number;
+
+        _item = null;
+        _comments = Array.Empty<PlatformComment>();
+        _error = null;
+
+        try
+        {
+            var item = await WiService.GetAsync(Number);
+            if (item is null)
+            {
+                _error = $"Issue #{Number} was not found on the platform.";
+                return;
+            }
+            _item = item;
+            try { _comments = await WiService.GetCommentsAsync(Number); }
+            catch { _comments = Array.Empty<PlatformComment>(); }
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+}

@@ -1,0 +1,158 @@
+{
+  "sections": [
+    {
+      "step": 1,
+      "title": "Welcome & Setup",
+      "gif": "walkthrough-01.gif",
+      "summary": "The Welcome wizard checks your prerequisites (Git, Node.js, .NET SDK) and configures authentication. No PAT tokens needed — VDT uses your already-logged-in tools like GitHub CLI, Copilot CLI, and Azure CLI for seamless, secure access.",
+      "chips": ["Zero-Config Auth", "Prerequisite Check"]
+    },
+    {
+      "step": 2,
+      "title": "Authentication & AI Provider",
+      "gif": "walkthrough-02.gif",
+      "summary": "Choose your dev platform (GitHub or Azure DevOps) and configure your OpenAI image model. VDT supports multiple platforms natively — switch between them without changing any agent code or workflows.",
+      "chips": ["Multi-Platform", "Flexible AI Providers"]
+    },
+    {
+      "step": 3,
+      "title": "Project Description",
+      "gif": "walkthrough-03.gif",
+      "summary": "Describe your project in plain language. VDT's PM agent transforms your description into a comprehensive specification — complete with user stories, acceptance criteria, and technical requirements.",
+      "chips": ["Natural Language Input", "Auto-Generated Spec"]
+    },
+    {
+      "step": 4,
+      "title": "Clarifying Questions",
+      "gif": "walkthrough-04.gif",
+      "summary": "Before building begins, agents generate clarifying questions with proposed answers to fill knowledge gaps. This ensures agents truly understand your vision before writing a single line of code.",
+      "chips": ["Gap Detection", "Human Alignment"]
+    },
+    {
+      "step": 5,
+      "title": "Scenarios",
+      "gif": "walkthrough-05.gif",
+      "summary": "Scenarios are auto-generated from your project plan and validated throughout the entire build. Each PR is tested against these scenarios to ensure the final product matches your original vision.",
+      "chips": ["Vision Tracking", "PR Validation"]
+    },
+    {
+      "step": 6,
+      "title": "Review & Gating",
+      "gif": "walkthrough-06.gif",
+      "summary": "Configure human approval gates at every stage of development. Peer reviews come from specialized, focused agents — each with domain expertise for architecture, testing, or business alignment.",
+      "chips": ["Human Gates", "Expert Reviews"]
+    },
+    {
+      "step": 7,
+      "title": "Work Item Generation",
+      "gif": "walkthrough-07.gif",
+      "summary": "Engineering tasks are automatically created as native work items on your chosen platform (GitHub Issues or ADO Work Items) with full dependency tracking, wave-based execution, and acceptance criteria. Choose an optional parent work item to build from.",
+      "chips": ["Native Work Items", "Dependency Tracking"]
+    },
+    {
+      "step": 8,
+      "title": "Review & Launch",
+      "gif": "walkthrough-08.gif",
+      "summary": "Final review before agents start working. Approve the plan, adjust settings, and launch — your virtual development team begins autonomous collaboration immediately.",
+      "chips": ["One-Click Launch"]
+    },
+    {
+      "step": 9,
+      "title": "Overview Dashboard",
+      "gif": "walkthrough-09.gif",
+      "summary": "Live agent status cards show what each team member is doing in real-time. Agents ask clarifying questions before each PR for additional drill-down — you can review and edit their answers before implementation begins.",
+      "chips": ["Live Status", "Pre-PR Questions"]
+    },
+    {
+      "step": 10,
+      "title": "Project Timeline",
+      "gif": "walkthrough-10.gif",
+      "summary": "Complete E2E visibility from Research through Completion. Drill into any phase to see individual PR progress, media artifacts, and milestone details — nothing is hidden from view.",
+      "chips": ["Full E2E Visibility", "Phase Drill-Down", "Media Preview"]
+    },
+    {
+      "step": 11,
+      "title": "Agentic Frameworks",
+      "gif": "walkthrough-11.gif",
+      "summary": "Multiple Agentic frameworks tackle the same PR simultaneously using different approaches. A judge scores each candidate on quality and meeting the goals, then picks the winner. Images/gifs/videos are generated in real-time to view progress and help the judge.",
+      "chips": ["Multi-Candidate", "AI Judging", "Image Generation"]
+    },
+    {
+      "step": 12,
+      "title": "Reasoning & Decisions",
+      "gif": "walkthrough-12.gif",
+      "summary": "See exactly WHY agents made each decision. Progress steps, assessments, and architectural choices are logged and browsable — full transparency into the AI decision-making process. Set min decision levels to gate on and review for each PR.",
+      "chips": ["Decision Transparency", "Reasoning Trail"]
+    },
+    {
+      "step": 13,
+      "title": "Repository Browser",
+      "gif": "walkthrough-13.gif",
+      "summary": "Browse code, rendered documents, issues, and pull requests without leaving the dashboard. This integrated dev platform wrapper means you stay in one view for everything — no context switching to GitHub or ADO.",
+      "chips": ["Unified View", "Code Browser", "Rendered Markdown"]
+    },
+    {
+      "step": 14,
+      "title": "Scenario Tracking",
+      "gif": "walkthrough-14.gif",
+      "summary": "Track scenario validation across the entire build. Drill down to see which PRs address which scenarios and their pass/fail status — ensuring the final product delivers on every requirement.",
+      "chips": ["Scenario Coverage", "PR Mapping"]
+    },
+    {
+      "step": 15,
+      "title": "Team View",
+      "gif": "walkthrough-15.gif",
+      "summary": "Visualize your entire virtual team — who's working on what, their current status, and how they collaborate. Future releases will feature interactive 2D/3D team environments like virtual offices.",
+      "chips": ["Team Visualization", "Future: 3D Environments"]
+    },
+    {
+      "step": 16,
+      "title": "Pipelines",
+      "gif": "walkthrough-16.gif",
+      "summary": "Monitor CI/CD pipeline status and build health directly from the dashboard. Track build and deployment progress alongside your agent workflow for complete operational awareness.",
+      "chips": ["CI/CD Integration"]
+    },
+    {
+      "step": 17,
+      "title": "Health Monitor",
+      "gif": "walkthrough-17.gif",
+      "summary": "Automated watchdog detects stuck agents, phase mismatches, and workflow bottlenecks. Escalation ladders ensure issues get resolved — from automated nudges to human alerts with diagnostic checklists.",
+      "chips": ["Stuck Detection", "Auto-Escalation"]
+    },
+    {
+      "step": 18,
+      "title": "Metrics & Analytics",
+      "gif": "walkthrough-18.gif",
+      "summary": "Detailed operational metrics track AI usage, token consumption, agent performance, and task throughput. Understand exactly how your virtual team is performing with comprehensive analytics.",
+      "chips": ["Usage Analytics", "Performance Tracking", "Cost Visibility"]
+    },
+    {
+      "step": 19,
+      "title": "Configuration",
+      "gif": "walkthrough-19.gif",
+      "summary": "Fully customize agent roles, prompt templates, model tiers, and MCP server integrations. Every aspect of agent behavior is configurable — from which AI models they use to how they operate effectively in their roles.",
+      "chips": ["Custom Roles", "Prompt Templates", "MCP Integration"]
+    },
+    {
+      "step": 20,
+      "title": "Director CLI",
+      "gif": "walkthrough-20.gif",
+      "summary": "Chat directly with a Director agent to manage the entire buildout, or talk to individual agents for targeted guidance. It's like having a project manager and every team member on call.",
+      "chips": ["Director Chat", "Per-Agent Chat"]
+    },
+    {
+      "step": 21,
+      "title": "Testing & Preview",
+      "gif": "walkthrough-21.gif",
+      "summary": "Clone and run the project at any development stage with Preview Build. Browse all Playwright-generated screenshots, GIFs, and videos in one spot — visual proof of progress as agents work.",
+      "chips": ["Clone & Run", "Visual Artifacts", "Playwright Media"]
+    },
+    {
+      "step": 22,
+      "title": "Flow Monitor",
+      "gif": "walkthrough-22.gif",
+      "summary": "Real-time watchdog with detector plugins that identify stuck states, deadlocks, and phase completion mismatches. Diagnostic enrichment explains WHY something is stuck — not just that it is.",
+      "chips": ["Deadlock Detection", "Diagnostic Enrichment"]
+    }
+  ]
+}

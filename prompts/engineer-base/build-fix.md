@@ -7,6 +7,7 @@ variables:
   - step_description
   - error_count
   - error_summary
+  - scope_relaxation
 tags:
   - engineer-base
   - build-fix
@@ -16,6 +17,8 @@ The code from step {{step_number}}/{{total_steps}} ({{step_description}}) has bu
 BUILD ERRORS ({{error_count}}):
 {{error_summary}}
 
+{{> _shared/triage-on-failure}}
+
 Fix the code so it compiles. Output ONLY the corrected files using this format:
 FILE: path/to/file.ext
 ```language
@@ -23,6 +26,4 @@ FILE: path/to/file.ext
 ```
 
 Include the COMPLETE file content for each file that needs changes.
-IMPORTANT: Only fix files that YOU created or modified in this task.
-Do NOT create new files or modify files outside the task scope to fix errors.
-If an error is in a file you did not create, adjust YOUR files to work with the existing code.
+{{scope_relaxation}}

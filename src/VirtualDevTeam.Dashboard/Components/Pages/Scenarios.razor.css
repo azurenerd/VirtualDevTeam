@@ -1,0 +1,302 @@
+/* ===== Scenarios page — component-scoped styles ===== */
+
+/* ── Context bar ── */
+.scenario-context-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.6rem 1rem;
+    background: var(--bg-card);
+    border: 1px solid var(--border-card);
+    border-radius: var(--radius-md);
+    margin-bottom: 1.25rem;
+    font-size: 0.85rem;
+}
+
+.scenario-project-name {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.scenario-project-repo {
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+}
+
+/* ── Filter row ── */
+.scenario-filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem 2rem;
+    margin-bottom: 1.5rem;
+    align-items: flex-start;
+}
+
+.scenario-filter-group {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+}
+
+.scenario-filter-label {
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    margin-right: 0.25rem;
+    white-space: nowrap;
+}
+
+/* ── Table ── */
+.scenario-table-wrap {
+    overflow-x: auto;
+}
+
+.scenario-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.875rem;
+}
+
+.scenario-table thead tr {
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.scenario-table thead th {
+    padding: 0.5rem 0.75rem;
+    text-align: left;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+/* Body rows */
+.scenario-row {
+    border-bottom: 1px solid var(--border-card);
+    cursor: pointer;
+    transition: background var(--transition-fast);
+}
+
+.scenario-row:hover {
+    background: var(--bg-card-hover);
+}
+
+.scenario-row.expanded {
+    background: var(--bg-card);
+}
+
+.scenario-table tbody td {
+    padding: 0.65rem 0.75rem;
+    vertical-align: middle;
+}
+
+.scenario-id {
+    font-family: var(--font-mono);
+    font-weight: 600;
+    color: var(--accent-cyan);
+    white-space: nowrap;
+    font-size: 0.8rem;
+}
+
+.scenario-title {
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+.scenario-kind {
+    color: var(--text-secondary);
+    white-space: nowrap;
+    font-size: 0.82rem;
+}
+
+.scenario-chevron {
+    color: var(--text-muted);
+    font-size: 0.7rem;
+    text-align: right;
+    padding-right: 1rem;
+    white-space: nowrap;
+}
+
+/* ── Infrastructure badge ── */
+.scenario-infra-badge {
+    display: inline-block;
+    margin-left: 0.4rem;
+    padding: 0.1rem 0.4rem;
+    border-radius: 4px;
+    font-size: 0.68rem;
+    font-weight: 600;
+    font-family: var(--font-mono);
+    background: rgba(163, 113, 247, 0.12);
+    border: 1px solid rgba(163, 113, 247, 0.25);
+    color: var(--accent-purple);
+    vertical-align: middle;
+}
+
+/* ── Priority pill ── */
+.priority-pill {
+    display: inline-block;
+    padding: 0.2rem 0.55rem;
+    border-radius: 12px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.priority-pill-critical {
+    background: rgba(248, 81, 73, 0.12);
+    border: 1px solid rgba(248, 81, 73, 0.25);
+    color: var(--accent-red);
+}
+
+.priority-pill-important {
+    background: rgba(0, 212, 255, 0.1);
+    border: 1px solid rgba(0, 212, 255, 0.2);
+    color: var(--accent-cyan);
+}
+
+.priority-pill-nicetohave {
+    background: rgba(139, 148, 158, 0.1);
+    border: 1px solid rgba(139, 148, 158, 0.2);
+    color: var(--text-secondary);
+}
+
+/* ── Verification status badge ── */
+.verification-badge {
+    display: inline-block;
+    padding: 0.2rem 0.55rem;
+    border-radius: 12px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    white-space: nowrap;
+    font-family: var(--font-mono);
+}
+
+.verification-badge-verified {
+    background: rgba(63, 185, 80, 0.12);
+    border: 1px solid rgba(63, 185, 80, 0.25);
+    color: var(--accent-green);
+}
+
+.verification-badge-broken {
+    background: rgba(248, 81, 73, 0.12);
+    border: 1px solid rgba(248, 81, 73, 0.25);
+    color: var(--accent-red);
+}
+
+.verification-badge-inconclusive {
+    background: rgba(210, 153, 34, 0.12);
+    border: 1px solid rgba(210, 153, 34, 0.25);
+    color: var(--accent-amber);
+}
+
+.verification-badge-notyetverified {
+    background: rgba(139, 148, 158, 0.08);
+    border: 1px solid rgba(139, 148, 158, 0.15);
+    color: var(--text-muted);
+}
+
+/* ── Expanded details row ── */
+.scenario-details-row {
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.scenario-details {
+    padding: 1rem 1rem 1rem 2rem;
+}
+
+.scenario-detail-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0 2rem;
+}
+
+@media (max-width: 768px) {
+    .scenario-detail-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.scenario-detail-col {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.scenario-detail-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.scenario-detail-label {
+    font-size: 0.68rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+}
+
+.scenario-detail-value {
+    font-size: 0.875rem;
+    color: var(--text-primary);
+}
+
+.scenario-detail-list {
+    margin: 0.25rem 0 0;
+    padding-left: 1.25rem;
+    font-size: 0.83rem;
+    color: var(--text-secondary);
+    line-height: 1.6;
+}
+
+.scenario-detail-list li {
+    margin-bottom: 0.1rem;
+}
+
+/* ── Chip row (observation surfaces, subsystems) ── */
+.scenario-chip-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    margin-top: 0.2rem;
+}
+
+.scenario-chip {
+    display: inline-block;
+    padding: 0.15rem 0.5rem;
+    border-radius: 6px;
+    font-size: 0.72rem;
+    font-weight: 500;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-secondary);
+}
+
+/* ── Evidence link ── */
+.scenario-evidence-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.3rem 0.75rem;
+    border-radius: 6px;
+    background: rgba(0, 212, 255, 0.08);
+    border: 1px solid rgba(0, 212, 255, 0.2);
+    color: var(--accent-cyan);
+    font-size: 0.8rem;
+    font-weight: 500;
+    text-decoration: none;
+    transition: background var(--transition-fast);
+    margin-top: 0.2rem;
+}
+
+.scenario-evidence-link:hover {
+    background: rgba(0, 212, 255, 0.15);
+    text-decoration: none;
+}

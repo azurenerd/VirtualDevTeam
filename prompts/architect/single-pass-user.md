@@ -1,5 +1,5 @@
 ---
-version: "1.0"
+version: "1.1"
 description: "Single-pass user prompt for complete architecture design in one turn"
 variables:
   - task_title
@@ -7,6 +7,8 @@ variables:
   - tech_stack
   - pm_spec
   - research
+  - unanswered_decisions
+  - existing_project_context
 tags:
   - architect
   - single-pass
@@ -24,7 +26,13 @@ I need you to design the complete system architecture for our project.
 
 ## Research Findings
 {{research}}
+{{unanswered_decisions}}
+{{#existing_project_context}}
+## Existing Project Context
+This is a feature for an EXISTING project. The following summary describes the current codebase, architecture, and conventions. Your architecture design MUST integrate with the existing structure — extend it, don't replace it. Reference existing components, patterns, and file organization.
 
+{{existing_project_context}}
+{{/existing_project_context}}
 Produce a complete, structured Architecture.md document with ALL of these sections:
 
 # Architecture

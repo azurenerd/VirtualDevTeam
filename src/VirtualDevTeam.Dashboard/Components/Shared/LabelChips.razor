@@ -1,0 +1,43 @@
+@*
+    Label chip strip — reuses the same colour classes that Repository.razor + Issues.razor
+    already define in dashboard.css (label-engineering / label-architect-approved / etc.).
+    A label that doesn't match a known mapping falls back to label-default.
+
+    Usage: <LabelChips Labels="@pr.Labels" />
+*@
+
+@if (Labels is { Count: > 0 })
+{
+    <div class="pr-labels">
+        @foreach (var label in Labels)
+        {
+            <span class="pr-label @ClassFor(label)">@label</span>
+        }
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<string>? Labels { get; set; }
+
+    // Mirrors the mapping in Repository.razor (single source of truth would be nice;
+    // for v1 we duplicate to keep this component standalone, with a comment).
+    private static string ClassFor(string label) => label switch
+    {
+        "in-progress" or "status:in-progress" => "label-progress",
+        "ready-for-review" => "label-review",
+        "blocker" => "label-blocker",
+        "agent-stuck" => "label-stuck",
+        "engineering-task" => "label-engineering",
+        "executive-request" => "label-executive",
+        "resource-request" => "label-resource",
+        "status:assigned" => "label-assigned",
+        "status:completed" => "label-completed",
+        "architect-approved" => "label-architect-approved",
+        "pm-approved" => "label-pm-approved",
+        "tests-added" => "label-tests-added",
+        "security-blocked" => "label-blocker",
+        "human-review-required" => "label-stuck",
+        _ when label.StartsWith("complexity:", System.StringComparison.OrdinalIgnoreCase) => "label-complexity",
+        _ => "label-default"
+    };
+}

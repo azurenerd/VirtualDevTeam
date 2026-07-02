@@ -1,0 +1,586 @@
+@page "/flow-monitor"
+@rendermode InteractiveServer
+@using Microsoft.AspNetCore.SignalR.Client
+@using VirtualDevTeam.Core.HealthMonitor
+@using VirtualDevTeam.Dashboard.Services
+@implements IAsyncDisposable
+@inject FlowMonitorPersistence Persistence
+@inject PipelineAssessmentStore AssessmentStore
+@inject NavigationManager Navigation
+
+<PageTitle>Virtual Dev Team — Flow Monitor</PageTitle>
+
+<div class="dashboard-header" data-testid="page-flow-monitor">
+    <h2>Flow Monitor</h2>
+    <div style="display:flex; gap:0.75rem; flex-wrap:wrap;">
+        <a href="/flow-monitor/recommendations" class="fm-raw-log-link">🧭 Recommendations</a>
+        <a href="/flow-monitor-log" class="fm-raw-log-link">📋 Raw Log</a>
+    </div>
+</div>
+
+<!-- AI Pipeline Assessment -->
+@if (_latestAssessment is not null)
+{
+    <div class="fm-assessment-card @GetAssessmentClass(_latestAssessment.HealthScore)" data-testid="assessment-card">
+        <div class="fm-assessment-header">
+            <div class="fm-assessment-score" title="AI Health Score">
+                <span class="fm-score-value">@_latestAssessment.HealthScore</span>
+                <span class="fm-score-max">/10</span>
+            </div>
+            <div class="fm-assessment-meta">
+                <span class="fm-assessment-status @_latestAssessment.Status">@_latestAssessment.Status</span>
+                <span class="fm-assessment-age">@FormatAge(_latestAssessment.AssessedAt)</span>
+            </div>
+            <button class="fm-run-now-btn" @onclick="TriggerAssessment" title="Run AI assessment now">🔄 Assess Now</button>
+        </div>
+        <div class="fm-assessment-summary">@_latestAssessment.Summary</div>
+        @if (!string.IsNullOrEmpty(_latestAssessment.ForwardLook))
+        {
+            <div class="fm-assessment-trajectory">
+                <span class="fm-trajectory-label">📈 Trajectory:</span> @_latestAssessment.ForwardLook
+            </div>
+        }
+        @if (_latestAssessment.IssuesJson is not null)
+        {
+            var issues = System.Text.Json.JsonSerializer.Deserialize<List<AssessmentIssueView>>(_latestAssessment.IssuesJson);
+            if (issues?.Count > 0)
+            {
+                <div class="fm-assessment-issues">
+                    @foreach (var issue in issues)
+                    {
+                        <div class="fm-assessment-issue">
+                            <span class="fm-issue-severity @(issue.Severity?.ToLowerInvariant() ?? "info")">@(issue.Severity ?? "info")</span>
+                            <span class="fm-issue-target">@issue.Target</span>
+                            <span class="fm-issue-desc">@issue.Description</span>
+                        </div>
+                    }
+                </div>
+            }
+        }
+    </div>
+}
+else
+{
+    <div class="fm-assessment-card placeholder" data-testid="assessment-card-empty">
+        <div class="fm-assessment-placeholder">🤖 AI Pipeline Assessment — awaiting first run</div>
+    </div>
+}
+
+<!-- Assessment Settings (collapsible) -->
+<div class="fm-section-header" @onclick="() => _settingsExpanded = !_settingsExpanded">
+    <span class="fm-section-chevron @(_settingsExpanded ? "expanded" : "")">▶</span>
+    <span class="fm-section-title">⚙️ Assessment Settings</span>
+    <span class="fm-section-badge">
+        @(_assessmentEnabled ? "enabled" : "disabled") · @(_assessmentInterval)s
+    </span>
+</div>
+@if (_settingsExpanded)
+{
+    <div class="fm-settings-panel">
+        <div class="fm-settings-row">
+            <label class="fm-settings-label">Enabled</label>
+            <label class="fm-toggle">
+                <input type="checkbox" checked="@_assessmentEnabled" @onchange="ToggleAssessmentEnabled" />
+                <span class="fm-toggle-slider"></span>
+            </label>
+        </div>
+        <div class="fm-settings-row">
+            <label class="fm-settings-label">Interval (seconds)</label>
+            <div class="fm-settings-slider-group">
+                <input type="range" min="90" max="600" step="30" value="@_assessmentInterval"
+                       @onchange="OnIntervalChanged" />
+                <span class="fm-settings-value">@(_assessmentInterval)s</span>
+            </div>
+        </div>
+        <div class="fm-settings-row">
+            <label class="fm-settings-label">Model Tier</label>
+            <select class="fm-settings-select" value="@_assessmentModelTier" @onchange="OnModelTierChanged">
+                <option value="budget">Budget</option>
+                <option value="standard">Standard</option>
+                <option value="premium">Premium</option>
+            </select>
+        </div>
+        <div class="fm-settings-row">
+            <label class="fm-settings-label">Create Findings</label>
+            <label class="fm-toggle">
+                <input type="checkbox" checked="@_assessmentCreateFindings" @onchange="ToggleCreateFindings" />
+                <span class="fm-toggle-slider"></span>
+            </label>
+        </div>
+        <button class="fm-settings-save-btn" @onclick="SaveAssessmentConfig" disabled="@(!_configDirty)">
+            💾 Save Config
+        </button>
+        @if (!string.IsNullOrEmpty(_configSaveMessage))
+        {
+            <span class="fm-settings-feedback">@_configSaveMessage</span>
+        }
+    </div>
+
+    <!-- Prompt Editor -->
+    <div class="fm-prompt-editor">
+        <div class="fm-prompt-header">
+            <span class="fm-prompt-title">📝 Assessment Prompt</span>
+            <span class="fm-prompt-path">prompts/flow-monitor/pipeline-assessment.md</span>
+        </div>
+        @if (_promptContent is not null)
+        {
+            <textarea class="fm-prompt-textarea" @bind="_promptContent" @bind:event="oninput"
+                      @onfocus="() => _promptDirty = true" rows="16"></textarea>
+            <div class="fm-prompt-actions">
+                <button class="fm-settings-save-btn" @onclick="SavePrompt" disabled="@(!_promptDirty)">
+                    💾 Save Prompt
+                </button>
+                <button class="fm-prompt-reset-btn" @onclick="ResetPrompt">
+                    ↩️ Reset to Default
+                </button>
+                @if (!string.IsNullOrEmpty(_promptSaveMessage))
+                {
+                    <span class="fm-settings-feedback">@_promptSaveMessage</span>
+                }
+            </div>
+        }
+        else
+        {
+            <div class="fm-prompt-loading">Loading prompt...</div>
+        }
+    </div>
+}
+
+<!-- Severity filter pills -->
+<div class="fm-filter-pills">
+    <button class="fm-filter-pill @(_severityFilter == null ? "active" : "")" @onclick="() => SetFilter(null)">All</button>
+    <button class="fm-filter-pill @(_severityFilter == "Warning" ? "active" : "")" @onclick='() => SetFilter("Warning")'>⚠️ Warning</button>
+    <button class="fm-filter-pill @(_severityFilter == "Critical" ? "active" : "")" @onclick='() => SetFilter("Critical")'>🔴 Critical</button>
+</div>
+
+<!-- Section 1: Active Issues -->
+@if (_activeFindings.Count == 0)
+{
+    <div class="fm-healthy-banner">
+        <div class="fm-healthy-icon">✅</div>
+        <div class="fm-healthy-text">All systems healthy</div>
+        <div class="fm-healthy-detail">@_detectorCount detectors checked · Last tick @FormatAge(_lastTickAt)</div>
+    </div>
+}
+else
+{
+    <div class="fm-issues-grid">
+        @foreach (var finding in FilteredFindings)
+        {
+            <div class="fm-finding-card @finding.Severity.ToString().ToLowerInvariant()">
+                <div class="fm-finding-header">
+                    <span class="fm-detector-name">@finding.DetectorId</span>
+                    <span class="fm-severity-pill @finding.Severity.ToString().ToLowerInvariant()">@finding.Severity</span>
+                    <span class="fm-finding-age">@FormatAge(finding.DetectedAt)</span>
+                </div>
+                @if (!string.IsNullOrEmpty(finding.TargetResource))
+                {
+                    <div class="fm-finding-target">
+                        ⑂ @finding.TargetResource
+                        @if (!string.IsNullOrEmpty(finding.TargetDisplayName))
+                        {
+                            <span class="fm-target-agent">· @finding.TargetDisplayName</span>
+                        }
+                    </div>
+                }
+                <div class="fm-finding-summary">@finding.Summary</div>
+
+                @if (finding.Diagnostics?.Count > 0)
+                {
+                    var firstFailed = finding.Diagnostics.FirstOrDefault(d => !d.Passed);
+                    @if (firstFailed is not null)
+                    {
+                        <div class="fm-diag-item fail">✗ @firstFailed.CheckName</div>
+                    }
+                    @if (finding.Diagnostics.Count > 1)
+                    {
+                        var expandKey = finding.Id;
+                        <button class="fm-diagnostics-toggle" @onclick="() => ToggleDiag(expandKey)">
+                            @(_expandedDiags.Contains(expandKey) ? "▾" : "▸") @(finding.Diagnostics.Count - 1) more checks
+                        </button>
+                        @if (_expandedDiags.Contains(expandKey))
+                        {
+                            <div class="fm-diagnostics-list">
+                                @foreach (var diag in finding.Diagnostics.Skip(firstFailed is not null ? 1 : 0))
+                                {
+                                    <div class="fm-diag-item @(diag.Passed ? "pass" : "fail")">
+                                        @(diag.Passed ? "✓" : "✗") @diag.CheckName
+                                    </div>
+                                }
+                            </div>
+                        }
+                    }
+                }
+
+                <div class="fm-finding-actions">
+                    @if (finding.TargetResource?.StartsWith("pr#") == true)
+                    {
+                        var prNum = finding.TargetResource.Substring(3);
+                        <a href="@($"/repository?pr={prNum}")">Open PR</a>
+                    }
+                    @if (!string.IsNullOrEmpty(finding.TargetAgentId))
+                    {
+                        <a href="/agents">View Agent</a>
+                    }
+                </div>
+            </div>
+        }
+    </div>
+}
+
+<!-- Section 2: Recent Changes (collapsed by default) -->
+<div class="fm-section-header" @onclick="() => _changesExpanded = !_changesExpanded">
+    <span class="fm-section-chevron @(_changesExpanded ? "expanded" : "")">▶</span>
+    <span class="fm-section-title">Recent Changes</span>
+    <span class="fm-section-badge">@_changeLog.Count entries</span>
+</div>
+@if (_changesExpanded)
+{
+    <div class="fm-changelog">
+        @foreach (var entry in _changeLog)
+        {
+            <div class="fm-changelog-entry">
+                <LocalTimeText OffsetValue="entry.Time" CssClass="fm-changelog-time" IncludeSeconds="true" />
+                <span>@entry.Icon</span>
+                <span class="fm-changelog-text">@entry.Text</span>
+            </div>
+        }
+        @if (_changeLog.Count == 0)
+        {
+            <div style="text-align:center; padding:1rem; color:rgba(255,255,255,0.3);">No status changes yet</div>
+        }
+    </div>
+}
+
+<!-- Section 3: All Detectors (collapsed by default) -->
+<div class="fm-section-header" @onclick="() => _detectorsExpanded = !_detectorsExpanded">
+    <span class="fm-section-chevron @(_detectorsExpanded ? "expanded" : "")">▶</span>
+    <span class="fm-section-title">All Detectors</span>
+    <span class="fm-section-badge">@_detectorCount detectors@(_activeFindings.Count > 0 ? $", {_activeFindings.Count} with findings" : ", all healthy")</span>
+</div>
+@if (_detectorsExpanded)
+{
+    <div class="fm-detector-grid">
+        @foreach (var det in _detectorStatuses.OrderByDescending(d => d.Value.FindingCount).ThenBy(d => d.Key))
+        {
+            <div class="fm-detector-row @(det.Value.FindingCount > 0 ? "has-findings" : "")">
+                <span class="fm-det-status">@(det.Value.FindingCount > 0 ? "⚠️" : "✅")</span>
+                <span class="fm-det-name">@det.Key</span>
+                <span class="fm-det-meta">@(det.Value.FindingCount > 0 ? $"{det.Value.FindingCount} finding(s)" : "healthy")</span>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    private List<FlowFinding> _activeFindings = new();
+    private List<ChangeLogEntry> _changeLog = new();
+    private Dictionary<string, DetectorStatus> _detectorStatuses = new();
+    private int _detectorCount;
+    private DateTimeOffset? _lastTickAt;
+    private bool _changesExpanded;
+    private bool _detectorsExpanded;
+    private bool _settingsExpanded;
+    private HashSet<string> _expandedDiags = new();
+    private string? _severityFilter;
+    private HubConnection? _hub;
+    private bool _refreshPending;
+    private PipelineAssessment? _latestAssessment;
+
+    // Assessment config state
+    private bool _assessmentEnabled = true;
+    private int _assessmentInterval = 300;
+    private string _assessmentModelTier = "budget";
+    private bool _assessmentCreateFindings = true;
+    private bool _configDirty;
+    private string? _configSaveMessage;
+
+    // Prompt editor state
+    private string? _promptContent;
+    private string? _originalPromptContent;
+    private bool _promptDirty;
+    private string? _promptSaveMessage;
+
+    private record ChangeLogEntry(DateTimeOffset Time, string Icon, string Text);
+    private record DetectorStatus(int FindingCount, DateTimeOffset? LastRun);
+    private record AssessmentIssueView(string? Severity, string? Target, string? Description);
+    private record AssessmentConfigView(bool Enabled, int IntervalSeconds, string? ModelTier, bool CreateFindingsOnIssues);
+    private record PromptContentView(string? Content);
+
+    private IEnumerable<FlowFinding> FilteredFindings => _severityFilter is null
+        ? _activeFindings
+        : _activeFindings.Where(f => f.Severity.ToString() == _severityFilter);
+
+    private void SetFilter(string? filter)
+    {
+        _severityFilter = filter;
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await RefreshAsync();
+        await LoadAssessmentConfigAsync();
+        await LoadPromptAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            try
+            {
+                _hub = new HubConnectionBuilder()
+                    .WithUrl(Navigation.ToAbsoluteUri("/hubs/flowmonitor"))
+                    .WithAutomaticReconnect()
+                    .Build();
+                _hub.On<object>("FlowMonitorEvent", async _ =>
+                {
+                    if (_refreshPending) return;
+                    _refreshPending = true;
+                    await Task.Delay(500);
+                    _refreshPending = false;
+                    await InvokeAsync(async () => { await RefreshAsync(); StateHasChanged(); });
+                });
+                _hub.Reconnected += async _ =>
+                {
+                    await InvokeAsync(async () => { await RefreshAsync(); StateHasChanged(); });
+                };
+                await _hub.StartAsync();
+            }
+            catch
+            {
+                // SignalR unavailable (e.g., standalone dashboard without hub) — page
+                // still works with initial data, just won't auto-refresh.
+            }
+        }
+    }
+
+    private Task RefreshAsync()
+    {
+        try
+        {
+            _activeFindings = Persistence.GetActiveFindings().ToList();
+            _lastTickAt = Persistence.GetLastTick();
+
+            // Refresh assessment
+            try { _latestAssessment = AssessmentStore.GetLatestAssessment(); }
+            catch { _latestAssessment = null; }
+
+            // Build detector statuses from active findings
+            _detectorStatuses = _activeFindings
+                .GroupBy(f => f.DetectorId)
+                .ToDictionary(g => g.Key, g => new DetectorStatus(g.Count(), g.Max(f => f.DetectedAt)));
+
+            // Fill in healthy detectors from recent history
+            var recentAll = Persistence.GetRecentFindings(200);
+            foreach (var det in recentAll.Select(f => f.DetectorId).Distinct())
+            {
+                if (!_detectorStatuses.ContainsKey(det))
+                    _detectorStatuses[det] = new DetectorStatus(0, null);
+            }
+            _detectorCount = _detectorStatuses.Count;
+
+            // Build change log from recent findings
+            _changeLog = recentAll
+                .Where(f => f.State != FlowFindingState.Open || f.DetectedAt > DateTimeOffset.UtcNow.AddHours(-1))
+                .OrderByDescending(f => f.DetectedAt)
+                .Take(50)
+                .Select(f => new ChangeLogEntry(
+                    f.DetectedAt,
+                    f.State == FlowFindingState.Resolved ? "✅" : f.Severity == FlowFindingSeverity.Critical ? "🔴" : "⚠️",
+                    $"{f.DetectorId}: {TruncateSummary(f.Summary)}"))
+                .ToList();
+        }
+        catch
+        {
+            // Non-fatal — page renders with stale data
+        }
+        return Task.CompletedTask;
+    }
+
+    private static string TruncateSummary(string? summary)
+    {
+        if (string.IsNullOrEmpty(summary)) return "";
+        return summary.Length > 100 ? summary.Substring(0, 100) + "…" : summary;
+    }
+
+    private void ToggleDiag(string key)
+    {
+        if (!_expandedDiags.Remove(key)) _expandedDiags.Add(key);
+    }
+
+    private static string FormatAge(DateTimeOffset? dt)
+    {
+        if (dt is null) return "unknown";
+        var age = DateTimeOffset.UtcNow - dt.Value;
+        if (age.TotalSeconds < 60) return $"{age.TotalSeconds:0}s ago";
+        if (age.TotalMinutes < 60) return $"{age.TotalMinutes:0}m ago";
+        return $"{age.TotalHours:0.0}h ago";
+    }
+
+    private static string GetAssessmentClass(int score) =>
+        score >= 7 ? "healthy" : score >= 4 ? "warning" : "critical";
+
+    private async Task TriggerAssessment()
+    {
+        try
+        {
+            using var http = new HttpClient { BaseAddress = new Uri(Navigation.BaseUri) };
+            await http.PostAsync("/api/dashboard/health/assessment/run-now", null);
+        }
+        catch { /* Fire-and-forget */ }
+    }
+
+    // ─── Assessment Config ───
+
+    private async Task LoadAssessmentConfigAsync()
+    {
+        try
+        {
+            using var http = new HttpClient { BaseAddress = new Uri(Navigation.BaseUri) };
+            var response = await http.GetAsync("/api/dashboard/health/assessment/config");
+            if (response.IsSuccessStatusCode)
+            {
+                var cfg = await response.Content.ReadFromJsonAsync<AssessmentConfigView>();
+                if (cfg is not null)
+                {
+                    _assessmentEnabled = cfg.Enabled;
+                    _assessmentInterval = cfg.IntervalSeconds;
+                    _assessmentModelTier = cfg.ModelTier ?? "budget";
+                    _assessmentCreateFindings = cfg.CreateFindingsOnIssues;
+                }
+            }
+        }
+        catch { /* Non-fatal */ }
+    }
+
+    private void ToggleAssessmentEnabled(ChangeEventArgs e)
+    {
+        _assessmentEnabled = e.Value is true;
+        _configDirty = true;
+    }
+
+    private void ToggleCreateFindings(ChangeEventArgs e)
+    {
+        _assessmentCreateFindings = e.Value is true;
+        _configDirty = true;
+    }
+
+    private void UpdateInterval(int value)
+    {
+        _assessmentInterval = value;
+        _configDirty = true;
+    }
+
+    private void OnIntervalChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var val))
+            UpdateInterval(val);
+    }
+
+    private void UpdateModelTier(string tier)
+    {
+        _assessmentModelTier = tier;
+        _configDirty = true;
+    }
+
+    private void OnModelTierChanged(ChangeEventArgs e)
+    {
+        UpdateModelTier(e.Value?.ToString() ?? "budget");
+    }
+
+    private async Task SaveAssessmentConfig()
+    {
+        try
+        {
+            using var http = new HttpClient { BaseAddress = new Uri(Navigation.BaseUri) };
+            var payload = new
+            {
+                Enabled = _assessmentEnabled,
+                IntervalSeconds = _assessmentInterval,
+                MinIntervalSeconds = 90,
+                MaxIntervalSeconds = 600,
+                ModelTier = _assessmentModelTier,
+                CreateFindingsOnIssues = _assessmentCreateFindings,
+                ConfidenceThreshold = 0.7,
+                LlmTimeoutSeconds = 30,
+                MaxAssessmentsPerDay = 200,
+                PhaseTransitionGraceSeconds = 60,
+                ContextBudgetChars = 40000,
+            };
+            var response = await http.PostAsJsonAsync("/api/dashboard/health/assessment/config", payload);
+            _configSaveMessage = response.IsSuccessStatusCode ? "✅ Saved" : "❌ Failed";
+            _configDirty = false;
+        }
+        catch
+        {
+            _configSaveMessage = "❌ Error";
+        }
+        _ = ClearMessage(isPrompt: false);
+    }
+
+    // ─── Prompt Editor ───
+
+    private async Task LoadPromptAsync()
+    {
+        try
+        {
+            using var http = new HttpClient { BaseAddress = new Uri(Navigation.BaseUri) };
+            var response = await http.GetAsync("/api/dashboard/health/assessment/prompt");
+            if (response.IsSuccessStatusCode)
+            {
+                var result = await response.Content.ReadFromJsonAsync<PromptContentView>();
+                _promptContent = result?.Content;
+                _originalPromptContent = _promptContent;
+            }
+        }
+        catch { /* Non-fatal */ }
+    }
+
+    private async Task SavePrompt()
+    {
+        if (string.IsNullOrWhiteSpace(_promptContent)) return;
+        try
+        {
+            using var http = new HttpClient { BaseAddress = new Uri(Navigation.BaseUri) };
+            var response = await http.PostAsJsonAsync("/api/dashboard/health/assessment/prompt",
+                new { Content = _promptContent });
+            _promptSaveMessage = response.IsSuccessStatusCode ? "✅ Prompt saved" : "❌ Failed";
+            _promptDirty = false;
+            _originalPromptContent = _promptContent;
+        }
+        catch
+        {
+            _promptSaveMessage = "❌ Error";
+        }
+        _ = ClearMessage(isPrompt: true);
+    }
+
+    private async Task ResetPrompt()
+    {
+        _promptContent = _originalPromptContent;
+        _promptDirty = false;
+        _promptSaveMessage = "↩️ Reset to saved version";
+        await Task.CompletedTask;
+        _ = ClearMessage(isPrompt: true);
+    }
+
+    private async Task ClearMessage(bool isPrompt)
+    {
+        await Task.Delay(3000);
+        await InvokeAsync(() =>
+        {
+            if (isPrompt) _promptSaveMessage = null;
+            else _configSaveMessage = null;
+            StateHasChanged();
+        });
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_hub is not null)
+        {
+            await _hub.DisposeAsync();
+        }
+    }
+}

@@ -37,4 +37,15 @@ Now compile everything into a single, structured PMSpec.md document with these e
 ## Constraints & Assumptions
 (Technical constraints, timeline assumptions, dependency assumptions)
 
+---
+
+```yaml
+[image-deliverables]
+# REQUIRED block — parsed by FlowMonitor. Populate one entry per image you generated
+# during PMSpec creation (style anchor + any concept references). If the project has
+# no visual requirements, leave only this comment so the absence is explicit.
+```
+
+(See the **Image Deliverables Detection** section of your system prompt. If image cues were present, the style anchor + per-category concept images MUST already be generated and committed alongside this file. List each one above with repo-relative path + purpose.)
+
 Replace {ProjectName} with '{{project_name}}'. Use these exact section headers. This document will be the single source of truth for business requirements.

@@ -1,0 +1,28 @@
+{
+  "name": "@vdt/azure-image-gen-mcp",
+  "version": "0.1.0",
+  "description": "MCP server exposing Azure OpenAI image generation (gpt-image-*) to agents, with automatic deployment fallback and prompt-refinement retry.",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "vdt-azure-image-gen-mcp": "dist/index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "test": "node --test --import tsx tests/*.test.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@azure/identity": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0"
+  }
+}

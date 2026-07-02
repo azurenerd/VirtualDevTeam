@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Checks the status of the AgentSquad runner process.
+    Checks the status of the VirtualDevTeam runner process.
 .DESCRIPTION
     Reports whether the runner is running, its PID, uptime, memory usage,
     and recent log output.
@@ -17,7 +17,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 Write-Host ""
-Write-Host "=== AgentSquad Runner Status ===" -ForegroundColor Cyan
+Write-Host "=== VirtualDevTeam Runner Status ===" -ForegroundColor Cyan
 Write-Host ""
 
 # Check PID file
@@ -27,10 +27,10 @@ if (-not (Test-Path $PidFile)) {
 
     # Check for orphaned processes
     $procs = Get-CimInstance Win32_Process -Filter "Name = 'dotnet.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -like "*AgentSquad.Runner*" }
+        Where-Object { $_.CommandLine -like "*VirtualDevTeam.Runner*" }
 
     if ($procs.Count -gt 0) {
-        Write-Host "WARNING: Found orphaned AgentSquad processes:" -ForegroundColor Yellow
+        Write-Host "WARNING: Found orphaned VirtualDevTeam processes:" -ForegroundColor Yellow
         foreach ($p in $procs) {
             Write-Host "  PID: $($p.ProcessId) — Started: $($p.CreationDate)" -ForegroundColor Yellow
         }

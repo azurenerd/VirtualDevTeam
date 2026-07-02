@@ -1,9 +1,9 @@
 <#
 .SYNOPSIS
-    Stops the AgentSquad runner process.
+    Stops the VirtualDevTeam runner process.
 .DESCRIPTION
     Reads the PID from runner.pid and gracefully stops the process.
-    Falls back to finding dotnet processes running AgentSquad.Runner.
+    Falls back to finding dotnet processes running VirtualDevTeam.Runner.
 .EXAMPLE
     .\scripts\stop-runner.ps1
     .\scripts\stop-runner.ps1 -Force
@@ -62,19 +62,19 @@ if (Test-Path $PidFile) {
     }
 } else {
     Write-Host "No runner.pid file found." -ForegroundColor Yellow
-    Write-Host "Looking for running AgentSquad processes..." -ForegroundColor Cyan
+    Write-Host "Looking for running VirtualDevTeam processes..." -ForegroundColor Cyan
 
-    # Search for dotnet processes with AgentSquad.Runner in the command line
+    # Search for dotnet processes with VirtualDevTeam.Runner in the command line
     $procs = Get-CimInstance Win32_Process -Filter "Name = 'dotnet.exe'" |
-        Where-Object { $_.CommandLine -like "*AgentSquad.Runner*" }
+        Where-Object { $_.CommandLine -like "*VirtualDevTeam.Runner*" }
 
     if ($procs.Count -eq 0) {
-        Write-Host "No AgentSquad runner processes found." -ForegroundColor Yellow
+        Write-Host "No VirtualDevTeam runner processes found." -ForegroundColor Yellow
         exit 0
     }
 
     foreach ($p in $procs) {
-        Write-Host "Found AgentSquad runner (PID: $($p.ProcessId))" -ForegroundColor Cyan
+        Write-Host "Found VirtualDevTeam runner (PID: $($p.ProcessId))" -ForegroundColor Cyan
         Stop-RunnerByPid -ProcessId $p.ProcessId -ForceKill $Force.IsPresent
     }
     Write-Host "Done." -ForegroundColor Green

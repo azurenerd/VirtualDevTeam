@@ -1,0 +1,8 @@
+{
+  "_comment": "Template for preview-settings.json — copy this file to preview-settings.json on first run and fill in your local clone path. preview-settings.json is gitignored, so your values won't affect other developers.",
+  "clonePath": "",
+  "buildCommandOverride": "",
+  "runCommandOverride": "",
+  "port": 0,
+  "securityWarningAcknowledged": false
+}

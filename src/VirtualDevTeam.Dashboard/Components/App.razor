@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <base href="/" />
+    <link rel="stylesheet" href="bootstrap/bootstrap.min.css" />
+    <link rel="stylesheet" href="css/dashboard.css?v=20260420e" />
+    <link rel="stylesheet" href="css/repository-files.css" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css" />
+    <link rel="stylesheet" href="app.css" />
+    <link rel="stylesheet" href="VirtualDevTeam.Dashboard.styles.css" />
+    <link rel="icon" type="image/png" href="favicon.png" />
+    <HeadOutlet @rendermode="InteractiveServer" />
+</head>
+
+<body>
+    <Routes @rendermode="InteractiveServer" />
+    <script src="_framework/blazor.web.js" autostart="false"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.30.4/cytoscape.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dagre/0.8.5/dagre.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/cytoscape-dagre@2.5.0/cytoscape-dagre.min.js"></script>
+
+    <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@@microsoft/signalr@8.0.7/dist/browser/signalr.min.js"></script>
+    <script src="js/director-cli.js"></script>
+    <script src="js/flow-monitor-log.js"></script>
+    <script src="js/browser-notifications.js"></script>
+    <script src="js/approvals-deep-link.js"></script>
+    <script src="js/local-time.js"></script>
+    <script src="js/walkthrough.js"></script>
+    <script src="js/folder-picker.js"></script>
+    <script>
+        Blazor.start({
+            circuit: {
+                reconnectionOptions: {
+                    maxRetries: 2147483647,
+                    retryIntervalMilliseconds: 2000,
+                    dialogId: 'components-reconnect-modal'
+                }
+            },
+            reconnectionHandler: {
+                onConnectionDown: function (options, error) {
+                    var overlay = document.getElementById('components-reconnect-modal');
+                    if (overlay) overlay.style.display = 'flex';
+                    tryReconnect(0);
+                },
+                onConnectionUp: function () {
+                    var overlay = document.getElementById('components-reconnect-modal');
+                    if (overlay) overlay.style.display = 'none';
+                    location.reload();
+                }
+            }
+        });
+
+        // Reconnect strategy that handles a server RESTART (not just a transient network blip):
+        //   - Up to 3 fast Blazor.reconnect() attempts in case it was a flaky disconnect
+        //   - After that, ping /healthz to see if the server is up
+        //   - If server is up but reconnect keeps failing → the runner restarted and our
+        //     circuit is gone forever; do a hard page reload to get a fresh circuit
+        //   - If server is down → keep polling /healthz with backoff and reload once it returns
+        // This eliminates the "An unhandled error has occurred. Reload" toast that previously
+        // required a manual force-refresh after every runner restart.
+        function tryReconnect(attempt) {
+            var statusEl = document.getElementById('reconnect-status');
+            if (statusEl) {
+                statusEl.textContent = attempt < 3
+                    ? 'Reconnecting... attempt ' + (attempt + 1)
+                    : 'Server may have restarted — checking...';
+            }
+            setTimeout(function () {
+                Blazor.reconnect().then(function (success) {
+                    if (success) return;
+                    if (attempt < 2) {
+                        tryReconnect(attempt + 1);
+                    } else {
+                        // Switch to "wait for server then hard reload" strategy
+                        waitForServerAndReload(0);
+                    }
+                }).catch(function () {
+                    if (attempt < 2) {
+                        tryReconnect(attempt + 1);
+                    } else {
+                        waitForServerAndReload(0);
+                    }
+                });
+            }, Math.min(2000 * Math.pow(1.2, attempt), 10000));
+        }
+
+        // Polls the runner until it responds, then hard-reloads. Covers the case where
+        // the user restarted the runner — the page sits showing the "Reconnecting..."
+        // overlay until the runner is back up, then auto-refreshes to a fresh circuit.
+        function waitForServerAndReload(attempt) {
+            var statusEl = document.getElementById('reconnect-status');
+            if (statusEl) {
+                statusEl.textContent = attempt === 0
+                    ? 'Waiting for server to come back online...'
+                    : 'Still waiting... (' + (attempt + 1) + 's)';
+            }
+            // Cache-buster + tiny payload to confirm server is up + has fresh circuit
+            fetch('/_blazor/disconnect', { method: 'POST', cache: 'no-store' })
+                .then(function (r) {
+                    // Any response (even 4xx) means the server is up. Reload to get a fresh circuit.
+                    location.reload();
+                })
+                .catch(function () {
+                    // Server still down — back off and retry. Capped at 5s to keep recovery snappy.
+                    setTimeout(function () { waitForServerAndReload(attempt + 1); }, Math.min(1000 + attempt * 500, 5000));
+                });
+        }
+
+        // Catch-all: also recover when Blazor's DEFAULT error UI appears (`#blazor-error-ui`).
+        // The custom reconnectionHandler above only fires when SignalR's connection drops cleanly.
+        // But if the runner restarts AFTER the WebSocket settled, the browser-side circuit can
+        // enter "Circuit not initialized" state on the next interaction — Blazor surfaces this as
+        // the yellow "An unhandled error has occurred. Reload" bar at the page bottom, NOT as a
+        // connection-down event. Observed 2026-05-12: user clicked /develop after a runner
+        // restart, got the error bar, had to force-refresh manually. The existing recovery flow
+        // was never invoked because no connection-down event ever fired.
+        //
+        // We hook this by MutationObserver: when the default error UI becomes visible, treat it
+        // as equivalent to a disconnect and trigger the same waitForServerAndReload flow that
+        // already exists. We also re-route generic "An unhandled error has occurred" globally
+        // via window.onerror as a belt-and-suspenders backstop.
+        function showReconnectOverlayAndRecover() {
+            // Hide the default Blazor error bar so the user only sees ONE recovery UI.
+            var defaultUi = document.getElementById('blazor-error-ui');
+            if (defaultUi) defaultUi.style.display = 'none';
+            // Show our custom overlay and start the recovery loop.
+            var overlay = document.getElementById('components-reconnect-modal');
+            if (overlay) overlay.style.display = 'flex';
+            waitForServerAndReload(0);
+        }
+
+        function watchForBlazorErrorUi() {
+            // The default error UI is injected by Blazor.web.js as `<div id="blazor-error-ui">`
+            // with display:none initially. When an error fires, Blazor sets style.display=block.
+            // We poll briefly until the element exists (it appears after Blazor.start()), then
+            // attach a MutationObserver to its style attribute.
+            var attached = false;
+            var pollInterval = setInterval(function () {
+                if (attached) { clearInterval(pollInterval); return; }
+                var ui = document.getElementById('blazor-error-ui');
+                if (!ui) return;
+                attached = true;
+                clearInterval(pollInterval);
+                // If it's already visible at attach time, recover immediately.
+                if (ui.style.display && ui.style.display !== 'none') {
+                    showReconnectOverlayAndRecover();
+                    return;
+                }
+                var obs = new MutationObserver(function () {
+                    if (ui.style.display && ui.style.display !== 'none') {
+                        showReconnectOverlayAndRecover();
+                    }
+                });
+                obs.observe(ui, { attributes: true, attributeFilter: ['style'] });
+            }, 250);
+            // Stop polling after 30s if Blazor never injected the element (offline / standalone host).
+            setTimeout(function () { clearInterval(pollInterval); }, 30000);
+        }
+        watchForBlazorErrorUi();
+
+        // Belt-and-suspenders: a global error listener for the "Circuit not initialized" error
+        // (an InvalidOperationError raised on the JS side when an interaction targets a dead
+        // server-side circuit). Doesn't reach `onConnectionDown` because the SignalR connection
+        // itself may still be alive (half-open after a runner restart).
+        window.addEventListener('error', function (e) {
+            var msg = (e && e.message) || '';
+            if (msg.indexOf('Circuit not initialized') >= 0 ||
+                msg.indexOf('Connection disconnected') >= 0) {
+                showReconnectOverlayAndRecover();
+            }
+        });
+        window.addEventListener('unhandledrejection', function (e) {
+            var msg = (e && e.reason && (e.reason.message || e.reason.toString())) || '';
+            if (msg.indexOf('Circuit not initialized') >= 0 ||
+                msg.indexOf('Connection disconnected') >= 0) {
+                showReconnectOverlayAndRecover();
+            }
+        });
+    </script>
+    <div id="components-reconnect-modal" style="display:none; position:fixed; inset:0; z-index:9999; background:rgba(15,17,23,0.92); align-items:center; justify-content:center; flex-direction:column; gap:1rem;">
+        <div style="color:#00d4ff; font-size:1.5rem; font-weight:600;">⟳ Reconnecting to server...</div>
+        <div id="reconnect-status" style="color:#8b949e; font-size:0.95rem;">Reconnecting...</div>
+        <div style="width:40px; height:40px; border:3px solid rgba(0,212,255,0.2); border-top-color:#00d4ff; border-radius:50%; animation:spin 1s linear infinite;"></div>
+    </div>
+    <style>@@keyframes spin { to { transform: rotate(360deg); } }</style>
+</body>
+
+</html>

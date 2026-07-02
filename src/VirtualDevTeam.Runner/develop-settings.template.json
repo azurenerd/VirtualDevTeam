@@ -1,0 +1,30 @@
+{
+  "_comment_top": "Template for develop-settings.json — wizard-managed runtime config. Copy to develop-settings.json on first run. The Develop wizard at /develop populates real values; you only need this if you're configuring outside the wizard. develop-settings.json is gitignored so your project choices won't leak.",
+  "projectName": "",
+  "projectDescription": "",
+  "devPlatform": "GitHub",
+  "_comment_authMethod": "GhCli (DEFAULT, recommended) → reads `gh auth token` dynamically; works for EMU accounts where PATs are blocked. AzureCliBearer → uses `az account get-access-token`; for Azure DevOps. Pat → static token (NOT RECOMMENDED — never put PATs in tracked files). ServicePrincipal → Azure SP for ADO.",
+  "authMethod": "GhCli",
+  "gitHub": {
+    "owner": "",
+    "repo": "",
+    "_comment_pat": "LEAVE EMPTY when authMethod=GhCli — the token comes from `gh auth token` at runtime. Set via `dotnet user-secrets` only if you must use authMethod=Pat (NOT recommended).",
+    "personalAccessToken": ""
+  },
+  "azureDevOps": {
+    "organization": "",
+    "project": "",
+    "repository": "",
+    "_comment_auth": "LEAVE EMPTY when authMethod=AzureCliBearer — the token comes from `az account get-access-token` at runtime."
+  },
+  "branch": "main",
+  "singlePRMode": false,
+  "prePRClarificationGate": true,
+  "gateConfig": {
+    "prePRClarification": true,
+    "finalPRApproval": false,
+    "agentToAgentResponse": false
+  },
+  "workItemGenerationMode": "Issues",
+  "modelTier": "premium"
+}

@@ -1,0 +1,658 @@
+@page "/welcome"
+@rendermode InteractiveServer
+@using VirtualDevTeam.Core.Configuration
+@using VirtualDevTeam.Core.Frameworks
+@using VirtualDevTeam.Dashboard.Services
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+@inject DevelopSettingsService DevelopSettingsService
+@inject PrerequisiteCheckService PrereqService
+@implements IDisposable
+
+<PageTitle>Welcome — Virtual Dev Team</PageTitle>
+
+<div class="welcome-page">
+    @* ── Step indicator ── *@
+    <div class="welcome-steps">
+        @for (int i = 1; i <= 4; i++)
+        {
+            var step = i;
+            <div class="welcome-step-dot @(step < _currentStep ? "completed" : "") @(step == _currentStep ? "active" : "")">
+                @if (step < _currentStep)
+                {
+                    <span>&#x2713;</span>
+                }
+                else
+                {
+                    <span>@step</span>
+                }
+            </div>
+            @if (i < 4)
+            {
+                <div class="welcome-step-line @(i < _currentStep ? "completed" : "")"></div>
+            }
+        }
+    </div>
+
+    @* ── Step 1: Welcome ── *@
+    @if (_currentStep == 1)
+    {
+        <div class="welcome-content">
+            <div class="welcome-hero">
+                <h1 class="welcome-title"><span class="welcome-icon">&#x26A1;</span> Virtual Dev Team</h1>
+                <p class="welcome-subtitle">AI-Powered Multi-Agent Software Development</p>
+                <p class="welcome-description">
+                    Multiple specialized AI agents collaborate through GitHub or Azure DevOps to build software projects end-to-end.
+                    Core agents handle the full development lifecycle, while additional SME specialists are dynamically spawned
+                    based on your project's technology requirements.
+                </p>
+            </div>
+
+            <div class="welcome-agents-strip">
+                <div class="welcome-agent-item">
+                    <span class="welcome-agent-icon">&#x1F4CB;</span>
+                    <span class="welcome-agent-label">PM</span>
+                </div>
+                <div class="welcome-agent-item">
+                    <span class="welcome-agent-icon">&#x1F52C;</span>
+                    <span class="welcome-agent-label">Researcher</span>
+                </div>
+                <div class="welcome-agent-item">
+                    <span class="welcome-agent-icon">&#x1F3D7;&#xFE0F;</span>
+                    <span class="welcome-agent-label">Architect</span>
+                </div>
+                <div class="welcome-agent-item">
+                    <span class="welcome-agent-icon">&#x1F4BB;</span>
+                    <span class="welcome-agent-label">Engineers</span>
+                </div>
+                <div class="welcome-agent-item">
+                    <span class="welcome-agent-icon">&#x1F9EA;</span>
+                    <span class="welcome-agent-label">Test Engineer</span>
+                </div>
+                <div class="welcome-agent-item">
+                    <span class="welcome-agent-icon">&#x1F512;</span>
+                    <span class="welcome-agent-label">Security</span>
+                </div>
+                <div class="welcome-agent-item" title="Specialist agents are dynamically spawned based on project needs (e.g., Frontend Engineer, Game Engine Engineer, Infrastructure Engineer)">
+                    <span class="welcome-agent-icon">&#x2795;</span>
+                    <span class="welcome-agent-label">+SME</span>
+                </div>
+            </div>
+
+            <div class="welcome-actions">
+                <button class="welcome-btn welcome-btn-primary" @onclick="() => _currentStep = 2">
+                    Get Started <span class="welcome-btn-arrow">&#x2192;</span>
+                </button>
+            </div>
+
+            @* ── Funny Warning Label ── *@
+            <div class="vdt-warning-sign">
+                <div class="vdt-warning-header">
+                    <span class="vdt-warning-triangle">&#x26A0;</span>
+                    <span class="vdt-warning-title">WARNING</span>
+                </div>
+                <div class="vdt-warning-body">
+                    <div class="vdt-warning-figure">
+                        <svg viewBox="0 0 80 90" class="vdt-warning-svg" aria-hidden="true">
+                            <!-- Stick figure at computer, wide eyes -->
+                            <!-- Monitor -->
+                            <rect x="38" y="10" width="34" height="26" rx="2" fill="none" stroke="currentColor" stroke-width="2.5"/>
+                            <line x1="55" y1="36" x2="55" y2="44" stroke="currentColor" stroke-width="2.5"/>
+                            <line x1="46" y1="44" x2="64" y2="44" stroke="currentColor" stroke-width="2"/>
+                            <!-- Screen glow lines -->
+                            <line x1="44" y1="18" x2="66" y2="18" stroke="currentColor" stroke-width="1" opacity="0.4"/>
+                            <line x1="44" y1="22" x2="62" y2="22" stroke="currentColor" stroke-width="1" opacity="0.4"/>
+                            <line x1="44" y1="26" x2="64" y2="26" stroke="currentColor" stroke-width="1" opacity="0.4"/>
+                            <!-- Head -->
+                            <circle cx="22" cy="22" r="10" fill="none" stroke="currentColor" stroke-width="2.5"/>
+                            <!-- Wide eyes (bright-eyed!) -->
+                            <circle cx="18" cy="20" r="3" fill="currentColor"/>
+                            <circle cx="26" cy="20" r="3" fill="currentColor"/>
+                            <circle cx="19" cy="19" r="1" fill="var(--bg-primary, #1a1a2e)"/>
+                            <circle cx="27" cy="19" r="1" fill="var(--bg-primary, #1a1a2e)"/>
+                            <!-- Smile -->
+                            <path d="M17 26 Q22 30 27 26" fill="none" stroke="currentColor" stroke-width="1.5"/>
+                            <!-- Body -->
+                            <line x1="22" y1="32" x2="22" y2="56" stroke="currentColor" stroke-width="2.5"/>
+                            <!-- Arms reaching for keyboard -->
+                            <line x1="22" y1="40" x2="38" y2="42" stroke="currentColor" stroke-width="2.5"/>
+                            <line x1="22" y1="42" x2="38" y2="44" stroke="currentColor" stroke-width="2.5"/>
+                            <!-- Legs (sitting) -->
+                            <line x1="22" y1="56" x2="14" y2="70" stroke="currentColor" stroke-width="2.5"/>
+                            <line x1="22" y1="56" x2="30" y2="70" stroke="currentColor" stroke-width="2.5"/>
+                            <!-- Chair -->
+                            <path d="M10 56 Q22 60 34 56" fill="none" stroke="currentColor" stroke-width="2"/>
+                            <!-- Coffee cup -->
+                            <rect x="2" y="40" width="8" height="10" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/>
+                            <path d="M10 43 Q14 43 14 47 Q14 50 10 50" fill="none" stroke="currentColor" stroke-width="1.5"/>
+                            <!-- Steam -->
+                            <path d="M4 38 Q5 35 6 38" fill="none" stroke="currentColor" stroke-width="1" opacity="0.5"/>
+                            <path d="M7 37 Q8 34 9 37" fill="none" stroke="currentColor" stroke-width="1" opacity="0.5"/>
+                        </svg>
+                    </div>
+                    <div class="vdt-warning-text">
+                        <p class="vdt-warning-main">
+                            <strong>PRODUCTIVITY HAZARD.</strong>
+                            VirtualDevTeam has been found to cause prolonged wakefulness, spontaneous 3 AM architecture discussions
+                            with yourself, and an irresistible urge to "just kick off one more run." Side effects may include
+                            neglected meals, confused pets, and partners who now refer to themselves as "the other dev platform."
+                        </p>
+                        <details class="vdt-warning-details">
+                            <summary>Additional Known Side Effects</summary>
+                            <ul>
+                                <li>&#x1F4A4; <strong>Temporal disorientation</strong> — "it's 4 AM?!" syndrome, compulsive PR monitoring, and withdrawal symptoms when GitHub API rate limits hit. Not recommended for use near bedtime.</li>
+                                <li>&#x1F48D; <strong>Relationship strain</strong> — accidentally calling your significant other "copilot" and describing household chores as "T-FINAL integration tasks."</li>
+                                <li>&#x1F489; <strong>Dependency formation</strong> — inability to stop after "just one run," checking dashboards during family dinners, and explaining multi-agent orchestration to visibly uncomfortable relatives. If you experience shipping euphoria lasting longer than 4 hours, consult a project manager.</li>
+                                <li>&#x1F3C3; <strong>Behavioral changes</strong> — saying "let it cook" to your partner about dinner AND your pipeline, refreshing <code>/agents</code> every 30 seconds, and a dangerous belief that everything in life could be solved with one more Software Engineer worker.</li>
+                            </ul>
+                        </details>
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+
+    @* ── Step 2: Prerequisites ── *@
+    @if (_currentStep == 2)
+    {
+        <div class="welcome-content">
+            <h2 class="welcome-section-title">Prerequisites Check</h2>
+            <p class="welcome-section-subtitle">Let's verify your development environment</p>
+
+            <div class="welcome-tool-list">
+                @foreach (var tool in _tools)
+                {
+                    <div class="welcome-tool-card @(tool.ShowInfo ? "info-expanded" : "")">
+                        <div class="welcome-tool-info">
+                            <div class="welcome-tool-name">
+                                @tool.Definition.Name
+                                @if (tool.Definition.IsOptional)
+                                {
+                                    <span class="welcome-badge-optional">optional</span>
+                                }
+                                <button class="welcome-info-btn" @onclick="() => tool.ShowInfo = !tool.ShowInfo"
+                                        title="More info" aria-label="@($"More info about {tool.Definition.Name}")">
+                                    &#x2139;&#xFE0F;
+                                </button>
+                            </div>
+                            <div class="welcome-tool-purpose">@tool.Definition.Purpose</div>
+                            @if (tool.ShowInfo)
+                            {
+                                <div class="welcome-tool-detail">
+                                    <p><strong>Why:</strong> @tool.Definition.DetailedDescription</p>
+                                    <p><strong>Without it:</strong> @tool.Definition.ImpactWithout</p>
+                                </div>
+                            }
+                        </div>
+                        <div class="welcome-tool-status">
+                            @if (tool.Status == CheckStatus.Checking)
+                            {
+                                <span class="welcome-status-checking">&#x23F3; Checking...</span>
+                            }
+                            else if (tool.Status == CheckStatus.Found)
+                            {
+                                <span class="welcome-status-found">&#x2705; @tool.Version</span>
+                            }
+                            else if (tool.IsInstalling)
+                            {
+                                <span class="welcome-status-checking">&#x23F3; Installing...</span>
+                            }
+                            else if (tool.InstallMessage is not null)
+                            {
+                                @if (tool.InstallResult == CheckStatus.Found)
+                                {
+                                    <span class="welcome-status-found">&#x2705; @tool.InstallMessage</span>
+                                }
+                                else
+                                {
+                                    <span class="welcome-status-missing">&#x274C; @tool.InstallMessage</span>
+                                }
+                            }
+                            else if (tool.Status == CheckStatus.NotFound && tool.Definition.IsOptional)
+                            {
+                                <span class="welcome-status-optional">&#x26A0;&#xFE0F; Not found (optional)</span>
+                                @if (tool.Definition.CanAutoInstall)
+                                {
+                                    <button class="welcome-install-btn" @onclick="() => _pendingInstallTool = tool"
+                                            title="Will run: @tool.Definition.InstallCommand">
+                                        Install
+                                    </button>
+                                }
+                            }
+                            else if (tool.Status == CheckStatus.NotFound)
+                            {
+                                <span class="welcome-status-missing">&#x274C; Not found</span>
+                                @if (tool.Definition.CanAutoInstall)
+                                {
+                                    <button class="welcome-install-btn" @onclick="() => _pendingInstallTool = tool"
+                                            title="Will run: @tool.Definition.InstallCommand">
+                                        Install
+                                    </button>
+                                }
+                                else if (tool.Definition.InstallKind == PrereqInstallKind.Url)
+                                {
+                                    <a class="welcome-install-link" href="@tool.Definition.InstallCommand" target="_blank"
+                                       rel="noopener" title="Opens download page">
+                                        Download ↗
+                                    </a>
+                                }
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+
+            <div class="welcome-agentic-hint">
+                <span class="welcome-agentic-icon">&#x1F4E6;</span>
+                <div>
+                    <strong>Quick setup:</strong> Most prerequisites above can be installed with a single script from
+                    <a href="https://github.com/azure-core/agentic" target="_blank" rel="noopener">azure-core/agentic ↗</a>.
+                    If you haven't set up your dev environment yet, run that first — it handles GitHub CLI, Copilot CLI, Node.js, PowerShell 7, Playwright, and more.
+                </div>
+            </div>
+
+            @* ── Install Confirmation Modal ── *@
+            @if (_pendingInstallTool is not null)
+            {
+                var t = _pendingInstallTool;
+                var isSquad = t.Definition.InstallCommand == "__squad_install__";
+                var displayCommand = isSquad ? "SquadReadinessChecker.EnsureInstalledAsync()" : t.Definition.InstallCommand;
+                var installLocation = isSquad
+                    ? "Installed via SquadReadinessChecker (same as Configuration page)"
+                    : t.Definition.InstallCommand.StartsWith("winget", StringComparison.OrdinalIgnoreCase)
+                        ? "Installed via Windows Package Manager (winget) to standard system paths"
+                        : t.Definition.InstallCommand.StartsWith("npm", StringComparison.OrdinalIgnoreCase)
+                            ? "Installed globally via npm to your Node.js modules directory"
+                            : t.Definition.InstallCommand.StartsWith("npx", StringComparison.OrdinalIgnoreCase)
+                                ? "Downloaded and cached locally by npx (Node.js package runner)"
+                                : "Installed via command line to standard system paths";
+                <div class="welcome-modal-backdrop" @onclick="() => _pendingInstallTool = null">
+                    <div class="welcome-modal" @onclick:stopPropagation="true">
+                        <h3>Install @t.Definition.Name?</h3>
+                        <p class="welcome-modal-desc">
+                            You are granting permission to install <strong>@t.Definition.Name</strong> on your computer.
+                        </p>
+                        <div class="welcome-modal-detail">
+                            <div><strong>Method:</strong> <code>@displayCommand</code></div>
+                            <div><strong>Location:</strong> @installLocation</div>
+                            <div><strong>Flags:</strong> Non-interactive mode with auto-accept agreements</div>
+                        </div>
+                        <div class="welcome-modal-actions">
+                            <button class="welcome-btn welcome-btn-secondary" @onclick="() => _pendingInstallTool = null">
+                                &#x1F630; Too Scared
+                            </button>
+                            <button class="welcome-btn welcome-btn-primary" @onclick="ConfirmInstall">
+                                &#x2705; Approve Install
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            }
+
+            <div class="welcome-actions welcome-actions-split">
+                <button class="welcome-btn welcome-btn-secondary" @onclick="() => _currentStep = 1">
+                    <span class="welcome-btn-arrow">&#x2190;</span> Back
+                </button>
+                <button class="welcome-btn welcome-btn-primary" @onclick="GoToStep3">
+                    Continue <span class="welcome-btn-arrow">&#x2192;</span>
+                </button>
+            </div>
+        </div>
+    }
+
+    @* ── Step 3: Authentication ── *@
+    @if (_currentStep == 3)
+    {
+        <div class="welcome-content">
+            <h2 class="welcome-section-title">Authentication &amp; Connections</h2>
+
+            <div class="welcome-auth-cards">
+                @* GitHub *@
+                <div class="welcome-tool-card">
+                    <div class="welcome-tool-info">
+                        <div class="welcome-tool-name">GitHub</div>
+                        <div class="welcome-tool-purpose">Repository access and API integration</div>
+                    </div>
+                    <div class="welcome-tool-status">
+                        @if (_ghAuthStatus == CheckStatus.Checking)
+                        {
+                            <span class="welcome-status-checking">&#x23F3; Checking...</span>
+                        }
+                        else if (_ghAuthStatus == CheckStatus.Found)
+                        {
+                            <span class="welcome-status-found">&#x2705; Authenticated as @_ghUsername</span>
+                        }
+                        else
+                        {
+                            <span class="welcome-status-missing">&#x274C; Not authenticated</span>
+                            <button class="welcome-copy-btn" @onclick="() => CopyToClipboard(_ghLoginCmd)" title="Copy login command">
+                                <code>@_ghLoginCmd</code>
+                                <span class="welcome-copy-icon">&#x1F4CB;</span>
+                            </button>
+                        }
+                    </div>
+                </div>
+
+                @* Azure DevOps *@
+                <div class="welcome-tool-card">
+                    <div class="welcome-tool-info">
+                        <div class="welcome-tool-name">
+                            Azure DevOps
+                            <span class="welcome-badge-optional">optional</span>
+                        </div>
+                        <div class="welcome-tool-purpose">Alternative dev platform for work items and PRs</div>
+                    </div>
+                    <div class="welcome-tool-status">
+                        @if (_azAuthStatus == CheckStatus.Checking)
+                        {
+                            <span class="welcome-status-checking">&#x23F3; Checking...</span>
+                        }
+                        else if (_azAuthStatus == CheckStatus.Found)
+                        {
+                            <span class="welcome-status-found">&#x2705; Signed in</span>
+                        }
+                        else
+                        {
+                            <span class="welcome-status-optional">&#x26A0;&#xFE0F; Not configured (optional)</span>
+                        }
+                    </div>
+                </div>
+
+                @* AI Provider *@
+                <div class="welcome-tool-card">
+                    <div class="welcome-tool-info">
+                        <div class="welcome-tool-name">AI Provider</div>
+                        <div class="welcome-tool-purpose">LLM backend for agent reasoning</div>
+                    </div>
+                    <div class="welcome-tool-status">
+                        @if (_copilotCliAvailable)
+                        {
+                            <span class="welcome-status-found">&#x2705; Using GitHub Copilot CLI</span>
+                        }
+                        else
+                        {
+                            <span class="welcome-status-optional">&#x26A0;&#xFE0F; Configure API keys in Settings</span>
+                        }
+                    </div>
+                </div>
+            </div>
+
+            <div class="welcome-actions welcome-actions-split">
+                <button class="welcome-btn welcome-btn-secondary" @onclick="() => _currentStep = 2">
+                    <span class="welcome-btn-arrow">&#x2190;</span> Back
+                </button>
+                <button class="welcome-btn welcome-btn-primary" @onclick="() => _currentStep = 4">
+                    Continue <span class="welcome-btn-arrow">&#x2192;</span>
+                </button>
+            </div>
+        </div>
+    }
+
+    @* ── Step 4: Get Started ── *@
+    @if (_currentStep == 4)
+    {
+        <div class="welcome-content">
+            <h2 class="welcome-section-title">You're Ready! &#x1F389;</h2>
+
+            <div class="welcome-summary-card">
+                <div class="welcome-summary-item">
+                    @if (RequiredToolsInstalled())
+                    {
+                        <span class="welcome-status-found">&#x2705;</span>
+                    }
+                    else
+                    {
+                        <span class="welcome-status-missing">&#x274C;</span>
+                    }
+                    <span>Required tools installed</span>
+                </div>
+                <div class="welcome-summary-item">
+                    @if (_ghAuthStatus == CheckStatus.Found)
+                    {
+                        <span class="welcome-status-found">&#x2705;</span>
+                    }
+                    else
+                    {
+                        <span class="welcome-status-missing">&#x274C;</span>
+                    }
+                    <span>GitHub authenticated</span>
+                </div>
+                <div class="welcome-summary-item">
+                    @if (_azAuthStatus == CheckStatus.Found)
+                    {
+                        <span class="welcome-status-found">&#x2705;</span>
+                    }
+                    else
+                    {
+                        <span class="welcome-status-optional">&#x26A0;&#xFE0F;</span>
+                    }
+                    <span>Azure DevOps</span>
+                </div>
+                <div class="welcome-summary-item">
+                    @if (_copilotCliAvailable)
+                    {
+                        <span class="welcome-status-found">&#x2705;</span>
+                    }
+                    else
+                    {
+                        <span class="welcome-status-optional">&#x26A0;&#xFE0F;</span>
+                    }
+                    <span>AI provider configured</span>
+                </div>
+            </div>
+
+            <div class="welcome-next-steps">
+                <h3>What's Next</h3>
+                <ol class="welcome-next-list">
+                    <li>Go to the <strong>Develop</strong> page to configure your first project</li>
+                    <li>The wizard will guide you through project setup, scenarios, and architecture</li>
+                    <li>Once configured, agents begin working autonomously</li>
+                </ol>
+            </div>
+
+            <div class="welcome-actions welcome-actions-center">
+                <button class="welcome-btn welcome-btn-primary welcome-btn-large" @onclick="OpenDevelop">
+                    Open Develop Page <span class="welcome-btn-arrow">&#x2192;</span>
+                </button>
+                <button class="welcome-btn welcome-btn-secondary welcome-btn-large" @onclick="OpenWalkthrough" style="margin-top: 0.75rem;">
+                    Take the Tour <span class="welcome-btn-arrow">&#x2192;</span>
+                </button>
+            </div>
+            <div class="welcome-skip">
+                <a href="" @onclick="SkipWelcome" @onclick:preventDefault class="welcome-skip-link">Skip for now</a>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private int _currentStep = 1;
+    private List<ToolViewModel> _tools = new();
+    private CancellationTokenSource _cts = new();
+    private ToolViewModel? _pendingInstallTool;
+    private bool _disposed;
+
+    // Auth state
+    private CheckStatus _ghAuthStatus = CheckStatus.Checking;
+    private string? _ghUsername;
+    private CheckStatus _azAuthStatus = CheckStatus.Checking;
+    private bool _copilotCliAvailable;
+    private const string _ghLoginCmd = "gh auth login";
+
+    protected override void OnInitialized()
+    {
+        _tools = PrerequisiteCheckService.GetDefaultTools()
+            .Select(t => new ToolViewModel(t)).ToList();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            var tasks = _tools.Select(async tool =>
+            {
+                var result = await PrereqService.CheckToolAsync(tool.Definition.CheckCommand, _cts.Token);
+                tool.Status = result.Found ? CheckStatus.Found : CheckStatus.NotFound;
+                tool.Version = result.Version ?? (result.Found ? "installed" : null);
+            });
+            await Task.WhenAll(tasks);
+
+            // Auto-configure CLI wrapper based on agency availability.
+            // If agency is found, ensure WrapperCommand is "agency".
+            // If not found, clear it so the appsettings default doesn't break this user.
+            var agencyTool = _tools.FirstOrDefault(t => t.Definition.Name == "Agency CLI");
+            if (agencyTool is not null)
+            {
+                var settings = await DevelopSettingsService.LoadAsync(_cts.Token);
+                if (agencyTool.Status == CheckStatus.Found)
+                {
+                    if (string.IsNullOrWhiteSpace(settings.WrapperCommand))
+                    {
+                        settings.WrapperCommand = "agency";
+                        await DevelopSettingsService.SaveAsync(settings, _cts.Token);
+                    }
+                }
+                else
+                {
+                    // Agency not installed — override appsettings default to prevent errors
+                    if (settings.WrapperCommand is null || settings.WrapperCommand != "")
+                    {
+                        settings.WrapperCommand = "";
+                        await DevelopSettingsService.SaveAsync(settings, _cts.Token);
+                    }
+                }
+            }
+
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task GoToStep3()
+    {
+        _currentStep = 3;
+        var copilotTool = _tools.FirstOrDefault(t => t.Definition.Name == "GitHub Copilot CLI");
+        _copilotCliAvailable = copilotTool?.Status == CheckStatus.Found;
+
+        _ghAuthStatus = CheckStatus.Checking;
+        _azAuthStatus = CheckStatus.Checking;
+        StateHasChanged();
+
+        var ghTask = Task.Run(async () =>
+        {
+            var (auth, user) = await PrereqService.CheckGitHubAuthAsync(_cts.Token);
+            _ghAuthStatus = auth ? CheckStatus.Found : CheckStatus.NotFound;
+            _ghUsername = user;
+        });
+        var azTask = Task.Run(async () =>
+        {
+            _azAuthStatus = await PrereqService.CheckAzureAuthAsync(_cts.Token)
+                ? CheckStatus.Found : CheckStatus.NotFound;
+        });
+        await Task.WhenAll(ghTask, azTask);
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private bool RequiredToolsInstalled() =>
+        _tools.Where(t => !t.Definition.IsOptional).All(t => t.Status == CheckStatus.Found);
+
+    private async Task CopyToClipboard(string text)
+    {
+        try { await JS.InvokeVoidAsync("navigator.clipboard.writeText", text); }
+        catch { }
+    }
+
+    private async Task ConfirmInstall()
+    {
+        var tool = _pendingInstallTool;
+        _pendingInstallTool = null;
+        if (tool is not null)
+            await InstallToolAsync(tool);
+    }
+
+    private async Task InstallToolAsync(ToolViewModel tool)
+    {
+        if (tool.IsInstalling || !tool.Definition.CanAutoInstall) return;
+
+        tool.IsInstalling = true;
+        tool.InstallMessage = null;
+        StateHasChanged();
+
+        try
+        {
+            var result = await PrereqService.InstallToolAsync(tool.Definition, _cts.Token);
+            if (result.Succeeded)
+            {
+                tool.Status = CheckStatus.Found;
+                tool.Version = result.Version ?? "installed";
+                tool.InstallResult = CheckStatus.Found;
+                tool.InstallMessage = result.Message;
+            }
+            else
+            {
+                tool.InstallResult = CheckStatus.NotFound;
+                tool.InstallMessage = result.Message;
+            }
+        }
+        catch (Exception ex)
+        {
+            tool.InstallResult = CheckStatus.NotFound;
+            tool.InstallMessage = ex.Message.Length > 80 ? ex.Message[..80] + "…" : ex.Message;
+        }
+        finally
+        {
+            tool.IsInstalling = false;
+            try { if (!_disposed) await InvokeAsync(StateHasChanged); } catch { }
+        }
+    }
+
+    private void OpenDevelop()
+    {
+        DismissWelcomeFlag();
+        Navigation.NavigateTo("/develop");
+    }
+
+    private void OpenWalkthrough()
+    {
+        DismissWelcomeFlag();
+        Navigation.NavigateTo("/walkthrough/1");
+    }
+
+    private void SkipWelcome()
+    {
+        DismissWelcomeFlag();
+        Navigation.NavigateTo("/");
+    }
+
+    private void DismissWelcomeFlag()
+    {
+        var settings = DevelopSettingsService.Current;
+        if (settings is not null)
+        {
+            settings.ShowWelcomeWizard = false;
+            _ = DevelopSettingsService.SaveAsync(settings);
+        }
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        _cts.Cancel();
+        _cts.Dispose();
+    }
+
+    private enum CheckStatus { Checking, Found, NotFound }
+
+    /// <summary>UI-only view model wrapping a PrerequisiteTool with mutable display state.</summary>
+    private class ToolViewModel
+    {
+        public PrerequisiteTool Definition { get; }
+        public CheckStatus Status { get; set; } = CheckStatus.Checking;
+        public string? Version { get; set; }
+        public CheckStatus InstallResult { get; set; } = CheckStatus.Checking;
+        public string? InstallMessage { get; set; }
+        public bool IsInstalling { get; set; }
+        public bool ShowInfo { get; set; }
+
+        public ToolViewModel(PrerequisiteTool definition) => Definition = definition;
+    }
+}

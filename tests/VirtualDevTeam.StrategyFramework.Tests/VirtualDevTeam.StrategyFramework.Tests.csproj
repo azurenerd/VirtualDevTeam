@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.2" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="Moq" Version="4.20.70" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <PackageReference Include="Xunit.SkippableFact" Version="1.4.13" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\VirtualDevTeam.Core\VirtualDevTeam.Core.csproj" />
+    <ProjectReference Include="..\..\src\VirtualDevTeam.Agents\VirtualDevTeam.Agents.csproj" />
+    <ProjectReference Include="..\..\src\VirtualDevTeam.McpServer\VirtualDevTeam.McpServer.csproj" />
+    <!-- FakeCopilotCli: standalone exe used by orphan-cleanup integration tests.
+         ReferenceOutputAssembly=false because we don't need its assembly on
+         our classpath — we invoke it as a child process. But we DO want MSBuild
+         to build it so the tests can resolve its output path at runtime. -->
+    <ProjectReference Include="..\VirtualDevTeam.FakeCopilotCli\VirtualDevTeam.FakeCopilotCli.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+</Project>

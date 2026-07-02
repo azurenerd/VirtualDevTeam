@@ -1,0 +1,333 @@
+@page "/issues"
+@using VirtualDevTeam.Core.DevPlatform.Models
+@using VirtualDevTeam.Dashboard.Services
+@inject IDashboardDataService DataService
+@inject IPlatformLinkService LinkService
+@rendermode InteractiveServer
+@implements IDisposable
+
+<div class="page-header" data-testid="page-issues">
+    <h1 class="page-title">📋 Issues</h1>
+    <div class="header-badges">
+        <span class="badge badge-success">@_openCount Open</span>
+        <span class="badge badge-purple">@_closedCount Closed</span>
+    </div>
+</div>
+
+<div class="issue-toolbar">
+    <div class="issue-filter-bar" data-testid="issue-filter-bar">
+        <button class="issue-filter-btn @(_stateFilter == "open" ? "active" : "")" @onclick='() => SetStateFilter("open")' data-testid="issue-filter-open">
+            <span class="issue-state-icon issue-state-open">●</span> Open <span class="issue-filter-count">@_openCount</span>
+        </button>
+        <button class="issue-filter-btn @(_stateFilter == "closed" ? "active" : "")" @onclick='() => SetStateFilter("closed")' data-testid="issue-filter-closed">
+            <span class="issue-state-icon issue-state-closed">✔</span> Closed <span class="issue-filter-count">@_closedCount</span>
+        </button>
+        <button class="issue-filter-btn @(_stateFilter == "all" ? "active" : "")" @onclick='() => SetStateFilter("all")' data-testid="issue-filter-all">
+            All <span class="issue-filter-count">@_allIssues.Count</span>
+        </button>
+    </div>
+
+    <div class="issue-filters-right">
+        @* Label filter dropdown *@
+        <div class="issue-dropdown" data-testid="issue-dropdown-labels">
+            <button class="issue-dropdown-btn" @onclick="ToggleLabelDropdown" data-testid="issue-dropdown-btn-labels">
+                Labels ▾
+            </button>
+            @if (_showLabelDropdown)
+            {
+                <div class="issue-dropdown-menu" data-testid="issue-dropdown-menu-labels">
+                    <button class="issue-dropdown-item @(_labelFilter == null ? "active" : "")"
+                            @onclick="() => SetLabelFilter(null)" data-testid="issue-dropdown-item-label-all">All labels</button>
+                    @foreach (var label in _availableLabels)
+                    {
+                        <button class="issue-dropdown-item @(_labelFilter == label ? "active" : "")"
+                                @onclick="() => SetLabelFilter(label)" data-testid="issue-dropdown-item-label" data-label-value="@label">@label</button>
+                    }
+                </div>
+            }
+        </div>
+
+        @* Assignee filter dropdown *@
+        <div class="issue-dropdown" data-testid="issue-dropdown-assignees">
+            <button class="issue-dropdown-btn" @onclick="ToggleAssigneeDropdown" data-testid="issue-dropdown-btn-assignees">
+                Assignees ▾
+            </button>
+            @if (_showAssigneeDropdown)
+            {
+                <div class="issue-dropdown-menu" data-testid="issue-dropdown-menu-assignees">
+                    <button class="issue-dropdown-item @(_assigneeFilter == null ? "active" : "")"
+                            @onclick="() => SetAssigneeFilter(null)" data-testid="issue-dropdown-item-assignee-all">All assignees</button>
+                    @foreach (var assignee in _availableAssignees)
+                    {
+                        <button class="issue-dropdown-item @(_assigneeFilter == assignee ? "active" : "")"
+                                @onclick="() => SetAssigneeFilter(assignee)" data-testid="issue-dropdown-item-assignee" data-assignee-value="@assignee">@assignee</button>
+                    }
+                </div>
+            }
+        </div>
+
+        @* Sort dropdown *@
+        <div class="issue-dropdown" data-testid="issue-dropdown-sort">
+            <button class="issue-dropdown-btn" @onclick="ToggleSortDropdown" data-testid="issue-dropdown-btn-sort">
+                ⇅ @GetSortLabel() ▾
+            </button>
+            @if (_showSortDropdown)
+            {
+                <div class="issue-dropdown-menu" data-testid="issue-dropdown-menu-sort">
+                    <button class="issue-dropdown-item @(_sortBy == "newest" ? "active" : "")"
+                            @onclick='() => SetSort("newest")' data-testid="issue-sort-newest">Newest</button>
+                    <button class="issue-dropdown-item @(_sortBy == "oldest" ? "active" : "")"
+                            @onclick='() => SetSort("oldest")' data-testid="issue-sort-oldest">Oldest</button>
+                    <button class="issue-dropdown-item @(_sortBy == "most-commented" ? "active" : "")"
+                            @onclick='() => SetSort("most-commented")' data-testid="issue-sort-most-commented">Most commented</button>
+                    <button class="issue-dropdown-item @(_sortBy == "recently-updated" ? "active" : "")"
+                            @onclick='() => SetSort("recently-updated")' data-testid="issue-sort-recently-updated">Recently updated</button>
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+@if (_loading)
+{
+    <div class="issue-loading">Loading issues...</div>
+}
+else if (_filteredIssues.Count == 0)
+{
+    <div class="issue-empty">
+        <span class="issue-empty-icon">📭</span>
+        <span>No issues match this filter.</span>
+    </div>
+}
+else
+{
+    <div class="issue-list" data-testid="issue-list">
+        @foreach (var issue in _filteredIssues)
+        {
+            var stateClass = issue.State == "open" ? "open" : "closed";
+            <div class="issue-card @(issue.Labels.Contains("blocker") ? "issue-blocked" : "")" data-testid="issue-card" data-issue-number="@issue.Number">
+                <div class="issue-state-indicator @(issue.Labels.Contains("blocker") ? "issue-state-blocked" : $"issue-state-{stateClass}")"></div>
+                <div class="issue-content">
+                    <div class="issue-title-row">
+                        <span class="issue-state-badge @(issue.Labels.Contains("blocker") ? "issue-state-blocked" : $"issue-state-{stateClass}")">
+                            @if (issue.Labels.Contains("blocker"))
+                            {
+                                <span title="Blocked">🚫</span>
+                            }
+                            else if (issue.State == "open")
+                            {
+                                <span title="Open">◉</span>
+                            }
+                            else
+                            {
+                                <span title="Closed">✔</span>
+                            }
+                        </span>
+                        <a class="issue-title" href="@LinkService.BuildIssueUrl(issue.Number, issue.Url)" title="View issue #@issue.Number">@issue.Title</a>
+                        <a class="issue-external-link" href="@issue.Url" target="_blank" rel="noopener" title="Open on @LinkService.PlatformDisplayName">↗</a>
+                        @foreach (var label in issue.Labels)
+                        {
+                            <span class="issue-label @GetLabelClass(label)">@label</span>
+                        }
+                    </div>
+                    <div class="issue-meta">
+                        <span class="issue-number">#@issue.Number</span>
+                        @if (!string.IsNullOrEmpty(issue.Author))
+                        {
+                            <span class="issue-author">by @issue.Author</span>
+                        }
+                        <span class="issue-date">
+                            @if (issue.ClosedAt.HasValue)
+                            {
+                                <span>was closed <LocalTimeText Value="issue.ClosedAt.Value" /></span>
+                            }
+                            else
+                            {
+                                <span>opened <LocalTimeText Value="issue.CreatedAt" /></span>
+                            }
+                        </span>
+                        @if (!string.IsNullOrEmpty(issue.AssignedAgent))
+                        {
+                            <span class="issue-assignee">→ @issue.AssignedAgent</span>
+                        }
+                    </div>
+                </div>
+                <div class="issue-stats">
+                    @if (issue.CommentCount > 0)
+                    {
+                        <span class="issue-comment-count" title="@issue.CommentCount comments">
+                            💬 @issue.CommentCount
+                        </span>
+                    }
+                </div>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    private List<PlatformWorkItem> _allIssues = new();
+    private List<PlatformWorkItem> _filteredIssues = new();
+    private string _stateFilter = "open";
+    private string? _labelFilter;
+    private string? _assigneeFilter;
+    private string _sortBy = "newest";
+    private bool _loading = true;
+
+    private bool _showLabelDropdown;
+    private bool _showAssigneeDropdown;
+    private bool _showSortDropdown;
+
+    private List<string> _availableLabels = new();
+    private List<string> _availableAssignees = new();
+
+    private int _openCount => _allIssues.Count(i => i.State == "open");
+    private int _closedCount => _allIssues.Count(i => i.State != "open");
+
+    protected override async Task OnInitializedAsync()
+    {
+        DataService.OnChange += OnDataChanged;
+        await LoadIssues();
+    }
+
+    private async Task LoadIssues()
+    {
+        try
+        {
+            var issues = await DataService.GetWorkItemsAsync();
+            _allIssues = issues.ToList();
+
+            // Build filter options from data
+            _availableLabels = _allIssues
+                .SelectMany(i => i.Labels)
+                .Distinct()
+                .OrderBy(l => l)
+                .ToList();
+
+            _availableAssignees = _allIssues
+                .Where(i => !string.IsNullOrEmpty(i.AssignedAgent))
+                .Select(i => i.AssignedAgent!)
+                .Distinct()
+                .OrderBy(a => a)
+                .ToList();
+
+            ApplyFilter();
+        }
+        catch
+        {
+            // Graceful degradation
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void SetStateFilter(string filter)
+    {
+        _stateFilter = filter;
+        ApplyFilter();
+    }
+
+    private void SetLabelFilter(string? label)
+    {
+        _labelFilter = label;
+        _showLabelDropdown = false;
+        ApplyFilter();
+    }
+
+    private void SetAssigneeFilter(string? assignee)
+    {
+        _assigneeFilter = assignee;
+        _showAssigneeDropdown = false;
+        ApplyFilter();
+    }
+
+    private void SetSort(string sort)
+    {
+        _sortBy = sort;
+        _showSortDropdown = false;
+        ApplyFilter();
+    }
+
+    private void ToggleLabelDropdown()
+    {
+        _showLabelDropdown = !_showLabelDropdown;
+        _showAssigneeDropdown = false;
+        _showSortDropdown = false;
+    }
+
+    private void ToggleAssigneeDropdown()
+    {
+        _showAssigneeDropdown = !_showAssigneeDropdown;
+        _showLabelDropdown = false;
+        _showSortDropdown = false;
+    }
+
+    private void ToggleSortDropdown()
+    {
+        _showSortDropdown = !_showSortDropdown;
+        _showLabelDropdown = false;
+        _showAssigneeDropdown = false;
+    }
+
+    private void ApplyFilter()
+    {
+        IEnumerable<PlatformWorkItem> result = _stateFilter switch
+        {
+            "open" => _allIssues.Where(i => i.State == "open"),
+            "closed" => _allIssues.Where(i => i.State != "open"),
+            _ => _allIssues
+        };
+
+        if (_labelFilter is not null)
+            result = result.Where(i => i.Labels.Contains(_labelFilter));
+
+        if (_assigneeFilter is not null)
+            result = result.Where(i => i.AssignedAgent == _assigneeFilter);
+
+        result = _sortBy switch
+        {
+            "oldest" => result.OrderBy(i => i.CreatedAt),
+            "most-commented" => result.OrderByDescending(i => i.CommentCount),
+            "recently-updated" => result.OrderByDescending(i => i.UpdatedAt ?? i.CreatedAt),
+            _ => result.OrderByDescending(i => i.CreatedAt)  // newest
+        };
+
+        _filteredIssues = result.ToList();
+    }
+
+    private string GetSortLabel() => _sortBy switch
+    {
+        "oldest" => "Oldest",
+        "most-commented" => "Most commented",
+        "recently-updated" => "Recently updated",
+        _ => "Newest"
+    };
+
+    private async void OnDataChanged()
+    {
+        await LoadIssues();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private static string GetLabelClass(string label) => label switch
+    {
+        "in-progress" or "status:in-progress" => "label-progress",
+        "ready-for-review" => "label-review",
+        "blocker" => "label-blocker",
+        "agent-stuck" => "label-stuck",
+        "engineering-task" => "label-engineering",
+        "executive-request" => "label-executive",
+        "resource-request" => "label-resource",
+        "status:assigned" => "label-assigned",
+        "status:completed" => "label-completed",
+        _ when label.StartsWith("complexity:") => "label-complexity",
+        _ => "label-default"
+    };
+
+    public void Dispose()
+    {
+        DataService.OnChange -= OnDataChanged;
+    }
+}

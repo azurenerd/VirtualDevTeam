@@ -1,0 +1,544 @@
+@page "/repository/pull-request/{Number:int}"
+@using System.Net.Http.Json
+@using VirtualDevTeam.Core.DevPlatform.Capabilities
+@using VirtualDevTeam.Core.DevPlatform.Models
+@inject IPullRequestService PrService
+@inject IReviewService ReviewService
+@inject NavigationManager Nav
+@inject IServiceProvider Services
+@inject VirtualDevTeam.Dashboard.Services.IPlatformLinkService LinkService
+@rendermode InteractiveServer
+
+@*
+    In-dashboard PR detail page.
+
+    Fetches the PR + comments + review threads + changed-files directly from the capability
+    services (same delegate shape as the /api/dashboard/platform/pull-request/{n} endpoint).
+    The HTTP endpoint stays for external callers and for the standalone Dashboard.Host;
+    the embedded dashboard short-circuits to the in-process services for speed + simpler DI.
+
+    Renders:
+      - Header: state badge, #number, title, author, opened time, branch arrow, mergeable badge
+      - Labels row
+      - "View on GitHub / Azure DevOps" external-link button (right-aligned)
+      - 4-tab body: Description (Markdig) / Comments (N) / Reviews (N) / Files (count)
+      - Back link to /repository/pull-requests
+
+    Primarily read-only; operator feedback posts through the Runner API so the author agent
+    can pick up requested changes without bypassing existing orchestration.
+*@
+
+<PageTitle>@($"PR #{Number}") · VirtualDevTeam</PageTitle>
+
+<div class="pr-detail-page">
+    <div class="pr-detail-breadcrumb">
+        <a href="/repository/pull-requests">← Back to Pull Requests</a>
+    </div>
+
+    @if (_error is not null)
+    {
+        <div class="pr-detail-error">
+            <h2>Could not load PR #@Number</h2>
+            <p>@_error</p>
+        </div>
+    }
+    else if (_pr is null)
+    {
+        <div class="pr-detail-loading">
+            <p>Loading PR #@Number…</p>
+        </div>
+    }
+    else
+    {
+        var pr = _pr;
+        <div class="pr-detail-header">
+            <div class="pr-detail-header-left">
+                <StateBadge State="@pr.State" IsMerged="@pr.IsMerged" IsPullRequest="true" />
+                <span class="pr-detail-number">#@pr.Number</span>
+                <h1 class="pr-detail-title">@pr.Title</h1>
+            </div>
+            <div class="pr-detail-header-right">
+                <button class="config-btn-primary"
+                        @onclick="OpenFeedbackModal"
+                        disabled="@(!CanSubmitFeedback())"
+                        title="@(CanSubmitFeedback() ? "Submit feedback for the author agent to implement" : "Feedback can only be submitted on open PRs")">
+                    💬 Add Changes
+                </button>
+                <PlatformLinkButton Url="@pr.Url" />
+            </div>
+        </div>
+
+        <div class="pr-detail-subheader">
+            <span class="pr-detail-author">@(string.IsNullOrWhiteSpace(pr.AssignedAgent) ? "(unassigned)" : pr.AssignedAgent)</span>
+            <span class="pr-detail-sep">·</span>
+            <span class="pr-detail-time" title="@pr.CreatedAt.ToString("u")">opened <LocalTimeText Value="pr.CreatedAt" /></span>
+            @if (pr.MergedAt is { } mergedAt)
+            {
+                <span class="pr-detail-sep">·</span>
+                <span class="pr-detail-time" title="@mergedAt.ToString("u")">merged <LocalTimeText Value="mergedAt" /></span>
+            }
+            else if (pr.UpdatedAt is { } updatedAt && updatedAt > pr.CreatedAt)
+            {
+                <span class="pr-detail-sep">·</span>
+                <span class="pr-detail-time" title="@updatedAt.ToString("u")">updated <LocalTimeText Value="updatedAt" /></span>
+            }
+            <span class="pr-detail-sep">·</span>
+            <span class="pr-detail-branch">
+                <code>@pr.HeadBranch</code> → <code>@pr.BaseBranch</code>
+            </span>
+            @if (!string.IsNullOrWhiteSpace(pr.MergeableState))
+            {
+                <span class="pr-detail-sep">·</span>
+                <span class="pr-detail-mergeable mergeable-@pr.MergeableState.ToLowerInvariant()">@pr.MergeableState</span>
+            }
+        </div>
+
+        <LabelChips Labels="@pr.Labels" />
+
+        @if (_latestOperatorFeedback is not null)
+        {
+            <div class="feedback-status @_feedbackStatusClass">
+                @_feedbackStatusIcon @_feedbackStatusText
+            </div>
+        }
+
+        <div class="pr-detail-tabs">
+            <button class="pr-detail-tab @(_activeTab == "description" ? "active" : "")" @onclick='() => _activeTab = "description"'>
+                Description
+            </button>
+            <button class="pr-detail-tab @(_activeTab == "comments" ? "active" : "")" @onclick='() => _activeTab = "comments"'>
+                Comments <span class="pr-detail-tab-count">@_comments.Count</span>
+            </button>
+            <button class="pr-detail-tab @(_activeTab == "reviews" ? "active" : "")" @onclick='() => _activeTab = "reviews"'>
+                Reviews <span class="pr-detail-tab-count">@_reviewThreads.Count</span>
+            </button>
+            <button class="pr-detail-tab @(_activeTab == "files" ? "active" : "")" @onclick='() => _activeTab = "files"'>
+                Files <span class="pr-detail-tab-count">@_changedFiles.Count</span>
+            </button>
+        </div>
+
+        <div class="pr-detail-tab-body">
+            @if (_activeTab == "description")
+            {
+                <MarkdownBody Markdown="@pr.Body" />
+            }
+            else if (_activeTab == "comments")
+            {
+                <CommentList Items="@_comments" />
+            }
+            else if (_activeTab == "reviews")
+            {
+                @if (_reviewThreads.Count == 0)
+                {
+                    <div class="comment-list-empty"><em>No review threads.</em></div>
+                }
+                else
+                {
+                    var unresolvedByFile = _reviewThreads.Where(t => !t.IsResolved).GroupBy(t => t.FilePath);
+                    var resolvedThreads = _reviewThreads.Where(t => t.IsResolved).ToList();
+
+                    @foreach (var fileGroup in unresolvedByFile)
+                    {
+                        <div class="pr-review-file">
+                            <div class="pr-review-file-header">
+                                <code>@(string.IsNullOrWhiteSpace(fileGroup.Key) ? "(general)" : fileGroup.Key)</code>
+                                <span class="pr-review-file-count">@fileGroup.Count() thread(s)</span>
+                            </div>
+                            @foreach (var t in fileGroup)
+                            {
+                                <div class="pr-review-thread">
+                                    <div class="pr-review-thread-header">
+                                        <span class="comment-author">@t.Author</span>
+                                        @if (t.Line is int line)
+                                        {
+                                            <span class="pr-review-line">line @line</span>
+                                        }
+                                        <LocalTimeText Value="t.CreatedAt" CssClass="comment-time" title="@t.CreatedAt.ToString("u")" />
+                                    </div>
+                                    <div class="pr-review-thread-body">
+                                        <MarkdownBody Markdown="@t.Body" />
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    }
+                    @if (resolvedThreads.Count > 0)
+                    {
+                        <details class="pr-review-resolved">
+                            <summary>Resolved threads (@resolvedThreads.Count)</summary>
+                            @foreach (var t in resolvedThreads)
+                            {
+                                <div class="pr-review-thread pr-review-thread-resolved">
+                                    <div class="pr-review-thread-header">
+                                        <code class="pr-review-file-inline">@(string.IsNullOrWhiteSpace(t.FilePath) ? "(general)" : t.FilePath)</code>
+                                        @if (t.Line is int line)
+                                        {
+                                            <span class="pr-review-line">line @line</span>
+                                        }
+                                        <span class="comment-author">@t.Author</span>
+                                        <LocalTimeText Value="t.CreatedAt" CssClass="comment-time" title="@t.CreatedAt.ToString("u")" />
+                                    </div>
+                                    <div class="pr-review-thread-body">
+                                        <MarkdownBody Markdown="@t.Body" />
+                                    </div>
+                                </div>
+                            }
+                        </details>
+                    }
+                }
+            }
+            else if (_activeTab == "files")
+            {
+                @if (_changedFiles.Count == 0)
+                {
+                    <div class="comment-list-empty"><em>No changed files reported (branch may have been deleted post-merge).</em></div>
+                }
+                else
+                {
+                    <ul class="pr-files-list">
+                        @foreach (var f in _changedFiles)
+                        {
+                            var isImage = IsImageFile(f);
+                            <li class="pr-file-row @(isImage ? "pr-file-image" : "")">
+                                @if (isImage && _pr is not null)
+                                {
+                                    @* Inline thumbnail + click-to-popup for image files. The raw URL
+                                       is the platform's "raw" content URL on the PR's head branch.
+                                       For GitHub: https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{path}
+                                       Built lazily (no extra service call) from the PR's head ref. *@
+                                    var rawUrl = BuildRawFileUrl(_pr, f);
+                                    if (!string.IsNullOrEmpty(rawUrl))
+                                    {
+                                        <button class="pr-file-thumb-btn" @onclick="() => OpenImagePreview(rawUrl, f)" title="Click to preview @f">
+                                            <img class="pr-file-thumb" src="@rawUrl" alt="@f" loading="lazy" />
+                                        </button>
+                                    }
+                                }
+                                <a href="/repository/files/@(f)?branch=@(Uri.EscapeDataString(_pr?.HeadBranch ?? ""))" class="pr-file-name-link" title="View in VDT Code Browser">
+                                    <code>@f</code>
+                                </a>
+                                @{
+                                    var fileUrl = BuildFileViewUrl(_pr, f);
+                                }
+                                @if (!string.IsNullOrEmpty(fileUrl))
+                                {
+                                    <a href="@fileUrl" target="_blank" rel="noopener" class="pr-file-link" title="Open in platform">↗</a>
+                                }
+                            </li>
+                        }
+                    </ul>
+                }
+
+                @if (_previewImageUrl is not null)
+                {
+                    <div class="pr-image-preview-overlay" @onclick="CloseImagePreview">
+                        <div class="pr-image-preview-modal" @onclick:stopPropagation="true">
+                            <div class="pr-image-preview-header">
+                                <span class="pr-image-preview-title">@_previewImagePath</span>
+                                <button class="pr-image-preview-close" @onclick="CloseImagePreview">×</button>
+                            </div>
+                            <img class="pr-image-preview-img" src="@_previewImageUrl" alt="@_previewImagePath" />
+                        </div>
+                    </div>
+                }
+            }
+        </div>
+    }
+</div>
+
+@if (_showFeedbackModal)
+{
+    <div class="modal-overlay" @onclick="CloseFeedbackModal">
+        <div class="modal-dialog pr-feedback-modal" @onclick:stopPropagation="true">
+            <div class="modal-header">
+                <h3 class="modal-title">Submit Feedback</h3>
+                <button class="modal-close" @onclick="CloseFeedbackModal">✕</button>
+            </div>
+            <div class="modal-body">
+                <p class="modal-hint">Describe the changes you'd like the author agent to make. The agent will implement your feedback and respond with what was done.</p>
+                @if (!string.IsNullOrWhiteSpace(_feedbackError))
+                {
+                    <div class="config-pat-result config-pat-error">
+                        <span>@_feedbackError</span>
+                    </div>
+                }
+                <textarea class="config-input" rows="6" @bind="_feedbackText" @bind:event="oninput" placeholder="e.g., Change the button color to blue, add a loading spinner..."></textarea>
+            </div>
+            <div class="modal-footer">
+                <button class="config-btn-secondary" @onclick="CloseFeedbackModal">Cancel</button>
+                <button class="config-btn-primary" @onclick="SubmitFeedbackAsync" disabled="@(string.IsNullOrWhiteSpace(_feedbackText) || _submittingFeedback)">
+                    @if (_submittingFeedback)
+                    {
+                        <span>Submitting...</span>
+                    }
+                    else
+                    {
+                        <span>Submit Feedback</span>
+                    }
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public int Number { get; set; }
+
+    private const string OperatorFeedbackMarker = "<!-- vdt:operator-feedback v1 -->";
+    private static readonly System.Text.RegularExpressions.Regex ReworkCommentPattern = new(
+        @"\*\*\[(?<agent>.+?)\]\s*Rework\*\*",
+        System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    private static readonly string[] _imageExts = { ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg" };
+
+    private PlatformPullRequest? _pr;
+    private IReadOnlyList<PlatformComment> _comments = Array.Empty<PlatformComment>();
+    private IReadOnlyList<PlatformReviewThread> _reviewThreads = Array.Empty<PlatformReviewThread>();
+    private IReadOnlyList<string> _changedFiles = Array.Empty<string>();
+    private PlatformComment? _latestOperatorFeedback;
+    private string? _error;
+    private string _activeTab = "description";
+    private int _loadedNumber = -1;
+    private string? _previewImageUrl;
+    private string? _previewImagePath;
+    private bool _showFeedbackModal;
+    private string _feedbackText = "";
+    private bool _submittingFeedback;
+    private string? _feedbackError;
+    private string _feedbackStatusClass = "pending";
+    private string _feedbackStatusIcon = "⏳";
+    private string _feedbackStatusText = "Operator feedback pending";
+
+    protected override async Task OnParametersSetAsync()
+    {
+        // Skip reload on tab-click re-renders — only fetch when route param changes.
+        if (_loadedNumber == Number) return;
+        _loadedNumber = Number;
+
+        _pr = null;
+        _comments = Array.Empty<PlatformComment>();
+        _reviewThreads = Array.Empty<PlatformReviewThread>();
+        _changedFiles = Array.Empty<string>();
+        _latestOperatorFeedback = null;
+        _error = null;
+        _feedbackError = null;
+        _feedbackText = "";
+        _showFeedbackModal = false;
+
+        try
+        {
+            if (!await LoadPullRequestAsync())
+            {
+                return;
+            }
+
+            await LoadCommentsAsync();
+
+            // Sub-call try/catch with empty fallback — same contract as the API endpoint.
+            try { _reviewThreads = await ReviewService.GetThreadsAsync(Number); }
+            catch { _reviewThreads = Array.Empty<PlatformReviewThread>(); }
+
+            try { _changedFiles = await PrService.GetChangedFilesAsync(Number); }
+            catch { _changedFiles = Array.Empty<string>(); }
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private bool CanSubmitFeedback()
+    {
+        // Only allow on open, non-merged PRs
+        return _pr is not null
+            && _pr.State.Equals("open", StringComparison.OrdinalIgnoreCase)
+            && !_pr.IsMerged;
+    }
+
+    private void OpenFeedbackModal()
+    {
+        _feedbackError = null;
+        _showFeedbackModal = true;
+    }
+
+    private void CloseFeedbackModal()
+    {
+        _showFeedbackModal = false;
+    }
+
+    private async Task SubmitFeedbackAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_feedbackText) || _pr is null) return;
+
+        _submittingFeedback = true;
+        _feedbackError = null;
+
+        try
+        {
+            using var client = GetApiClient();
+            using var response = await client.PostAsJsonAsync(
+                $"/api/dashboard/pull-requests/{Number}/operator-feedback",
+                new { feedback = _feedbackText.Trim() });
+
+            if (response.IsSuccessStatusCode)
+            {
+                _feedbackText = "";
+                _showFeedbackModal = false;
+                await LoadPullRequestAsync();
+                await LoadCommentsAsync();
+            }
+            else
+            {
+                var message = await response.Content.ReadAsStringAsync();
+                _feedbackError = string.IsNullOrWhiteSpace(message)
+                    ? $"Failed: {response.StatusCode}"
+                    : message;
+            }
+        }
+        catch (Exception ex)
+        {
+            _feedbackError = ex.Message;
+        }
+        finally
+        {
+            _submittingFeedback = false;
+        }
+    }
+
+    private async Task<bool> LoadPullRequestAsync(CancellationToken ct = default)
+    {
+        var pr = await PrService.GetAsync(Number, ct);
+        if (pr is null)
+        {
+            _error = $"PR #{Number} was not found on the platform.";
+            _pr = null;
+            UpdateFeedbackStatus();
+            return false;
+        }
+
+        _pr = pr;
+        UpdateFeedbackStatus();
+        return true;
+    }
+
+    private async Task LoadCommentsAsync(CancellationToken ct = default)
+    {
+        try { _comments = await ReviewService.GetCommentsAsync(Number, ct); }
+        catch { _comments = Array.Empty<PlatformComment>(); }
+
+        UpdateFeedbackStatus();
+    }
+
+    private HttpClient GetApiClient()
+    {
+        var factory = Services.GetService<IHttpClientFactory>();
+        return factory?.CreateClient("RunnerApi")
+               ?? new HttpClient { BaseAddress = Nav.ToAbsoluteUri("/") };
+    }
+
+    private void UpdateFeedbackStatus()
+    {
+        _latestOperatorFeedback = _comments
+            .Where(c => c.Body.Contains(OperatorFeedbackMarker, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(c => c.CreatedAt)
+            .FirstOrDefault();
+
+        if (_latestOperatorFeedback is null)
+        {
+            _feedbackStatusClass = "pending";
+            _feedbackStatusIcon = "⏳";
+            _feedbackStatusText = "Operator feedback pending";
+            return;
+        }
+
+        var feedbackCreatedAt = _latestOperatorFeedback.CreatedAt;
+        var hasAddressedComment = _comments.Any(c =>
+            c.CreatedAt > feedbackCreatedAt
+            && c.Body.Contains("Addressed feedback", StringComparison.OrdinalIgnoreCase)
+            && c.Body.Contains("Operator", StringComparison.OrdinalIgnoreCase)
+            && ReworkCommentPattern.IsMatch(c.Body));
+
+        if (hasAddressedComment || (_pr?.MergedAt is { } mergedAt && mergedAt >= feedbackCreatedAt))
+        {
+            _feedbackStatusClass = "done";
+            _feedbackStatusIcon = "✅";
+            _feedbackStatusText = "Latest operator feedback has been addressed";
+            return;
+        }
+
+        var hasActivityAfterFeedback = _comments.Any(c =>
+            c.CreatedAt > feedbackCreatedAt
+            && !c.Body.Contains(OperatorFeedbackMarker, StringComparison.OrdinalIgnoreCase));
+
+        var isMarkedInProgress = _pr?.Labels.Any(label =>
+            string.Equals(label, "in-progress", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(label, "status:in-progress", StringComparison.OrdinalIgnoreCase)) == true;
+
+        if (isMarkedInProgress || hasActivityAfterFeedback)
+        {
+            _feedbackStatusClass = "in-progress";
+            _feedbackStatusIcon = "🔄";
+            _feedbackStatusText = "Author agent is working on the latest feedback";
+            return;
+        }
+
+        _feedbackStatusClass = "pending";
+        _feedbackStatusIcon = "⏳";
+        _feedbackStatusText = "Latest operator feedback is queued for the author agent";
+    }
+
+    private static bool IsImageFile(string path) =>
+        !string.IsNullOrEmpty(path) && _imageExts.Contains(System.IO.Path.GetExtension(path), StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Build a "raw content" URL for displaying the image inline. GitHub's pattern is
+    /// <c>https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{path}</c>; for ADO
+    /// we'd need a different shape (not yet wired since the platform-neutral PR model
+    /// doesn't expose enough metadata here — falls back to null in that case).
+    /// </summary>
+    private static string? BuildRawFileUrl(PlatformPullRequest pr, string path)
+    {
+        if (pr is null || string.IsNullOrEmpty(pr.HeadBranch) || string.IsNullOrEmpty(path)) return null;
+        // The PlatformPullRequest carries a Url like https://github.com/{owner}/{repo}/pull/N.
+        // Parse {owner}/{repo} out of it for the raw-content URL.
+        var prUrl = pr.Url ?? "";
+        var m = System.Text.RegularExpressions.Regex.Match(prUrl,
+            @"^https?://github\.com/(?<owner>[^/]+)/(?<repo>[^/]+)/pull/\d+");
+        if (!m.Success) return null;
+        var owner = m.Groups["owner"].Value;
+        var repo = m.Groups["repo"].Value;
+        var branch = pr.HeadBranch;
+        return $"https://raw.githubusercontent.com/{owner}/{repo}/{Uri.EscapeDataString(branch)}/{string.Join("/", path.Split('/').Select(Uri.EscapeDataString))}";
+    }
+
+    /// <summary>
+    /// Build a URL to view the file on the dev platform at the PR's head SHA.
+    /// GitHub: https://github.com/{owner}/{repo}/blob/{headSha}/{path}
+    /// ADO: returns null (not yet wired — would need org/project/repo extraction).
+    /// </summary>
+    private static string? BuildFileViewUrl(PlatformPullRequest? pr, string path)
+    {
+        if (pr is null || string.IsNullOrEmpty(path)) return null;
+        var prUrl = pr.Url ?? "";
+        var m = System.Text.RegularExpressions.Regex.Match(prUrl,
+            @"^https?://github\.com/(?<owner>[^/]+)/(?<repo>[^/]+)/pull/\d+");
+        if (!m.Success) return null;
+        var owner = m.Groups["owner"].Value;
+        var repo = m.Groups["repo"].Value;
+        // Prefer HeadSha for exact commit view; fall back to branch name
+        var ref_ = !string.IsNullOrEmpty(pr.HeadSha) ? pr.HeadSha : pr.HeadBranch;
+        if (string.IsNullOrEmpty(ref_)) return null;
+        return $"https://github.com/{owner}/{repo}/blob/{Uri.EscapeDataString(ref_)}/{string.Join("/", path.Split('/').Select(Uri.EscapeDataString))}";
+    }
+
+    private void OpenImagePreview(string url, string path)
+    {
+        _previewImageUrl = url;
+        _previewImagePath = path;
+    }
+
+    private void CloseImagePreview()
+    {
+        _previewImageUrl = null;
+        _previewImagePath = null;
+    }
+}

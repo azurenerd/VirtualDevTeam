@@ -1,0 +1,1583 @@
+@page "/approvals"
+@rendermode InteractiveServer
+@using VirtualDevTeam.Core.Notifications
+@using VirtualDevTeam.Core.Scenarios
+@using VirtualDevTeam.Core.Agents.Decisions
+@using VirtualDevTeam.Core.Configuration
+@using VirtualDevTeam.Core.DevPlatform.Capabilities
+@using VirtualDevTeam.Core.HealthMonitor
+@using VirtualDevTeam.Core.HealthMonitor.Actions
+@using VirtualDevTeam.Core.MissingWork
+@using VirtualDevTeam.Dashboard.Services
+@using System.Net.Http.Json
+@using Microsoft.AspNetCore.WebUtilities
+@using Microsoft.Extensions.Options
+@using Markdig
+@implements IDisposable
+@inject IServiceProvider ServiceProvider
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+@inject IPlatformLinkService LinkService
+
+<PageTitle>Virtual Dev Team — Approvals / Alerts</PageTitle>
+
+<div class="dashboard-header" data-testid="page-approvals">
+    <h1>🚦 Approvals / Alerts</h1>
+    <div class="header-badges">
+        <span class="header-badge @(_openCount > 0 ? "warning" : "healthy")">
+            @_openCount Open
+        </span>
+        @if (_pendingDecisionCount > 0)
+        {
+            <span class="header-badge warning">⚖️ @_pendingDecisionCount Decision Gates</span>
+        }
+        <span class="header-badge">@_resolvedCount Resolved</span>
+    </div>
+</div>
+
+<div class="approval-filters">
+    <button class="filter-btn @(_filter == NotificationFilter.Open ? "active" : "")"
+            @onclick="() => SetFilter(NotificationFilter.Open)">
+        Open @if (_openCount > 0) { <span class="filter-count">@_openCount</span> }
+    </button>
+    <button class="filter-btn @(_filter == NotificationFilter.Resolved ? "active" : "")"
+            @onclick="() => SetFilter(NotificationFilter.Resolved)">
+        Resolved
+    </button>
+    <button class="filter-btn @(_filter == NotificationFilter.All ? "active" : "")"
+            @onclick="() => SetFilter(NotificationFilter.All)">
+        All
+    </button>
+    @if (_hasOpenFlowMonitorInfo && _filter != NotificationFilter.Resolved)
+    {
+        <button class="filter-btn dismiss-flow-monitor-btn"
+                @onclick="DismissAllFlowMonitorInfo"
+                title="Dismiss all FlowMonitor info-only entries. They are audit-trail entries that need no human decision.">
+            ✕ Dismiss all FlowMonitor entries
+        </button>
+    }
+</div>
+
+@* ── Pre-PR Clarification Questions ── *@
+@if (_pendingClarifications.Count > 0 && _filter != NotificationFilter.Resolved)
+{
+    <div class="decision-gates-section">
+        <h3>🤔 Pre-PR Clarification Questions</h3>
+        @foreach (var set in _pendingClarifications)
+        {
+            <div class="approval-card clarification-card open">
+                <div class="approval-card-left">
+                    <div class="approval-icon"><span>🤔</span></div>
+                </div>
+                <div class="approval-card-body">
+                    <div class="approval-card-header">
+                        <span class="approval-gate-name">@set.AgentDisplayName</span>
+                        <span class="approval-resource-badge">Issue #@set.IssueNumber</span>
+                        <LocalTimeText Value="set.CreatedAt" CssClass="approval-time" />
+                    </div>
+                    <div class="approval-context">
+                        <strong>Task:</strong> @set.IssueTitle
+                    </div>
+                    <div class="clarification-questions">
+                        @for (var i = 0; i < set.Questions.Count; i++)
+                        {
+                            var q = set.Questions[i];
+                            var idx = i;
+                            <div class="clarification-question-item">
+                                <div class="clarification-question-header">
+                                    <span class="clarification-q-number">Q@(i + 1)</span>
+                                    <span class="impact-badge impact-@q.ImpactLevel.ToString().ToLower()">@q.ImpactLevel</span>
+                                    <span class="clarification-category">@q.Category</span>
+                                </div>
+                                <div class="clarification-question-text">@((MarkupString)RenderSafeMarkdown(q.Question))</div>
+                                <textarea class="clarification-answer-input"
+                                          rows="2"
+                                          @bind="_clarificationAnswers[set.Id][idx]"
+                                          @bind:event="oninput"></textarea>
+                            </div>
+                        }
+                    </div>
+                    <div class="approval-card-footer">
+                        <div class="approval-footer-buttons">
+                            <button class="approval-action-btn approve-btn" @onclick="() => ApproveClarifications(set.Id)">
+                                ✅ Approve Answers
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        }
+    </div>
+}
+
+@* ── Pending Decision Gates ── *@
+@if (_pendingDecisions.Count > 0 && _filter != NotificationFilter.Resolved)
+{
+    <div class="decision-gates-section">
+        <h3>⚖️ Decision Gates Awaiting Review</h3>
+        @foreach (var decision in _pendingDecisions)
+        {
+            <div class="approval-card decision-gate open">
+                <div class="approval-card-left">
+                    <div class="approval-icon">
+                        <span class="impact-badge impact-@decision.ImpactLevel.ToString().ToLower()">@decision.ImpactLevel</span>
+                    </div>
+                </div>
+                <div class="approval-card-body">
+                    <div class="approval-card-header">
+                        <span class="approval-gate-name">⚖️ @decision.Title</span>
+                        <span class="approval-resource-badge">@decision.AgentDisplayName</span>
+                        @if (!string.IsNullOrEmpty(decision.SourceQuestion))
+                        {
+                            <span class="decision-source-badge">📋 Wizard Q</span>
+                        }
+                        @if (decision.AssociatedPrNumber is > 0)
+                        {
+                            <span class="decision-pr-badge">PR #@decision.AssociatedPrNumber</span>
+                        }
+                        <LocalTimeText Value="decision.CreatedAt" CssClass="approval-time" />
+                    </div>
+                    @if (!string.IsNullOrEmpty(decision.SourceQuestion))
+                    {
+                        <div class="decision-source-question">
+                            <strong>Original Question:</strong> @((MarkupString)RenderSafeMarkdown(decision.SourceQuestion))
+                        </div>
+                    }
+                    <div class="approval-context">
+                        <strong>Rationale:</strong> @decision.Rationale
+                    </div>
+                    @if (!string.IsNullOrEmpty(decision.Alternatives))
+                    {
+                        <div class="decision-detail-field">
+                            <strong>Alternatives Considered:</strong> @decision.Alternatives
+                        </div>
+                    }
+                    @if (!string.IsNullOrEmpty(decision.AffectedFiles))
+                    {
+                        <div class="decision-detail-field">
+                            <strong>Affected Files:</strong> @decision.AffectedFiles
+                        </div>
+                    }
+                    @if (!string.IsNullOrEmpty(decision.RiskAssessment))
+                    {
+                        <div class="decision-detail-field">
+                            <strong>Risk Assessment:</strong> @decision.RiskAssessment
+                        </div>
+                    }
+                    @if (!string.IsNullOrEmpty(decision.Plan))
+                    {
+                        <details class="decision-plan-detail">
+                            <summary>📋 View Implementation Plan</summary>
+                            <pre class="decision-plan-content">@decision.Plan</pre>
+                        </details>
+                    }
+
+                    @* Feedback + Approve/Reject *@
+                    <div class="decision-actions">
+                        <input type="text" class="decision-feedback-input"
+                               placeholder="Optional feedback..."
+                               @bind="_feedbackInputs[decision.Id]" />
+                        <button class="decision-approve-btn" @onclick="() => ApproveDecision(decision.Id)"
+                            title="Approve this decision and let the agent proceed with the proposed approach. The agent will implement the plan as described in the rationale and alternatives.">
+                            ✅ Approve
+                        </button>
+                        <button class="decision-reject-btn" @onclick="() => RejectDecisionAsync(decision.Id)"
+                            title="Reject this decision. The agent will abandon this approach. Provide feedback to guide the agent toward a better alternative.">
+                            ❌ Reject
+                        </button>
+                    </div>
+                </div>
+            </div>
+        }
+    </div>
+}
+
+@* ── Standard Gate Notifications ── *@
+@if (_notifications.Count == 0 && _pendingDecisions.Count == 0 && _pendingClarifications.Count == 0)
+{
+    <div class="empty-state">
+        <div class="empty-icon">✅</div>
+        <div class="empty-text">
+            @if (_filter == NotificationFilter.Open)
+            {
+                <span>No gates awaiting approval</span>
+            }
+            else if (_filter == NotificationFilter.Resolved)
+            {
+                <span>No resolved approvals yet</span>
+            }
+            else
+            {
+                <span>No gate notifications</span>
+            }
+        </div>
+        <div class="empty-sub">Gate approval requests from agents will appear here</div>
+    </div>
+}
+else if (_notifications.Count > 0)
+{
+    <div class="approvals-list">
+        @foreach (var gate in _notifications)
+        {
+            // Coalesced FlowMonitor duplicates (every member except the "display" one) are
+            // hidden — the display card surfaces the count.
+            if (_collapsedFlowMonitorIds.Contains(gate.Id)) { continue; }
+            var isProjectComplete = gate.GateName.Contains("Project Complete", StringComparison.OrdinalIgnoreCase);
+            var isDecisionGate = gate.GateId.StartsWith(DecisionGateService.DecisionGatePrefix);
+            var isClarificationGate = gate.GateId == GateIds.PrePRClarification;
+            // FlowMonitor entries split into two flavours:
+            //   • `flow-monitor:fix:<rec-id>` = real human gate (T1.5) — operator approves/reworks/rejects
+            //     a /plan + rubber-duck FixRecommendation. Has its own card layout below.
+            //   • `flow-monitor:<action>` = audit-trail entries for actions FlowMonitor already took.
+            //     No human decision needed; rendered as a passive info card.
+            var isFlowMonitorFix = gate.GateId.StartsWith("flow-monitor:fix:", StringComparison.OrdinalIgnoreCase);
+            var isFlowMonitor = !isFlowMonitorFix
+                && gate.GateId.StartsWith("flow-monitor:", StringComparison.OrdinalIgnoreCase);
+            var fixRec = isFlowMonitorFix ? GetFixRecommendationForGate(gate.GateId) : null;
+
+            @if (isFlowMonitorFix)
+            {
+                @* T1.5: FixRecommendation card — surfaces a /plan + rubber-duck plan with
+                   approve/rework/reject buttons. Distinct visual treatment (badge + confidence
+                   meter + collapsible plan body) so it doesn't look like a routine gate. *@
+                var confidenceClass = fixRec is null ? "fixrec-conf-unknown"
+                    : fixRec.Confidence >= 0.75 ? "fixrec-conf-high"
+                    : fixRec.Confidence >= 0.5  ? "fixrec-conf-med"
+                    : "fixrec-conf-low";
+                var severityClass = fixRec is null ? "fixrec-sev-unknown"
+                    : fixRec.Severity.ToString().ToLowerInvariant();
+                var planExpanded = _expandedPlans.Contains(gate.Id);
+                var preview = fixRec is null ? string.Empty : GetPlanPreview(fixRec.PlanMarkdown);
+                // T1.6: tier badge — Live (🟢) / Deferred (🟡) / Blocked (🔴). Tells the operator
+                // up-front what happens when they click Approve.
+                var tier = fixRec?.FixTier;
+                var (tierEmoji, tierLabel, tierClass) = tier switch
+                {
+                    FixTier.Live            => ("🟢", "Live",     "fixrec-tier-live"),
+                    FixTier.DeferredRestart => ("🟡", "Deferred", "fixrec-tier-deferred"),
+                    FixTier.Blocked         => ("🔴", "Blocked",  "fixrec-tier-blocked"),
+                    _                       => ("⚪", "Unknown",  "fixrec-tier-unknown"),
+                };
+                var tierTooltip = tier switch
+                {
+                    FixTier.Live            => "Live: applies in-place via config/prompt watcher — no restart needed.",
+                    FixTier.DeferredRestart => "Deferred: code change written; click Restart Runner to activate.",
+                    FixTier.Blocked         => "Blocked: cannot apply while runner is up — staged for next boot.",
+                    _                       => "Tier not classified yet.",
+                };
+
+                <div class="approval-card fixrec-card @(gate.IsResolved ? "resolved" : "open")"
+                     data-testid="fixrec-card-@(fixRec?.Id ?? "unknown")">
+                    <div class="approval-card-top">
+                        <div class="approval-card-left">
+                            <div class="approval-icon"><span>🔧</span></div>
+                        </div>
+                        <div class="approval-card-body">
+                            <div class="approval-card-header">
+                                <span class="approval-gate-name">Fix Recommendation</span>
+                                <span class="fixrec-tier-badge @tierClass" title="@tierTooltip">
+                                    @tierEmoji @tierLabel
+                                </span>
+                                <span class="fixrec-severity-badge fixrec-sev-@severityClass">
+                                    @(fixRec?.Severity.ToString() ?? "Unknown")
+                                </span>
+                                <span class="fixrec-confidence-badge @confidenceClass" title="Rubber-duck confidence in this plan">
+                                    @(fixRec is null ? "?" : $"{fixRec.Confidence:0%}") confidence
+                                </span>
+                                @if (fixRec?.NeedsRestart == true)
+                                {
+                                    <span class="fixrec-restart-badge" title="This fix touches code or NuGet — runner restart will be needed to activate">
+                                        ⟳ restart
+                                    </span>
+                                }
+                                @if (fixRec?.EstimatedMinutes is int mins)
+                                {
+                                    <span class="fixrec-meta-badge" title="Planner's effort estimate">~@mins min</span>
+                                }
+                                @if (fixRec?.ReworkCount > 0)
+                                {
+                                    <span class="fixrec-rework-badge" title="Rework round number">rework v@(fixRec.ReworkCount + 1)</span>
+                                }
+                                <LocalTimeText Value="gate.CreatedAt" CssClass="approval-time" />
+                                @if (gate.IsResolved)
+                                {
+                                    <span class="approval-status-pill approved">@(fixRec?.State.ToString() ?? "Resolved")</span>
+                                }
+                            </div>
+                            @* FlowMonitor fix-rec context — markdown rendered for **bold** / _italic_. *@
+                            <div class="approval-context">
+                                <VirtualDevTeam.Dashboard.Components.Shared.MarkdownBody Markdown="@gate.Context" />
+                            </div>
+                            @if (fixRec is not null && !string.IsNullOrEmpty(fixRec.FilesToChange))
+                            {
+                                <div class="fixrec-files">
+                                    <strong>Files to change:</strong> <code>@fixRec.FilesToChange</code>
+                                </div>
+                            }
+                            @if (fixRec is not null && !string.IsNullOrEmpty(preview))
+                            {
+                                <div class="fixrec-preview">@preview</div>
+                            }
+                            @if (fixRec is not null)
+                            {
+                                <button class="fixrec-expand-btn" @onclick="() => ToggleFixRecPlan(gate.Id)">
+                                    @(planExpanded ? "▾ Hide full plan" : "📋 View Full Plan")
+                                </button>
+                            }
+                            @if (planExpanded && fixRec is not null)
+                            {
+                                <div class="fixrec-plan-body">
+                                    @((MarkupString)RenderSafeMarkdown(fixRec.PlanMarkdown))
+                                </div>
+                            }
+                            @if (_fixRecActionInProgress.TryGetValue(gate.Id, out var actionState))
+                            {
+                                <div class="fixrec-action-status">
+                                    <span class="rework-spinner"></span>
+                                    <span>@actionState</span>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                    @if (!gate.IsResolved && fixRec is not null && !_fixRecActionInProgress.ContainsKey(gate.Id))
+                    {
+                        <div class="approval-card-footer">
+                            <div class="approval-footer-buttons">
+                                <button class="approval-action-btn approve-btn"
+                                        @onclick="() => ApproveFixRecommendationAsync(fixRec.Id, gate.Id)">
+                                    ✅ Approve
+                                </button>
+                                <button class="approval-action-btn review-btn"
+                                        @onclick="() => ApproveFixRecommendationAndRestartAsync(fixRec.Id, gate.Id)">
+                                    🔄 Approve with Restart
+                                </button>
+                                <button class="approval-action-btn reject-btn"
+                                        @onclick="() => DismissFixRecommendationAsync(fixRec.Id, gate.Id)">
+                                    🗑️ Dismiss
+                                </button>
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+            else if (isClarificationGate && !gate.IsResolved)
+            {
+                @* Clarification gate with no matching question set (generation failed).
+                   Render a simple "proceed without questions" card so it's not invisible. *@
+                var hasMatchingSet = _pendingClarifications.Any(s => s.IssueNumber == gate.ResourceNumber);
+                if (!hasMatchingSet)
+                {
+                    <div class="approval-card open @(_focusedGateId == gate.GateId ? "highlight-pulse" : "")"
+                         id="@($"gate-{gate.GateId}")">
+                        <div class="approval-card-top">
+                            <div class="approval-card-left">
+                                <div class="approval-icon"><span>⚠️</span></div>
+                            </div>
+                            <div class="approval-card-body">
+                                <div class="approval-card-header">
+                                    <span class="approval-gate-name">@gate.GateName</span>
+                                    @if (gate.ResourceNumber is not null)
+                                    {
+                                        <span class="approval-resource-badge">Issue #@gate.ResourceNumber</span>
+                                    }
+                                    <LocalTimeText Value="gate.CreatedAt" CssClass="approval-time" />
+                                </div>
+                                <div class="approval-context">
+                                    @gate.Context
+                                </div>
+                            </div>
+                        </div>
+                        <div class="approval-card-footer">
+                            <div class="approval-footer-buttons">
+                                <button class="approval-action-btn approve-btn" @onclick="() => ApproveGate(gate.GateId, gate.ResourceNumber)">
+                                    ✅ Proceed Without Questions
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                }
+            }
+            else if (!isDecisionGate && !isClarificationGate)
+            {
+                @* id="gate-{GateId}" enables deep-linking from agent cards/detail page
+                   via /approvals?focus={GateId} (see agent-blocked-show-approval-link). *@
+                <div class="approval-card @(gate.IsResolved ? "resolved" : gate.ReworkState is not null ? "reworking" : gate.IsReworked ? "reworked" : "open") @(isProjectComplete ? "project-complete" : "") @(isFlowMonitor ? "flow-monitor-info" : "") @(_focusedGateId == gate.GateId ? "highlight-pulse" : "")"
+                     id="@($"gate-{gate.GateId}")">
+                    <div class="approval-card-top">
+                        <div class="approval-card-left">
+                            <div class="approval-icon">
+                                @if (isFlowMonitor) { <span>🔧</span> }
+                                else if (isProjectComplete) { <span>🎉</span> }
+                                else if (gate.IsResolved) { <span>✅</span> }
+                                else if (gate.ReworkState is not null) { <span>🔄</span> }
+                                else if (gate.IsReworked) { <span>🔄</span> }
+                                else { <span>🚦</span> }
+                            </div>
+                        </div>
+                        <div class="approval-card-body">
+                            <div class="approval-card-header">
+                                <span class="approval-gate-name">@gate.GateName</span>
+                                @if (isFlowMonitor && _flowMonitorGroups.TryGetValue(gate.Id, out var groupIds) && groupIds.Count > 1)
+                                {
+                                    <span class="flow-monitor-group-badge"
+                                          title="@(groupIds.Count) identical FlowMonitor escalations were coalesced into this card.">
+                                        ×@groupIds.Count
+                                    </span>
+                                }
+                                @if (gate.ResourceType is not null && gate.ResourceNumber is not null)
+                                {
+                                    <span class="approval-resource-badge">@gate.ResourceType #@gate.ResourceNumber</span>
+                                }
+                                <LocalTimeText Value="gate.CreatedAt" CssClass="approval-time" />
+                                @if (gate.GitHubUrl is not null)
+                                {
+                                    var (revHref, revTarget, revRel, revTitle, revArrow) = ResolveGateReviewLink(gate);
+                                    <a class="approval-action-btn review-btn" href="@revHref" target="@revTarget" rel="@revRel" title="@revTitle">
+                                        Review @revArrow
+                                    </a>
+                                }
+                                @if (gate.IsResolved)
+                                {
+                                    <span class="approval-status-pill approved">@(isProjectComplete ? "Complete" : "Approved")</span>
+                                }
+                                else if (gate.ReworkState is not null)
+                                {
+                                    <span class="approval-status-pill reworking" title="Rework iteration @gate.ReworkState.IterationCount">
+                                        Rework iteration @gate.ReworkState.IterationCount
+                                    </span>
+                                }
+                                else if (gate.IsReworked)
+                                {
+                                    <span class="approval-status-pill reworked">Revised — ready for re-review</span>
+                                }
+                            </div>
+                            @* FlowMonitor and strategy notifications contain markdown (**bold**/_italic_);
+                               render via MarkdownBody so operators see formatted text. *@
+                            <div class="approval-context">
+                                @if (isFlowMonitor || gate.GateId.StartsWith("strategy-", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    @* Show a short summary line, collapse verbose details *@
+                                    var summaryLine = ExtractFlowMonitorSummary(gate.Context);
+                                    <div class="flow-monitor-summary">@((MarkupString)RenderSafeMarkdown(summaryLine))</div>
+                                    <details class="flow-monitor-details">
+                                        <summary>Show details</summary>
+                                        <VirtualDevTeam.Dashboard.Components.Shared.MarkdownBody Markdown="@gate.Context" />
+                                    </details>
+                                }
+                                else
+                                {
+                                    @gate.Context
+                                }
+                            </div>
+                            @if (gate.Artifacts is { Count: > 0 })
+                            {
+                                <div class="approval-artifacts">
+                                    @foreach (var artifact in gate.Artifacts)
+                                    {
+                                        var displayName = artifact.DisplayName ?? System.IO.Path.GetFileName(artifact.FilePath);
+                                        var fileUrl = BuildArtifactUrl(gate, artifact);
+                                        <div class="approval-artifact-item">
+                                            <span class="artifact-icon">@(artifact.Kind switch {
+                                                ArtifactKind.Document => "📄",
+                                                ArtifactKind.Image => "🖼️",
+                                                ArtifactKind.Diagram => "📊",
+                                                _ => "📎"
+                                            })</span>
+                                            <span class="artifact-name">@displayName</span>
+                                            @if (!string.IsNullOrEmpty(fileUrl))
+                                            {
+                                                <a href="@fileUrl" target="_blank" rel="noopener" class="artifact-link" title="View on platform">↗</a>
+                                            }
+                                        </div>
+                                    }
+                                </div>
+                            }
+                            @if (gate.IsResolved && gate.ResolvedAt.HasValue)
+                            {
+                                <div class="approval-resolved-info">
+                                    ✅ @(isProjectComplete ? "Completed" : "Approved") <LocalTimeText Value="gate.ResolvedAt.Value" />
+                                </div>
+                            }
+                            @if (gate.ReworkState is not null)
+                            {
+                                <div class="approval-rework-info">
+                                    <div class="rework-status-bar">
+                                        <span class="rework-spinner"></span>
+                                        <span>Agent is revising based on your feedback (iteration @gate.ReworkState.IterationCount)</span>
+                                        <span class="approval-time">requested <LocalTimeText Value="gate.ReworkState.RequestedAt" /></span>
+                                    </div>
+                                    @if (!string.IsNullOrWhiteSpace(gate.ReworkState.Feedback))
+                                    {
+                                        <div class="rework-feedback-quote">@gate.ReworkState.Feedback</div>
+                                    }
+                                    @{
+                                        var commitsUrl = gate.ReworkState.ChangesUrl
+                                            ?? (gate.GitHubUrl is not null ? $"{gate.GitHubUrl}/commits" : null);
+                                        var filesUrl = gate.GitHubUrl is not null ? $"{gate.GitHubUrl}/files" : null;
+                                    }
+                                    @if (commitsUrl is not null || filesUrl is not null)
+                                    {
+                                        <div class="rework-links">
+                                            @if (commitsUrl is not null)
+                                            {
+                                                <a class="approval-action-btn review-btn" href="@commitsUrl" target="_blank" rel="noopener">
+                                                    View Commits ↗
+                                                </a>
+                                            }
+                                            @if (filesUrl is not null)
+                                            {
+                                                <a class="approval-action-btn review-btn" href="@filesUrl" target="_blank" rel="noopener">
+                                                    View Changes ↗
+                                                </a>
+                                            }
+                                        </div>
+                                    }
+                                </div>
+                            }
+
+                            @* ── D7: Scenario Confidence Panel ── *@
+                            @if (gate.ScenarioVerdicts is { Count: > 0 })
+                            {
+                                var lowCritCount = gate.ScenarioVerdicts.Count(v =>
+                                    v.Priority == ScenarioPriority.Critical && v.Confidence < 0.5);
+                                var overallConf = gate.ScenarioVerdicts.Average(v => v.Confidence);
+                                var showLowConfWarning = lowCritCount > 0 || overallConf < 0.7;
+                                var overallConfClass = overallConf >= 0.7 ? "fixrec-conf-high"
+                                    : overallConf >= 0.5 ? "fixrec-conf-med" : "fixrec-conf-low";
+
+                                @if (showLowConfWarning)
+                                {
+                                    var warnMsg = lowCritCount > 0
+                                        ? $"{lowCritCount} critical scenario{(lowCritCount > 1 ? "s" : "")} have low confidence."
+                                        : $"Overall confidence {overallConf:0%} is below threshold.";
+                                    <div class="low-confidence-warning-banner">
+                                        ⚠️ Manual review recommended — @warnMsg
+                                    </div>
+                                }
+
+                                <details class="scenario-verdict-section">
+                                    <summary class="scenario-verdict-summary">
+                                        🧪 Scenario Verification
+                                        <span class="scenario-conf-badge @overallConfClass">
+                                            overall @overallConf.ToString("0%")
+                                        </span>
+                                        <span class="scenario-count-badge">@gate.ScenarioVerdicts.Count scenarios</span>
+                                    </summary>
+                                    <div class="scenario-verdict-list">
+                                        @foreach (var sv in gate.ScenarioVerdicts)
+                                        {
+                                            var (verdictIcon, verdictCls) = sv.Status switch
+                                            {
+                                                VerificationStatus.Verified     => ("✓", "verdict-verified"),
+                                                VerificationStatus.Broken       => ("✗", "verdict-broken"),
+                                                VerificationStatus.Inconclusive => ("?", "verdict-inconclusive"),
+                                                _                               => ("–", "verdict-unknown"),
+                                            };
+                                            var svConfClass = sv.Confidence >= 0.7 ? "conf-high"
+                                                : sv.Confidence >= 0.5 ? "conf-med" : "conf-low";
+                                            <div class="scenario-verdict-row @verdictCls">
+                                                <span class="verdict-icon @verdictCls" title="@sv.Status">@verdictIcon</span>
+                                                <span class="verdict-scenario-id">@sv.ScenarioId</span>
+                                                <span class="verdict-title" title="@sv.Title">@sv.Title</span>
+                                                <span class="verdict-priority priority-@sv.Priority.ToString().ToLower()">@sv.Priority</span>
+                                                <div class="confidence-bar" title="Confidence: @sv.Confidence.ToString("0%")">
+                                                    <div class="confidence-bar-fill @svConfClass" style="width: @((sv.Confidence * 100).ToString("F0"))%"></div>
+                                                </div>
+                                                <span class="confidence-value @svConfClass">@sv.Confidence.ToString("0%")</span>
+                                                @if (sv.EvidenceUrl is not null)
+                                                {
+                                                    <a class="verdict-evidence-link" href="@sv.EvidenceUrl" target="_blank" rel="noopener" title="View evidence">🔗</a>
+                                                }
+                                            </div>
+                                        }
+                                    </div>
+                                </details>
+                            }
+                        </div>
+                    </div>
+                    @if (!gate.IsResolved && !isProjectComplete && !isFlowMonitor && gate.ReworkState is null)
+                    {
+                        <div class="approval-card-footer">
+                            <textarea class="approval-feedback-input"
+                                   rows="2"
+                                   placeholder="Rework feedback (optional) — describe what needs to change"
+                                   @bind="_gateFeedbackInputs[gate.Id]"
+                                   @bind:event="oninput"></textarea>
+                            <div class="approval-footer-buttons">
+                                <button class="approval-action-btn reject-btn" @onclick="() => RejectGate(gate.GateId, gate.Id, gate.ResourceNumber)"
+                                    title="Send the artifact back for rework. The agent will revise based on your feedback (if provided) and re-submit for approval. Use when the work needs changes but the approach is sound.">
+                                    🔄 Request Rework
+                                </button>
+                                <button class="approval-action-btn recommend-manual-review-btn" @onclick="() => RecommendManualReviewGateAsync(gate.GateId, gate.Id, gate.ResourceNumber)"
+                                    title="Approve but flag for manual follow-up. The pipeline continues, but a 'needs-manual-review' label is added so you remember to revisit this PR/artifact later. Use when it's good enough to proceed but deserves a closer look.">
+                                    🔍 Flag for Follow-up
+                                </button>
+                                <button class="approval-action-btn approve-btn" @onclick="() => ApproveGate(gate.GateId, gate.ResourceNumber)"
+                                    title="Approve this gate and allow the pipeline to proceed. The agent moves to the next phase immediately. Use when you're satisfied with the quality and completeness of the work.">
+                                    ✅ Approve
+                                </button>
+                            </div>
+                        </div>
+                    }
+                    else if (isFlowMonitor && !gate.IsResolved)
+                    {
+                        var isAutoApproval = gate.GateId.StartsWith("flow-monitor:auto-approve:", StringComparison.OrdinalIgnoreCase);
+                        <div class="approval-card-footer">
+                            <div class="flow-monitor-info-note">
+                                @{
+                                    var groupCount = _flowMonitorGroups.TryGetValue(gate.Id, out var gIds) ? gIds.Count : 1;
+                                    var isPersistent = groupCount > 1;
+                                }
+                                @if (isAutoApproval)
+                                {
+                                    <span>🤖 FlowMonitor auto-approved this gate/decision after it exceeded the configured timeout. No human action needed — dismiss to acknowledge.</span>
+                                }
+                                else if (isPersistent)
+                                {
+                                    <span>⚠️ FlowMonitor escalated @groupCount times — automated actions (nudge → comment) did not resolve the condition. Manual investigation may be needed.</span>
+                                }
+                                else
+                                {
+                                    <span>ℹ️ Automatic FlowMonitor action — escalation in progress.</span>
+                                }
+                            </div>
+                            <div class="approval-footer-buttons">
+                                <button class="approval-action-btn dismiss-btn"
+                                        @onclick="() => DismissFlowMonitorCard(gate.Id)"
+                                        title="@(_flowMonitorGroups.TryGetValue(gate.Id, out var ids) && ids.Count > 1 ? $"Dismiss this card and the {ids.Count - 1} identical entries it coalesces." : "Dismiss this entry — it's audit-trail only and needs no decision.")">
+                                    ✕ Dismiss
+                                </button>
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+        }
+    </div>
+}
+
+@* ── MissingWork Proposed Issues ── *@
+@if (_missingWorkProposals?.Count > 0)
+{
+    <div class="approvals-section">
+        <h2 class="section-heading">📋 Missing-Work Proposed Issues (@_missingWorkProposals.Count)</h2>
+        @foreach (var p in _missingWorkProposals)
+        {
+            <div class="mw-proposal-card">
+                <div class="mw-proposal-header">
+                    <span class="mw-detector-id">@p.DetectorId</span>
+                    <span class="mw-confidence">confidence: @p.Confidence.ToString("F2")</span>
+                    <LocalTimeText Value="p.CreatedAt" CssClass="mw-age" />
+                </div>
+                <div class="mw-proposed-title">@p.ProposedTitle</div>
+                <details>
+                    <summary>Body</summary>
+                    <pre class="mw-body">@p.ProposedBody</pre>
+                </details>
+                @if (p.Evidence.Count > 0)
+                {
+                    <div class="mw-evidence">
+                        @foreach (var e in p.Evidence.Take(5))
+                        {
+                            <code>@e.FilePath@(e.LineNumber.HasValue ? $":{e.LineNumber}" : "")</code>
+                        }
+                    </div>
+                }
+                <div class="mw-actions">
+                    <button class="btn-approve" @onclick="@(async () => await ApproveMissingWorkAsync(p.Id))">
+                        ✅ Approve + Create Issue
+                    </button>
+                    <button class="btn-reject" @onclick="@(async () => await RejectMissingWorkAsync(p.Id))">
+                        ✕ Reject
+                    </button>
+                </div>
+            </div>
+        }
+    </div>
+}
+
+@* ── FlowAction Proposed Actions ── *@
+@if (_flowActionProposals?.Count > 0)
+{
+    <div class="approvals-section">
+        <h2 class="section-heading">⚡ FlowAction Proposed Actions (@_flowActionProposals.Count)</h2>
+        @foreach (var a in _flowActionProposals)
+        {
+            var faRiskClass = a.RiskTier switch
+            {
+                FlowActionRiskTier.SafeAuto                => "risk-safe",
+                FlowActionRiskTier.ReversibleSoftApprove   => "risk-reversible",
+                FlowActionRiskTier.StateChangingHardApprove => "risk-stateful",
+                FlowActionRiskTier.NeverAuto               => "risk-never",
+                _ => "",
+            };
+            <div class="fa-proposal-card">
+                <div class="fa-proposal-header">
+                    <span class="fa-action-kind">@a.Type</span>
+                    <span class="fa-risk-tier @faRiskClass">@a.RiskTier</span>
+                    <LocalTimeText Value="a.CreatedAt" CssClass="fa-age" />
+                </div>
+                <div class="fa-title">@a.Title</div>
+                <div class="fa-rationale">@a.Rationale</div>
+                @if (!string.IsNullOrWhiteSpace(a.RiskAssessment))
+                {
+                    <div class="fa-risk-assessment">⚠️ @a.RiskAssessment</div>
+                }
+                <details>
+                    <summary>Parameters</summary>
+                    <pre class="fa-payload">@System.Text.Json.JsonSerializer.Serialize(a.Parameters, new System.Text.Json.JsonSerializerOptions { WriteIndented = true })</pre>
+                </details>
+                <div class="fa-actions">
+                    <button class="btn-approve" @onclick="@(async () => await ApproveFlowActionAsync(a.Id))">
+                        ✅ Approve + Execute
+                    </button>
+                    <button class="btn-reject" @onclick="@(async () => await RejectFlowActionAsync(a.Id))">
+                        ✕ Reject
+                    </button>
+                </div>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    /// <summary>
+    /// Resolve the gate-card "Review" link.  PR / Issue gates route through internal
+    /// <c>/repository/...</c> pages; other gate types fall back to the platform URL.
+    /// Returns the href, target, rel, title, and arrow glyph for the rendered anchor.
+    /// </summary>
+    private (string href, string? target, string? rel, string title, string arrow) ResolveGateReviewLink(GateNotification gate)
+    {
+        // For document gates (PMSpec, Architecture), link directly to the document file
+        // in the internal code browser with the PR's source branch — works for all platforms.
+        string? docPath = null;
+        string? prBranch = _prBranchCache.GetValueOrDefault(gate.ResourceNumber ?? -1);
+        try
+        {
+            var config = ServiceProvider.GetService<IOptions<VirtualDevTeam.Core.Configuration.VirtualDevTeamConfig>>();
+            var docsFolder = config?.Value?.Project?.DocsFolderPath ?? "AgentDocs";
+            var workBranch = config?.Value?.Project?.WorkingBranch ?? "main";
+            docPath = gate.GateId switch
+            {
+                "PMSpecification" => $"{docsFolder}/{workBranch}/PMSpec.md",
+                "ArchitectureDesign" => $"{docsFolder}/{workBranch}/Architecture.md",
+                _ => null
+            };
+        }
+        catch { /* fall through to PR link */ }
+
+        if (docPath is not null)
+        {
+            if (gate.Artifacts?.Count > 0)
+            {
+                var docArtifact = gate.Artifacts.FirstOrDefault(a => a.Kind == ArtifactKind.Document);
+                if (docArtifact is not null && !string.IsNullOrEmpty(docArtifact.FilePath))
+                    docPath = docArtifact.FilePath;
+            }
+            var fileHref = LinkService.BuildFileUrl(docPath, prBranch);
+            return (fileHref, null, null, "Review document", "");
+        }
+
+        string href = gate.GitHubUrl ?? "#";
+        if (gate.ResourceNumber is int n)
+        {
+            if (string.Equals(gate.ResourceType, "PR", StringComparison.OrdinalIgnoreCase))
+                href = LinkService.BuildPullRequestUrl(n, gate.GitHubUrl);
+            else if (string.Equals(gate.ResourceType, "Issue", StringComparison.OrdinalIgnoreCase))
+                href = LinkService.BuildIssueUrl(n, gate.GitHubUrl);
+        }
+        var target = LinkService.TargetForUrl(href);
+        var rel = target == "_blank" ? "noopener" : null;
+        var isInternal = LinkService.IsInternal(href);
+        var title = isInternal ? "Review in dashboard" : $"Review on {LinkService.PlatformDisplayName}";
+        var arrow = isInternal ? "" : "↗";
+        return (href, target, rel, title, arrow);
+    }
+
+    private string? BuildArtifactUrl(GateNotification gate, GateArtifact artifact)
+    {
+        if (string.IsNullOrEmpty(gate.GitHubUrl) || string.IsNullOrEmpty(artifact.FilePath))
+            return null;
+        var m = System.Text.RegularExpressions.Regex.Match(gate.GitHubUrl,
+            @"github\.com/([^/]+)/([^/]+)");
+        if (!m.Success) return null;
+        var owner = m.Groups[1].Value;
+        var repo = m.Groups[2].Value;
+        var ref_ = artifact.CommitSha ?? "main";
+        return $"https://github.com/{owner}/{repo}/blob/{ref_}/{artifact.FilePath}";
+    }
+
+    private NotificationFilter _filter = NotificationFilter.Open;
+    private IReadOnlyList<GateNotification> _notifications = Array.Empty<GateNotification>();
+    /// <summary>
+    /// Groups identical FlowMonitor info-only notifications so the operator sees one
+    /// card with a count badge instead of N duplicate cards. Key = display notification's
+    /// <see cref="GateNotification.Id"/>; value = all notification IDs in the group
+    /// (including the display one). Other notification IDs are added to
+    /// <see cref="_collapsedFlowMonitorIds"/> so the render loop skips them.
+    /// </summary>
+    private Dictionary<string, List<string>> _flowMonitorGroups = new();
+    private HashSet<string> _collapsedFlowMonitorIds = new();
+    /// <summary>True when any open FlowMonitor info-only entry exists. Drives the header "Dismiss all" button.</summary>
+    private bool _hasOpenFlowMonitorInfo;
+    private IReadOnlyList<AgentDecision> _pendingDecisions = Array.Empty<AgentDecision>();
+    private IReadOnlyList<PrePRClarificationSet> _pendingClarifications = Array.Empty<PrePRClarificationSet>();
+    private Dictionary<string, List<string>> _clarificationAnswers = new();
+    private Dictionary<string, string> _feedbackInputs = new();
+    private Dictionary<string, string> _gateFeedbackInputs = new();
+    private Dictionary<string, (string Feedback, DateTime RequestedAt)> _reworkedGates = new();
+    private int _openCount;
+    private int _resolvedCount;
+    private int _pendingDecisionCount;
+
+    /// <summary>
+    /// Deep-link target gate id from <c>?focus=&lt;GateId&gt;</c> URL parameter.
+    /// Used to render the <c>highlight-pulse</c> class on the matching card and to
+    /// trigger a one-time scrollIntoView after first render. Set in OnInitialized;
+    /// cleared after the post-render scroll runs so a second navigation re-triggers it.
+    /// </summary>
+    private string? _focusedGateId;
+    private bool _hasScrolledToFocus;
+
+    private GateNotificationService? _inProcessService;
+    private HttpGateNotificationService? _httpService;
+    private IDecisionLog? _decisionLog;
+    private DecisionGateService? _decisionGateService;
+    private IGateCheckService? _gateCheckService;
+    private IReviewService? _reviewService;
+    private PrePRClarificationStore? _clarificationStore;
+
+    // T1.5: FixRecommendation state — populated from /api/dashboard/health/flow-monitor/recommendations
+    // and refreshed every time gate notifications change. Keyed by recommendation id.
+    private FlowMonitorPersistence? _flowPersistence; // when running bundled; null in standalone mode
+    private HttpClient? _http;                        // for standalone-mode API access
+    private Dictionary<string, FixRecommendation> _fixRecsById = new();
+    private HashSet<string> _expandedPlans = new();
+    private Dictionary<string, string> _fixRecActionInProgress = new();
+    private System.Threading.Timer? _fixRecPollTimer;
+
+    // Proposals: MissingWork proposed issues + FlowAction proposed actions.
+    // In bundled mode, resolved directly from DI (avoids self-HTTP deadlock).
+    // In standalone mode, polled via HTTP client.
+    private MissingWorkPersistence? _missingWorkStore;
+    private IFlowActionProposalStore? _flowActionProposalStore;
+    private List<ProposedIssue>? _missingWorkProposals;
+    private List<ProposedFlowAction>? _flowActionProposals;
+    private System.Threading.Timer? _proposalPollTimer;
+    private bool _disposed;
+    private Dictionary<int, string> _prBranchCache = new();
+
+    // Markdown rendering: HtmlSanitizer + Markdig keep operator-supplied feedback safe even
+    // though the planner is local. Defense-in-depth — the same pipeline can render PR
+    // descriptions later without auditing every callsite.
+    private static readonly MarkdownPipeline _fixRecMarkdownPipeline =
+        new MarkdownPipelineBuilder().UseAdvancedExtensions().Build();
+    private static readonly Ganss.Xss.HtmlSanitizer _htmlSanitizer = new();
+
+    protected override void OnInitialized()
+    {
+        _httpService = ServiceProvider.GetService<HttpGateNotificationService>();
+        _inProcessService = ServiceProvider.GetService<GateNotificationService>();
+        _decisionLog = ServiceProvider.GetService<IDecisionLog>();
+        _decisionGateService = ServiceProvider.GetService<DecisionGateService>();
+        _gateCheckService = ServiceProvider.GetService<IGateCheckService>();
+        _reviewService = ServiceProvider.GetService<IReviewService>();
+        _clarificationStore = ServiceProvider.GetService<PrePRClarificationStore>();
+
+        System.Console.Error.WriteLine($"[APPROVALS-DIAG] Services resolved {DateTime.UtcNow:O}");
+
+        // Parse ?focus={GateId} so deep links from the agent overview / detail
+        // page can scroll to + highlight the matching card.
+        var uri = new Uri(Navigation.Uri);
+        var query = QueryHelpers.ParseQuery(uri.Query);
+        if (query.TryGetValue("focus", out var focusVal) && !string.IsNullOrWhiteSpace(focusVal))
+        {
+            _focusedGateId = focusVal.ToString();
+        }
+
+        if (_httpService is not null)
+            _httpService.OnChange += OnChange;
+        else if (_inProcessService is not null)
+            _inProcessService.OnChange += OnChange;
+
+        if (_decisionLog is not null)
+            _decisionLog.OnDecisionChanged += OnDecisionChange;
+
+        if (_clarificationStore is not null)
+            _clarificationStore.OnChange += OnChange;
+
+        // T1.5: hook FixRecommendation data source.
+        // Bundled mode: pull directly from FlowMonitorPersistence singleton.
+        // Standalone mode: poll the API endpoint via HttpClient.
+        _flowPersistence = ServiceProvider.GetService<FlowMonitorPersistence>();
+        if (_flowPersistence is null)
+        {
+            var factory = ServiceProvider.GetService<IHttpClientFactory>();
+            _http = factory?.CreateClient("RunnerApi") ?? new HttpClient { BaseAddress = new Uri("http://localhost:5050") };
+        }
+
+        // Proposal poll: resolve in-process stores in bundled mode to avoid self-HTTP deadlock.
+        _missingWorkStore = ServiceProvider.GetService<MissingWorkPersistence>();
+        _flowActionProposalStore = ServiceProvider.GetService<IFlowActionProposalStore>();
+
+        // IMPORTANT: Timers are created in OnAfterRenderAsync (not here) to avoid
+        // pre-rendering deadlocks. During SSR pre-render, no Blazor circuit exists,
+        // so timer callbacks that call InvokeAsync(StateHasChanged) hang forever.
+
+        RefreshData();
+    }
+
+    /// <summary>
+    /// Pre-fetch PR head branches for document gate review links.
+    /// Done async here to avoid blocking the Blazor render thread with
+    /// sync-over-async (.GetAwaiter().GetResult()) which causes deadlocks.
+    /// </summary>
+    protected override async Task OnInitializedAsync()
+    {
+        var prService = ServiceProvider.GetService<IPullRequestService>();
+        if (prService is null) return;
+
+        var docGatePrNumbers = _notifications
+            .Where(n => !n.IsResolved && n.ResourceNumber.HasValue
+                && (n.GateId == "PMSpecification" || n.GateId == "ArchitectureDesign"))
+            .Select(n => n.ResourceNumber!.Value)
+            .Distinct()
+            .ToList();
+
+        foreach (var prNum in docGatePrNumbers)
+        {
+            try
+            {
+                var pr = await prService.GetAsync(prNum);
+                if (pr?.HeadBranch is not null)
+                    _prBranchCache[prNum] = pr.HeadBranch;
+            }
+            catch { /* best-effort — link will work without branch, just won't show pre-merge content */ }
+        }
+    }
+
+    /// <summary>
+    /// Creates polling timers and handles deep-link scrolling after the first render.
+    /// Timers MUST be created here (not OnInitialized) because during SSR pre-rendering
+    /// there is no Blazor circuit — timer callbacks calling InvokeAsync would deadlock.
+    /// OnAfterRenderAsync is NOT called during pre-rendering, so it's safe.
+    /// </summary>
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            // Start polling timers only after the circuit is connected and the page has rendered.
+            _fixRecPollTimer = new System.Threading.Timer(async _ =>
+            {
+                if (_disposed) return;
+                await RefreshFixRecommendationsAsync();
+            }, null, 500, 5000);
+
+            _proposalPollTimer = new System.Threading.Timer(async _ =>
+            {
+                if (_disposed) return;
+                await RefreshProposalsAsync();
+            }, null, 500, 10_000);
+        }
+
+        if (firstRender && !_hasScrolledToFocus && !string.IsNullOrEmpty(_focusedGateId))
+        {
+            _hasScrolledToFocus = true;
+            try
+            {
+                await JS.InvokeVoidAsync("vdtScrollAndHighlightGate", _focusedGateId);
+            }
+            catch
+            {
+                // JS may not be ready on the first render in some hosting modes;
+                // the .highlight-pulse class on the card is the visual fallback.
+            }
+        }
+    }
+
+    private void OnChange()
+    {
+        if (_disposed) return;
+        InvokeAsync(() =>
+        {
+            if (_disposed) return;
+            RefreshData();
+            StateHasChanged();
+        });
+    }
+
+    private void OnDecisionChange(AgentDecision _)
+    {
+        if (_disposed) return;
+        InvokeAsync(() =>
+        {
+            if (_disposed) return;
+            RefreshData();
+            StateHasChanged();
+        });
+    }
+
+    private void SetFilter(NotificationFilter filter)
+    {
+        _filter = filter;
+        RefreshData();
+    }
+
+    private void RefreshData()
+    {
+        if (_httpService is not null)
+        {
+            _notifications = _httpService.GetByStatus(_filter);
+            _openCount = _httpService.OpenCount;
+            _resolvedCount = _httpService.ResolvedCount;
+        }
+        else if (_inProcessService is not null)
+        {
+            _notifications = _inProcessService.GetByStatus(_filter);
+            _openCount = _inProcessService.OpenCount;
+            _resolvedCount = _inProcessService.ResolvedCount;
+        }
+
+        RecomputeFlowMonitorGroups();
+
+        // Get pending decisions
+        if (_decisionLog is not null)
+        {
+            _pendingDecisions = _decisionLog.GetPendingDecisions();
+            _pendingDecisionCount = _pendingDecisions.Count;
+
+            // Ensure feedback inputs exist for each pending decision
+            foreach (var d in _pendingDecisions)
+            {
+                _feedbackInputs.TryAdd(d.Id, "");
+            }
+        }
+
+        // Ensure gate feedback inputs exist for each open standard notification
+        foreach (var n in _notifications.Where(n => !n.IsResolved))
+        {
+            _gateFeedbackInputs.TryAdd(n.Id, "");
+        }
+
+        // Clear rework state for gates that got resolved (agent re-submitted)
+        // The new re-submitted notification will have IsReworked=true
+        var resolvedIds = _notifications.Where(n => n.IsResolved).Select(n => n.Id).ToHashSet();
+        foreach (var id in _reworkedGates.Keys.ToList())
+        {
+            if (resolvedIds.Contains(id))
+                _reworkedGates.Remove(id);
+        }
+
+        // Also clear rework state if a re-submitted notification exists for the same gate
+        var reworkedNotifications = _notifications
+            .Where(n => n.IsReworked && !n.IsResolved)
+            .Select(n => n.GateId)
+            .ToHashSet();
+        foreach (var id in _reworkedGates.Keys.ToList())
+        {
+            var gateId = _notifications.FirstOrDefault(n => n.Id == id)?.GateId;
+            if (gateId is not null && reworkedNotifications.Contains(gateId))
+                _reworkedGates.Remove(id);
+        }
+
+        // Get pending clarification question sets
+        if (_clarificationStore is not null)
+        {
+            _pendingClarifications = _clarificationStore.GetPending();
+            foreach (var set in _pendingClarifications)
+            {
+                if (!_clarificationAnswers.ContainsKey(set.Id))
+                {
+                    _clarificationAnswers[set.Id] = set.Questions
+                        .Select(q => q.ProposedAnswer)
+                        .ToList();
+                }
+            }
+        }
+    }
+
+    private void ApproveClarifications(string setId)
+    {
+        if (_clarificationStore is null) return;
+        var answers = _clarificationAnswers.GetValueOrDefault(setId);
+        _clarificationStore.Finalize(setId, answers);
+
+        // Signal the gate so the waiting agent wakes up
+        var set = _clarificationStore.Get(setId);
+        if (set is not null)
+        {
+            _gateCheckService?.ApproveGate(GateIds.PrePRClarification, set.IssueNumber);
+            _inProcessService?.Resolve(GateIds.PrePRClarification, resourceNumber: set.IssueNumber);
+        }
+
+        _clarificationAnswers.Remove(setId);
+        RefreshData();
+    }
+
+    private void ApproveGate(string gateId, int? resourceNumber = null)
+    {
+        _gateCheckService?.ApproveGate(gateId, resourceNumber);
+        _inProcessService?.Resolve(gateId, resourceNumber: resourceNumber);
+        RefreshData();
+    }
+
+    private void RejectGate(string gateId, string notificationId, int? resourceNumber)
+    {
+        var feedback = _gateFeedbackInputs.GetValueOrDefault(notificationId, "");
+        _gateCheckService?.RejectGate(gateId, string.IsNullOrWhiteSpace(feedback) ? null : feedback, resourceNumber);
+        _reworkedGates[notificationId] = (feedback, DateTime.UtcNow);
+        _gateFeedbackInputs.Remove(notificationId);
+        RefreshData();
+    }
+
+    /// <summary>
+    /// RECOMMEND_MANUAL_REVIEW: approves the gate (so the agent unblocks) but posts a
+    /// follow-up comment on the platform PR flagging it for human review before merge.
+    /// Renders the card as Approved in the UI — the platform comment is the durable record.
+    /// </summary>
+    private async Task RecommendManualReviewGateAsync(string gateId, string notificationId, int? resourceNumber)
+    {
+        // Approve the gate so the agent continues — this is non-blocking.
+        _gateCheckService?.ApproveGate(gateId, resourceNumber);
+        _inProcessService?.Resolve(gateId, resourceNumber: resourceNumber);
+
+        // Best-effort: post a prominent follow-up comment to the PR so the human reviewer
+        // knows to look at it before merging.
+        if (resourceNumber is > 0 && _reviewService is not null)
+        {
+            try
+            {
+                await _reviewService.AddCommentAsync(
+                    resourceNumber.Value,
+                    "🔍 **Flagged for Follow-up**: This approval has been granted by the operator, " +
+                    "but the operator has requested a manual review of scenario confidence before merging. " +
+                    "Please have a human reviewer verify the T-FINAL results and scenario verdicts " +
+                    "before this PR is merged.",
+                    CancellationToken.None);
+            }
+            catch { /* best-effort — gate was already approved above */ }
+        }
+
+        _gateFeedbackInputs.Remove(notificationId);
+        RefreshData();
+    }
+
+    /// <summary>
+    /// Dismiss a single FlowMonitor info card. If the card represents a coalesced group of
+    /// identical notifications, every member of the group is dismissed in one click.
+    /// </summary>
+    private void DismissFlowMonitorCard(string displayNotificationId)
+    {
+        if (!_flowMonitorGroups.TryGetValue(displayNotificationId, out var groupIds))
+            groupIds = new List<string> { displayNotificationId };
+
+        foreach (var id in groupIds)
+        {
+            if (_httpService is not null) _httpService.Dismiss(id);
+            else _inProcessService?.Dismiss(id);
+        }
+        RefreshData();
+    }
+
+    /// <summary>Bulk-dismiss every open FlowMonitor info-only notification.</summary>
+    private void DismissAllFlowMonitorInfo()
+    {
+        if (_httpService is not null) _httpService.DismissAllFlowMonitorInfo();
+        else _inProcessService?.DismissAllFlowMonitorInfo();
+        RefreshData();
+    }
+
+    /// <summary>
+    /// Groups identical FlowMonitor info-only notifications by (GateName + first ~200 chars
+    /// of Context). The most recent member of each group becomes the "display" card; the
+    /// rest are added to <see cref="_collapsedFlowMonitorIds"/> so the render loop skips them.
+    /// FlowMonitor "fix" gates are NEVER grouped — each is a distinct decision.
+    /// </summary>
+    private void RecomputeFlowMonitorGroups()
+    {
+        _flowMonitorGroups.Clear();
+        _collapsedFlowMonitorIds.Clear();
+        _hasOpenFlowMonitorInfo = false;
+
+        var byKey = new Dictionary<string, List<GateNotification>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var n in _notifications)
+        {
+            if (n.IsResolved) continue;
+            if (!n.GateId.StartsWith("flow-monitor:", StringComparison.OrdinalIgnoreCase)) continue;
+            if (n.GateId.StartsWith("flow-monitor:fix:", StringComparison.OrdinalIgnoreCase)) continue;
+
+            _hasOpenFlowMonitorInfo = true;
+            var contextKey = (n.Context ?? string.Empty);
+            if (contextKey.Length > 200) contextKey = contextKey[..200];
+            var key = $"{n.GateName}|{contextKey}";
+            if (!byKey.TryGetValue(key, out var list))
+                byKey[key] = list = new List<GateNotification>();
+            list.Add(n);
+        }
+
+        foreach (var (_, list) in byKey)
+        {
+            // Most recent notification becomes the display card.
+            var ordered = list.OrderByDescending(x => x.CreatedAt).ToList();
+            var display = ordered[0];
+            _flowMonitorGroups[display.Id] = ordered.Select(x => x.Id).ToList();
+            for (var i = 1; i < ordered.Count; i++)
+                _collapsedFlowMonitorIds.Add(ordered[i].Id);
+        }
+    }
+
+    private void ApproveDecision(string decisionId)
+    {
+        var feedback = _feedbackInputs.GetValueOrDefault(decisionId, "");
+        _decisionGateService?.ApproveDecision(decisionId, string.IsNullOrWhiteSpace(feedback) ? null : feedback);
+        _feedbackInputs.Remove(decisionId);
+        RefreshData();
+    }
+
+    private async Task RejectDecisionAsync(string decisionId)
+    {
+        var feedback = _feedbackInputs.GetValueOrDefault(decisionId, "");
+        var feedbackText = string.IsNullOrWhiteSpace(feedback) ? null : feedback;
+        _decisionGateService?.RejectDecision(decisionId, feedbackText);
+
+        // If the decision has an associated PR, post a rework comment to trigger agent rework
+        var decision = _decisionLog?.GetDecision(decisionId);
+        if (decision?.AssociatedPrNumber is > 0 && _reviewService is not null && feedbackText is not null)
+        {
+            try
+            {
+                await _reviewService.AddCommentAsync(decision.AssociatedPrNumber.Value,
+                    $"🔄 **Decision Rejected**: {decision.Title}\n\n" +
+                    $"**Original decision:** {decision.Rationale}\n\n" +
+                    $"**Human guidance:** {feedbackText}\n\n" +
+                    "Please rework this PR using the corrected decision above as a constraint.",
+                    CancellationToken.None);
+            }
+            catch { /* best-effort — agent will detect rejection via status check too */ }
+        }
+
+        _feedbackInputs.Remove(decisionId);
+        RefreshData();
+    }
+
+    /// <summary>
+    /// Extract a short one-line summary from verbose FlowMonitor context markdown.
+    /// Looks for key lines, falls back to the first non-empty line.
+    /// </summary>
+    private static string ExtractFlowMonitorSummary(string? context)
+    {
+        if (string.IsNullOrWhiteSpace(context)) return "FlowMonitor alert";
+
+        // Look for key informational lines in priority order
+        string[] prefixes = [
+            "**What happened:**", "What happened:",
+            "**Finding:**", "Finding:",
+            "Automatically handled:",
+        ];
+
+        foreach (var line in context.Split('\n'))
+        {
+            var trimmed = line.Trim();
+            foreach (var prefix in prefixes)
+            {
+                if (trimmed.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    var summary = trimmed[prefix.Length..].Trim();
+                    return summary.Length > 120 ? summary[..117] + "..." : summary;
+                }
+            }
+        }
+
+        // Fallback: first non-empty line (strip markdown bold markers for readability)
+        var firstLine = context.Split('\n')
+            .Select(l => l.Trim().Replace("**", ""))
+            .FirstOrDefault(l => l.Length > 5);
+        if (firstLine is not null)
+            return firstLine.Length > 120 ? firstLine[..117] + "..." : firstLine;
+
+        return "FlowMonitor alert";
+    }
+
+    // ---------------------------------------------------------------------
+    // T1.5: FixRecommendation helpers
+    // ---------------------------------------------------------------------
+
+    /// <summary>
+    /// Pull the latest 50 recommendations and index them by id for fast lookup
+    /// in the gate-card render loop. Bundled mode reads from <see cref="FlowMonitorPersistence"/>;
+    /// standalone mode goes through the API endpoint.
+    /// </summary>
+    private async Task RefreshFixRecommendationsAsync()
+    {
+        try
+        {
+            IReadOnlyList<FixRecommendation> recs;
+            if (_flowPersistence is not null)
+            {
+                recs = _flowPersistence.GetRecentRecommendations(50);
+            }
+            else if (_http is not null)
+            {
+                recs = await _http.GetFromJsonAsync<List<FixRecommendation>>(
+                    "/api/dashboard/health/flow-monitor/recommendations") ?? new();
+            }
+            else
+            {
+                return;
+            }
+
+            var byId = recs.ToDictionary(r => r.Id, r => r);
+            // Only mutate + re-render when the set actually changed — otherwise we'd thrash the UI.
+            if (byId.Count != _fixRecsById.Count
+                || !byId.Keys.All(k => _fixRecsById.ContainsKey(k)))
+            {
+                _fixRecsById = byId;
+                await InvokeAsync(StateHasChanged);
+            }
+            else
+            {
+                _fixRecsById = byId;
+            }
+        }
+        catch
+        {
+            // Runner unreachable, DB locked, etc. — silent fail, will retry on next tick.
+        }
+    }
+
+    /// <summary>
+    /// Look up the FixRecommendation associated with a "flow-monitor:fix:{id}" gate.
+    /// Returns null until the first poll cycle has populated the cache.
+    /// </summary>
+    private FixRecommendation? GetFixRecommendationForGate(string gateId)
+    {
+        const string prefix = "flow-monitor:fix:";
+        if (!gateId.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return null;
+        var id = gateId[prefix.Length..];
+        return _fixRecsById.TryGetValue(id, out var rec) ? rec : null;
+    }
+
+    private void ToggleFixRecPlan(string gateUiId)
+    {
+        if (!_expandedPlans.Add(gateUiId))
+            _expandedPlans.Remove(gateUiId);
+    }
+
+    /// <summary>
+    /// Render the first three non-empty lines of the plan as a teaser shown without expanding.
+    /// Strips the YAML front-matter delimiter (---) and the leading "## Problem" header so the
+    /// preview shows actual content, not boilerplate.
+    /// </summary>
+    private static string GetPlanPreview(string planMarkdown)
+    {
+        if (string.IsNullOrWhiteSpace(planMarkdown)) return string.Empty;
+        var lines = planMarkdown.Split('\n', StringSplitOptions.None)
+            .Select(l => l.TrimEnd('\r'))
+            .Where(l => !string.IsNullOrWhiteSpace(l)
+                        && !l.StartsWith("---")
+                        && !l.StartsWith("## Problem", StringComparison.OrdinalIgnoreCase)
+                        && !l.StartsWith("# "))
+            .Take(3)
+            .ToList();
+        return string.Join(" ", lines).Trim();
+    }
+
+    /// <summary>
+    /// Render plan Markdown to sanitized HTML. Markdig produces the HTML, then HtmlSanitizer
+    /// strips any tags/attributes outside a tight allow-list — even the planner's own LLM
+    /// output is treated as untrusted because operator feedback is mixed in during reworks.
+    /// </summary>
+    private static string RenderSafeMarkdown(string markdown)
+    {
+        if (string.IsNullOrEmpty(markdown)) return string.Empty;
+        var html = Markdown.ToHtml(markdown, _fixRecMarkdownPipeline);
+        return _htmlSanitizer.Sanitize(html);
+    }
+
+    private async Task ApproveFixRecommendationAsync(string recId, string notificationUiId)
+    {
+        _fixRecActionInProgress[notificationUiId] = "Approving plan...";
+        StateHasChanged();
+        try
+        {
+            await PostFixRecActionAsync($"recommendations/{recId}/approve", payload: null);
+        }
+        finally
+        {
+            _fixRecActionInProgress.Remove(notificationUiId);
+            await RefreshFixRecommendationsAsync();
+            RefreshData();
+        }
+    }
+
+    private async Task ApproveFixRecommendationAndRestartAsync(string recId, string notificationUiId)
+    {
+        _fixRecActionInProgress[notificationUiId] = "Approving plan and restarting runner...";
+        StateHasChanged();
+        try
+        {
+            var approved = await PostFixRecActionAsync($"recommendations/{recId}/approve", payload: null);
+            if (!approved)
+            {
+                _fixRecActionInProgress[notificationUiId] = "⚠️ Approve failed — restart skipped.";
+                StateHasChanged();
+                await Task.Delay(2500);
+                return;
+            }
+
+            _fixRecActionInProgress[notificationUiId] = "Restarting runner...";
+            StateHasChanged();
+            await PostRunnerRestartAsync();
+        }
+        finally
+        {
+            _fixRecActionInProgress.Remove(notificationUiId);
+            await RefreshFixRecommendationsAsync();
+            RefreshData();
+        }
+    }
+
+    private async Task DismissFixRecommendationAsync(string recId, string notificationUiId)
+    {
+        _fixRecActionInProgress[notificationUiId] = "Dismissing recommendation...";
+        StateHasChanged();
+        try
+        {
+            await PostFixRecActionAsync($"recommendations/{recId}/reject", payload: null);
+        }
+        finally
+        {
+            _fixRecActionInProgress.Remove(notificationUiId);
+            await RefreshFixRecommendationsAsync();
+            RefreshData();
+        }
+    }
+
+    private async Task<bool> PostFixRecActionAsync(string relativePath, object? payload)
+    {
+        var url = $"/api/dashboard/health/flow-monitor/{relativePath}";
+        var http = _http ?? GetSelfHttpClient();
+        try
+        {
+            using var resp = payload is null
+                ? await http.PostAsync(url, content: null)
+                : await http.PostAsJsonAsync(url, payload);
+            return resp.IsSuccessStatusCode;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private async Task PostRunnerRestartAsync()
+    {
+        var http = _http ?? GetSelfHttpClient();
+
+        try
+        {
+            await http.PostAsync("/api/dashboard/runtime/restart", content: null);
+        }
+        catch
+        {
+            // Common to disconnect mid-flight while the runner shuts down and relaunches.
+        }
+    }
+
+    // ── Proposal helpers (MissingWork + FlowAction) ─────────────────────────────────
+
+    /// <summary>
+    /// Fetch pending proposals from both subsystems and trigger a re-render.
+    /// Uses an HTTP call to the Runner API so it works in both bundled and standalone modes.
+    /// </summary>
+    private async Task RefreshProposalsAsync()
+    {
+        try
+        {
+            if (_missingWorkStore is not null || _flowActionProposalStore is not null)
+            {
+                // Bundled mode: read directly from in-process stores (no self-HTTP).
+                _missingWorkProposals = _missingWorkStore?.ListPendingProposals(50)?.ToList();
+                _flowActionProposals = _flowActionProposalStore is not null
+                    ? (await _flowActionProposalStore.ListPendingAsync(CancellationToken.None))?.ToList()
+                    : null;
+            }
+            else
+            {
+                // Standalone mode: HTTP to Runner API.
+                var http = GetProposalHttpClient();
+                _missingWorkProposals = await http.GetFromJsonAsync<List<ProposedIssue>>(
+                    "/api/dashboard/missing-work-proposals");
+                _flowActionProposals = await http.GetFromJsonAsync<List<ProposedFlowAction>>(
+                    "/api/dashboard/flow-action-proposals");
+            }
+            await InvokeAsync(StateHasChanged);
+        }
+        catch { /* best-effort — section simply stays hidden until next poll */ }
+    }
+
+    private async Task ApproveMissingWorkAsync(string id)
+    {
+        await GetProposalHttpClient().PostAsJsonAsync(
+            $"/api/dashboard/missing-work-proposals/{id}/approve", new { });
+        await RefreshProposalsAsync();
+    }
+
+    private async Task RejectMissingWorkAsync(string id)
+    {
+        await GetProposalHttpClient().PostAsJsonAsync(
+            $"/api/dashboard/missing-work-proposals/{id}/reject", new { });
+        await RefreshProposalsAsync();
+    }
+
+    private async Task ApproveFlowActionAsync(string id)
+    {
+        await GetProposalHttpClient().PostAsJsonAsync(
+            $"/api/dashboard/flow-action-proposals/{id}/approve", new { });
+        await RefreshProposalsAsync();
+    }
+
+    private async Task RejectFlowActionAsync(string id)
+    {
+        await GetProposalHttpClient().PostAsJsonAsync(
+            $"/api/dashboard/flow-action-proposals/{id}/reject", new { });
+        await RefreshProposalsAsync();
+    }
+
+    /// <summary>
+    /// Returns the HttpClient for proposal API calls.  In standalone mode <c>_http</c> is already
+    /// set; in bundled mode we create one pointing at the same process (localhost:5050).
+    /// </summary>
+    private HttpClient GetProposalHttpClient() => _http ?? GetSelfHttpClient();
+
+    /// <summary>
+    /// Returns an HttpClient that can call the Runner API from within the same process.
+    /// The named "RunnerApi" client has a BaseAddress only in standalone Dashboard.Host; in
+    /// bundled mode the factory returns a blank client. We always ensure BaseAddress is set.
+    /// </summary>
+    private HttpClient GetSelfHttpClient()
+    {
+        var factory = ServiceProvider.GetService<IHttpClientFactory>();
+        var http = factory?.CreateClient("RunnerApi");
+        if (http is not null && http.BaseAddress is null)
+            http.BaseAddress = new Uri(Navigation.BaseUri);
+        return http ?? new HttpClient { BaseAddress = new Uri(Navigation.BaseUri) };
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        _fixRecPollTimer?.Dispose();
+        _proposalPollTimer?.Dispose();
+        if (_httpService is not null)
+            _httpService.OnChange -= OnChange;
+        else if (_inProcessService is not null)
+            _inProcessService.OnChange -= OnChange;
+
+        if (_decisionLog is not null)
+            _decisionLog.OnDecisionChanged -= OnDecisionChange;
+
+        if (_clarificationStore is not null)
+            _clarificationStore.OnChange -= OnChange;
+    }
+}

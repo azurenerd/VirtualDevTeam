@@ -1,0 +1,200 @@
+@page "/flow-monitor-log"
+@rendermode InteractiveServer
+@using Microsoft.AspNetCore.Components.Web
+@using VirtualDevTeam.Core.HealthMonitor
+@using VirtualDevTeam.Dashboard.Services
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+@inject NavigationManager Navigation
+@inject IServiceProvider Services
+@inject DashboardMode Mode
+@inject IConfiguration Config
+@inject ILogger<FlowMonitorLog> Logger
+
+<PageTitle>Virtual Dev Team — Flow Monitor Log</PageTitle>
+
+<div class="dashboard-header" data-testid="page-flow-monitor-log">
+    <h1>🔍 FlowMonitor Live Log</h1>
+    <span class="header-badge @(_connected ? "" : "warning")">
+        ● @(_connected ? "streaming" : "connecting…")
+    </span>
+</div>
+
+<div class="flowlog-shell">
+    <div class="flowlog-toolbar">
+        <div class="flowlog-toolbar-group">
+            <label class="flowlog-label">Verbosity</label>
+            <div class="flowlog-verbosity-group" role="group" aria-label="Verbosity">
+                <button class="flowlog-vbtn @(_verbosity == FlowMonitorVerbosity.Low ? "active" : "")"
+                        @onclick="() => SetVerbosity(FlowMonitorVerbosity.Low)"
+                        title="Lifecycle + findings + errors only — executive summary">
+                    LOW
+                </button>
+                <button class="flowlog-vbtn @(_verbosity == FlowMonitorVerbosity.Medium ? "active" : "")"
+                        @onclick="() => SetVerbosity(FlowMonitorVerbosity.Medium)"
+                        title="Default — adds detectors + actions + results">
+                    MED
+                </button>
+                <button class="flowlog-vbtn @(_verbosity == FlowMonitorVerbosity.High ? "active" : "")"
+                        @onclick="() => SetVerbosity(FlowMonitorVerbosity.High)"
+                        title="Full firehose — adds raw info events">
+                    HIGH
+                </button>
+            </div>
+        </div>
+
+        <div class="flowlog-toolbar-group">
+            <span class="flowlog-counter" title="Total received from server / rendered after verbosity filter">
+                @_totalReceived <span class="flowlog-counter-sep">/</span> @_totalRendered events
+            </span>
+        </div>
+
+        <div class="flowlog-toolbar-spacer"></div>
+
+        <div class="flowlog-toolbar-group">
+            <button class="flowlog-action-btn" @onclick="ClearTerminal" title="Clear terminal output (does not affect server state)">
+                🧹 Clear
+            </button>
+            <a class="flowlog-action-btn" href="/health" title="Open the Health Monitor page">
+                🩺 Health
+            </a>
+        </div>
+    </div>
+
+    @if (Mode.IsStandalone)
+    {
+        <div class="flowlog-banner">
+            ⚠ Standalone dashboard mode — events stream from the Runner at <code>@_runnerBaseUrl</code>.
+            If the Runner is not running, the terminal will sit idle.
+        </div>
+    }
+
+    <div id="flow-monitor-log-terminal" class="flowlog-terminal" @ref="_terminalRef"></div>
+
+    <div class="flowlog-legend">
+        <span class="lg-item"><span class="lg-dot lg-magenta">●</span> finding (assistant)</span>
+        <span class="lg-item"><span class="lg-dot lg-green">●</span> action / success</span>
+        <span class="lg-item"><span class="lg-dot lg-red">●</span> error / failed</span>
+        <span class="lg-item"><span class="lg-dot lg-cyan">●</span> detector / reasoning</span>
+        <span class="lg-item"><span class="lg-dot lg-gray">●</span> lifecycle / info</span>
+    </div>
+</div>
+
+<style>
+    .flowlog-shell { padding: 0.75rem; display: flex; flex-direction: column; gap: 0.5rem; height: calc(100vh - 140px); }
+    .flowlog-toolbar { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; padding: 0.5rem 0.75rem; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; }
+    .flowlog-toolbar-group { display: flex; align-items: center; gap: 0.5rem; }
+    .flowlog-toolbar-spacer { flex: 1; }
+    .flowlog-label { font-size: 0.85em; opacity: 0.7; font-weight: 600; }
+    .flowlog-verbosity-group { display: inline-flex; gap: 0; border: 1px solid rgba(255,255,255,0.15); border-radius: 4px; overflow: hidden; }
+    .flowlog-vbtn { background: transparent; color: inherit; border: 0; padding: 4px 12px; font-size: 0.8em; font-family: monospace; cursor: pointer; }
+    .flowlog-vbtn + .flowlog-vbtn { border-left: 1px solid rgba(255,255,255,0.15); }
+    .flowlog-vbtn:hover { background: rgba(255,255,255,0.06); }
+    .flowlog-vbtn.active { background: rgba(56,189,248,0.2); color: #7dd3fc; }
+    .flowlog-counter { font-family: monospace; font-size: 0.85em; opacity: 0.85; padding: 4px 8px; background: rgba(255,255,255,0.04); border-radius: 4px; }
+    .flowlog-counter-sep { opacity: 0.4; padding: 0 0.2rem; }
+    .flowlog-action-btn { background: rgba(255,255,255,0.06); color: inherit; border: 1px solid rgba(255,255,255,0.12); padding: 4px 10px; font-size: 0.85em; cursor: pointer; border-radius: 4px; text-decoration: none; }
+    .flowlog-action-btn:hover { background: rgba(255,255,255,0.12); }
+    .flowlog-banner { padding: 0.5rem 0.75rem; background: rgba(245,158,11,0.12); border-left: 3px solid #f59e0b; border-radius: 4px; font-size: 0.85em; }
+    .flowlog-banner code { background: rgba(255,255,255,0.08); padding: 1px 6px; border-radius: 3px; font-size: 0.95em; }
+    .flowlog-terminal { flex: 1; min-height: 320px; background: #0d1117; border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; padding: 4px; overflow: hidden; }
+    .flowlog-legend { display: flex; gap: 1.25rem; flex-wrap: wrap; padding: 0.4rem 0.75rem; font-size: 0.78em; opacity: 0.75; }
+    .lg-item { display: inline-flex; align-items: center; gap: 0.3rem; font-family: monospace; }
+    .lg-dot { font-size: 1.05em; line-height: 1; }
+    .lg-magenta { color: #d2a8ff; }
+    .lg-green { color: #3fb950; }
+    .lg-red { color: #ff7b72; }
+    .lg-cyan { color: #00d4ff; }
+    .lg-gray { color: #8b949e; }
+    .header-badge.warning { background: rgba(245,158,11,0.18); color: #fcd34d; border-color: rgba(245,158,11,0.35); }
+</style>
+
+@code {
+    private ElementReference _terminalRef;
+    private DotNetObjectReference<FlowMonitorLog>? _objRef;
+    private FlowMonitorVerbosity _verbosity = FlowMonitorVerbosity.Medium;
+    private int _totalReceived;
+    private int _totalRendered;
+    private bool _connected; // best-effort; the JS side knows the truth and writes to the terminal
+    private string _runnerBaseUrl = "";
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        try
+        {
+            // In bundled mode the hub lives on the same origin (the Runner is hosting Blazor + the hub).
+            // In standalone mode the Runner is at a different port; pull the configured RunnerUrl.
+            string hubUrl;
+            if (Mode.IsStandalone)
+            {
+                _runnerBaseUrl = Config.GetValue("RunnerUrl", "http://localhost:5050")!;
+                hubUrl = _runnerBaseUrl.TrimEnd('/') + "/hubs/flowmonitor";
+            }
+            else
+            {
+                hubUrl = Navigation.ToAbsoluteUri("/hubs/flowmonitor").ToString();
+            }
+
+            _objRef = DotNetObjectReference.Create(this);
+            await JS.InvokeVoidAsync(
+                "FlowMonitorLog.init",
+                "flow-monitor-log-terminal",
+                hubUrl,
+                _objRef,
+                (int)_verbosity);
+            _connected = true;
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "FlowMonitorLog: failed to initialize terminal");
+        }
+    }
+
+    [JSInvokable]
+    public Task OnCountersChanged(int received, int rendered)
+    {
+        _totalReceived = received;
+        _totalRendered = rendered;
+        return InvokeAsync(StateHasChanged);
+    }
+
+    private async Task SetVerbosity(FlowMonitorVerbosity v)
+    {
+        _verbosity = v;
+        try
+        {
+            await JS.InvokeVoidAsync("FlowMonitorLog.setVerbosity", (int)v);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex, "FlowMonitorLog: setVerbosity JS call failed");
+        }
+    }
+
+    private async Task ClearTerminal()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("FlowMonitorLog.clear");
+            _totalReceived = 0;
+            _totalRendered = 0;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex, "FlowMonitorLog: clear JS call failed");
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("FlowMonitorLog.dispose");
+        }
+        catch { /* circuit may already be torn down */ }
+        _objRef?.Dispose();
+        _objRef = null;
+    }
+}

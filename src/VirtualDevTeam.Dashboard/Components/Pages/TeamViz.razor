@@ -1,0 +1,395 @@
+@page "/team"
+@rendermode InteractiveServer
+@using VirtualDevTeam.Core.Agents
+@using VirtualDevTeam.Dashboard.Services
+@implements IDisposable
+@inject IDashboardDataService DataService
+
+<PageTitle>Virtual Dev Team — Team View</PageTitle>
+
+<div class="dashboard-header" data-testid="page-team">
+    <h1>Team Visualization</h1>
+    <div class="header-badges">
+        <span class="header-badge healthy">
+            🤖 @_agents.Count Agents
+        </span>
+    </div>
+</div>
+
+<div class="team-hero-banner">
+    <img src="images/team-office.png" alt="Virtual AI Team Office" class="team-hero-img" />
+    <div class="team-hero-overlay">
+        <div class="team-hero-title">Your Virtual Team</div>
+        <div class="team-hero-subtitle">Future: Interactive 3D team workspace</div>
+    </div>
+</div>
+
+@if (_agents.Count == 0)
+{
+    <div class="empty-state">
+        <div class="empty-icon">👥</div>
+        <div class="empty-text">No agents in the team</div>
+        <div class="empty-sub">Agents will appear here once they connect to the orchestrator</div>
+    </div>
+}
+else
+{
+    <div class="team-radial">
+        <svg class="radial-svg" viewBox="0 0 800 800" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+                <linearGradient id="grad-pm" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stop-color="#a371f7" stop-opacity="0.6" />
+                    <stop offset="100%" stop-color="#7c3aed" stop-opacity="0.1" />
+                </linearGradient>
+                <linearGradient id="grad-pe" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stop-color="#3fb950" stop-opacity="0.6" />
+                    <stop offset="100%" stop-color="#238636" stop-opacity="0.1" />
+                </linearGradient>
+                <filter id="glow-pm">
+                    <feGaussianBlur stdDeviation="3" result="blur" />
+                    <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+                </filter>
+                <filter id="glow-pe">
+                    <feGaussianBlur stdDeviation="2.5" result="blur" />
+                    <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+                </filter>
+            </defs>
+
+            @* Orbit ring *@
+            <circle cx="400" cy="400" r="@_orbitRadius" fill="none"
+                    stroke="rgba(255,255,255,0.04)" stroke-width="1" stroke-dasharray="4,8" />
+
+            @* Connection lines: PM→leaders/non-engineers, SE leader→SE children *@
+            @foreach (var conn in _connections)
+            {
+                <path d="@conn.Path" fill="none"
+                      stroke="@conn.StrokeColor" stroke-width="@conn.StrokeWidth"
+                      stroke-linecap="round" opacity="@conn.Opacity"
+                      filter="@conn.Filter" />
+                @* Animated particle flowing along the path *@
+                <circle r="3" fill="@conn.ParticleColor" opacity="0.8">
+                    <animateMotion dur="@conn.AnimDuration" repeatCount="indefinite" path="@conn.Path" />
+                </circle>
+                <circle r="1.5" fill="@conn.ParticleColor" opacity="0.5">
+                    <animateMotion dur="@conn.AnimDuration" repeatCount="indefinite" path="@conn.Path"
+                                   begin="@conn.AnimOffset" />
+                </circle>
+            }
+        </svg>
+
+        @* Center PM card *@
+        @if (_pmAgent is not null)
+        {
+            var pmStatus = $"desk-{_pmAgent.Status.ToString().ToLowerInvariant()}";
+            <div class="radial-center">
+                <div class="team-desk team-desk-pm @pmStatus">
+                    <div class="desk-avatar avatar-programmanager">
+                        PM
+                        <span class="desk-status-dot @pmStatus"></span>
+                    </div>
+                    <div class="desk-name">@_pmAgent.DisplayName</div>
+                    <div class="desk-role-label">Program Manager</div>
+                    @RenderBubble(_pmAgent)
+                </div>
+            </div>
+        }
+
+        @* Outer agents positioned radially *@
+        @for (int i = 0; i < _outerAgents.Count && i < _outerPositions.Count; i++)
+        {
+            var agent = _outerAgents[i];
+            var pos = _outerPositions[i];
+            var statusClass = $"desk-{agent.Status.ToString().ToLowerInvariant()}";
+            var roleClass = $"desk-role-{agent.Role.ToString().ToLowerInvariant()}";
+
+            <div class="radial-agent @roleClass" style="left: @pos.Left; top: @pos.Top;">
+                <div class="team-desk @statusClass">
+                    <div class="desk-avatar @($"avatar-{agent.Role.ToString().ToLowerInvariant()}")">
+                        @GetRoleInitials(agent.Role, agent.Specialty)
+                        <span class="desk-status-dot @statusClass"></span>
+                    </div>
+                    <div class="desk-name">@agent.DisplayName</div>
+                    <div class="desk-role-label">@FormatRole(agent.Role, agent.Specialty)</div>
+                    @RenderBubble(agent)
+                </div>
+            </div>
+        }
+    </div>
+
+    <div class="team-legend">
+        <div class="legend-title">Status Legend</div>
+        <div class="legend-items">
+            <div class="legend-item">
+                <span class="legend-dot desk-working"></span>
+                <span>Working</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-dot desk-idle"></span>
+                <span>Idle</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-dot desk-blocked"></span>
+                <span>Blocked</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-dot desk-offline"></span>
+                <span>Offline</span>
+            </div>
+        </div>
+        <div class="legend-title" style="margin-top: 0.75rem;">Connections</div>
+        <div class="legend-items">
+            <div class="legend-item">
+                <span class="legend-line connection-pm"></span>
+                <span>PM ↔ Lead / Non-SE</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-line connection-pe"></span>
+                <span>SE Lead ↔ SE / TE</span>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private List<AgentSnapshot> _agents = [];
+    private AgentSnapshot? _pmAgent;
+    private List<AgentSnapshot> _outerAgents = [];
+    private List<AgentPosition> _outerPositions = [];
+    private List<ConnectionArc> _connections = [];
+    private const int _orbitRadius = 280;
+    private const int _cx = 400;
+    private const int _cy = 400;
+
+    protected override void OnInitialized()
+    {
+        RefreshData();
+        DataService.OnChange += OnDataChanged;
+    }
+
+    private void RefreshData()
+    {
+        _agents = DataService.GetAllAgentSnapshots()
+            .OrderBy(a => GetRoleSortOrder(a.Role))
+            .ThenBy(a => a.DisplayName)
+            .ToList();
+
+        _pmAgent = _agents.FirstOrDefault(a => a.Role == AgentRole.ProgramManager);
+        _outerAgents = _agents.Where(a => a.Role != AgentRole.ProgramManager).ToList();
+
+        ComputePositions();
+        BuildConnections();
+    }
+
+    private void ComputePositions()
+    {
+        _outerPositions = new List<AgentPosition>();
+        int n = _outerAgents.Count;
+        if (n == 0) return;
+
+        // Start from top (-90°) and go clockwise
+        double startAngle = -Math.PI / 2;
+        for (int i = 0; i < n; i++)
+        {
+            double angle = startAngle + (2 * Math.PI * i / n);
+            // Convert SVG coords (800x800 viewBox) to percentage of the container
+            double svgX = _cx + _orbitRadius * Math.Cos(angle);
+            double svgY = _cy + _orbitRadius * Math.Sin(angle);
+            double pctX = svgX / 800.0 * 100.0;
+            double pctY = svgY / 800.0 * 100.0;
+
+            _outerPositions.Add(new AgentPosition
+            {
+                Left = $"{pctX:F1}%",
+                Top = $"{pctY:F1}%",
+                SvgX = svgX,
+                SvgY = svgY
+            });
+        }
+    }
+
+    private void BuildConnections()
+    {
+        _connections = new List<ConnectionArc>();
+        if (_pmAgent is null || _outerAgents.Count == 0) return;
+
+        var seLeader = _outerAgents.FirstOrDefault(a => a.Role == AgentRole.SoftwareEngineer);
+        int seLeaderIdx = seLeader is not null ? _outerAgents.IndexOf(seLeader) : -1;
+
+        // Roles that report to the SE leader (not directly to PM)
+        var seChildRoles = new HashSet<AgentRole>
+        {
+            AgentRole.SoftwareEngineer, AgentRole.TestEngineer
+        };
+
+        for (int i = 0; i < _outerAgents.Count; i++)
+        {
+            if (i >= _outerPositions.Count) break; // Guard against agent/position list mismatch
+            var agent = _outerAgents[i];
+            var pos = _outerPositions[i];
+
+            // Skip SE children — they connect to the SE leader, not PM
+            if (seLeader is not null && seChildRoles.Contains(agent.Role) && i != seLeaderIdx)
+                continue;
+
+            // PM → agent (curved path)
+            bool isLeader = agent.Role == AgentRole.SoftwareEngineer;
+            var curve = ComputeCurve(_cx, _cy, pos.SvgX, pos.SvgY, curvature: 0.15);
+
+            _connections.Add(new ConnectionArc
+            {
+                Path = curve,
+                StrokeColor = "url(#grad-pm)",
+                StrokeWidth = isLeader ? "2.5" : "1.5",
+                Opacity = "0.6",
+                Filter = "url(#glow-pm)",
+                ParticleColor = "#a371f7",
+                AnimDuration = $"{3.0 + i * 0.4:F1}s",
+                AnimOffset = $"{i * 0.5:F1}s"
+            });
+        }
+
+        // SE leader → other SE agents + Test Engineer
+        if (seLeader is not null && seLeaderIdx >= 0 && seLeaderIdx < _outerPositions.Count)
+        {
+            var leaderPos = _outerPositions[seLeaderIdx];
+            for (int i = 0; i < _outerAgents.Count; i++)
+            {
+                if (i >= _outerPositions.Count) break;
+                if (i == seLeaderIdx) continue;
+                if (!seChildRoles.Contains(_outerAgents[i].Role)) continue;
+
+                var childPos = _outerPositions[i];
+                var curve = ComputeCurve(leaderPos.SvgX, leaderPos.SvgY, childPos.SvgX, childPos.SvgY, curvature: 0.2);
+
+                _connections.Add(new ConnectionArc
+                {
+                    Path = curve,
+                    StrokeColor = "url(#grad-pe)",
+                    StrokeWidth = "1.5",
+                    Opacity = "0.5",
+                    Filter = "url(#glow-pe)",
+                    ParticleColor = "#3fb950",
+                    AnimDuration = $"{2.5 + i * 0.3:F1}s",
+                    AnimOffset = $"{i * 0.3:F1}s"
+                });
+            }
+        }
+    }
+
+    /// <summary>Compute a quadratic bezier curve SVG path between two points.</summary>
+    private static string ComputeCurve(double x1, double y1, double x2, double y2, double curvature)
+    {
+        double mx = (x1 + x2) / 2;
+        double my = (y1 + y2) / 2;
+        double dx = x2 - x1;
+        double dy = y2 - y1;
+        // Perpendicular offset for curve
+        double cx = mx - dy * curvature;
+        double cy = my + dx * curvature;
+        return $"M {x1:F1},{y1:F1} Q {cx:F1},{cy:F1} {x2:F1},{y2:F1}";
+    }
+
+    private RenderFragment RenderBubble(AgentSnapshot agent) => __builder =>
+    {
+        if (agent.Status == AgentStatus.Working && agent.StatusReason is not null)
+        {
+            <div class="desk-bubble">
+                <span class="bubble-text" title="@agent.StatusReason">@TruncateTask(agent.StatusReason)</span>
+            </div>
+        }
+        else if (agent.Status == AgentStatus.Blocked)
+        {
+            <div class="desk-bubble bubble-blocked">
+                <span class="bubble-text">Blocked!</span>
+            </div>
+        }
+    };
+
+    private async void OnDataChanged()
+    {
+        try
+        {
+            RefreshData();
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (Exception)
+        {
+            // Never let a dashboard rendering error crash the runner process
+        }
+    }
+
+    private static int GetRoleSortOrder(AgentRole role) => role switch
+    {
+        AgentRole.ProgramManager => 0,
+        AgentRole.Researcher => 1,
+        AgentRole.Architect => 2,
+        AgentRole.SoftwareEngineer => 3,
+        AgentRole.TestEngineer => 6,
+        AgentRole.SecurityAuditor => 7,
+        _ => 99
+    };
+
+    private static string GetRoleInitials(AgentRole role, string? specialty = null) => role switch
+    {
+        AgentRole.ProgramManager => "PM",
+        AgentRole.Researcher => "RS",
+        AgentRole.Architect => "AR",
+        AgentRole.SoftwareEngineer => "SWE",
+        AgentRole.TestEngineer => "TE",
+        AgentRole.SecurityAuditor => "SA",
+        AgentRole.Custom when !string.IsNullOrEmpty(specialty) => GetInitialsFromName(specialty),
+        _ => "??"
+    };
+
+    private static string GetInitialsFromName(string name)
+    {
+        var words = name.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return words.Length >= 2
+            ? $"{words[0][0]}{words[1][0]}".ToUpperInvariant()
+            : name.Length >= 2 ? name[..2].ToUpperInvariant() : name.ToUpperInvariant();
+    }
+
+    private static string FormatRole(AgentRole role, string? specialty = null) => role switch
+    {
+        AgentRole.ProgramManager => "Program Manager",
+        AgentRole.Researcher => "Researcher",
+        AgentRole.Architect => "Architect",
+        AgentRole.SoftwareEngineer => "Software Engineer",
+        AgentRole.TestEngineer => "Test Engineer",
+        AgentRole.SecurityAuditor => "Security Auditor",
+        AgentRole.Custom when !string.IsNullOrEmpty(specialty) => "SME Specialist",
+        _ => role.ToString()
+    };
+
+    private static string TruncateTask(string task)
+    {
+        const int maxLen = 30;
+        if (task.Length <= maxLen) return task;
+        return task[..(maxLen - 1)] + "…";
+    }
+
+    public void Dispose()
+    {
+        DataService.OnChange -= OnDataChanged;
+    }
+
+    private class AgentPosition
+    {
+        public string Left { get; init; } = "50%";
+        public string Top { get; init; } = "50%";
+        public double SvgX { get; init; }
+        public double SvgY { get; init; }
+    }
+
+    private class ConnectionArc
+    {
+        public string Path { get; init; } = "";
+        public string StrokeColor { get; init; } = "#fff";
+        public string StrokeWidth { get; init; } = "1.5";
+        public string Opacity { get; init; } = "0.5";
+        public string Filter { get; init; } = "";
+        public string ParticleColor { get; init; } = "#fff";
+        public string AnimDuration { get; init; } = "3s";
+        public string AnimOffset { get; init; } = "0s";
+    }
+}

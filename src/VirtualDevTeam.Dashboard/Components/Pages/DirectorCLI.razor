@@ -1,0 +1,220 @@
+@page "/director-cli"
+@rendermode InteractiveServer
+@using Microsoft.JSInterop
+@using VirtualDevTeam.Dashboard.Services
+@inject IJSRuntime JS
+@inject DirectorCliService CliService
+@implements IAsyncDisposable
+
+<PageTitle>Director CLI — Virtual Dev Team</PageTitle>
+
+<div class="director-cli-container" data-testid="page-director-cli">
+    @* Thread tab bar *@
+    <div class="cli-tab-bar">
+        <div class="cli-tabs">
+            @foreach (var thread in _threads)
+            {
+                var threadId = thread.Id;
+                var isActive = threadId == _activeThreadId;
+                <div class="cli-tab @(isActive ? "active" : "") @(thread.Status == CliThreadStatus.Busy ? "busy" : "")"
+                     @onclick="() => SwitchThread(threadId)">
+                    <span class="tab-status">
+                        @if (thread.Status == CliThreadStatus.Busy)
+                        {
+                            <span class="status-busy">●</span>
+                        }
+                        else if (thread.Status == CliThreadStatus.Error)
+                        {
+                            <span class="status-error">●</span>
+                        }
+                        else
+                        {
+                            <span class="status-ready">●</span>
+                        }
+                    </span>
+                    <span class="tab-name">@thread.Name</span>
+                    @if (_threads.Count > 1)
+                    {
+                        <button class="tab-close" @onclick:stopPropagation="true"
+                                @onclick="() => CloseThread(threadId)" title="Close thread">×</button>
+                    }
+                </div>
+            }
+        </div>
+        <div class="cli-tab-actions">
+            <button class="btn-new-thread" @onclick="CreateNewThread" title="New thread (parallel session)">
+                <span>＋</span> New Thread
+            </button>
+        </div>
+    </div>
+
+    @* Terminal container *@
+    <div id="terminal-container" class="terminal-container"></div>
+
+    @* Status bar *@
+    <div class="cli-status-bar" data-testid="cli-status-bar">
+        <div class="status-bar-left">
+            <span class="status-bar-model" data-testid="status-bar-model">@(_currentModel ?? "copilot")</span>
+            <span class="status-bar-sep">·</span>
+            <span class="status-bar-thread">@(_activeThread?.Name ?? "Main")</span>
+        </div>
+        <div class="status-bar-center">
+            @if (_activeThread?.Status == CliThreadStatus.Busy)
+            {
+                <span class="status-bar-busy">⟳ Working...</span>
+            }
+            else if (_activeThread?.Status == CliThreadStatus.Error)
+            {
+                <span class="status-bar-error">✗ Error</span>
+            }
+            else
+            {
+                <span class="status-bar-ready">Ready</span>
+            }
+        </div>
+        <div class="status-bar-right">
+            <span class="status-bar-reqs">⚡ @(_activeThread?.TotalTokens ?? 0) reqs</span>
+            <span class="status-bar-sep">·</span>
+            <span class="status-bar-cmds">@(_activeThread?.CommandCount ?? 0) commands</span>
+        </div>
+    </div>
+</div>
+
+@code {
+    private DotNetObjectReference<DirectorCLI>? _objRef;
+    private List<CliThreadInfo> _threads = new();
+    private string? _activeThreadId;
+    private string? _currentModel;
+    private CliThreadInfo? _activeThread;
+    private bool _initialized;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _objRef = DotNetObjectReference.Create(this);
+        // Avoid duplicate thread creation on Blazor prerender + interactive
+        var existing = CliService.GetThreads();
+        if (existing.Count > 0)
+        {
+            _activeThreadId = existing[0].Id;
+        }
+        else
+        {
+            var threadId = CliService.CreateThread("Main");
+            _activeThreadId = threadId;
+        }
+        RefreshThreadList();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && _activeThreadId is not null)
+        {
+            await Task.Delay(100);
+            await JS.InvokeVoidAsync("DirectorCLI.init", "terminal-container", _objRef);
+            await JS.InvokeVoidAsync("DirectorCLI.activateThread", _activeThreadId, "terminal-container");
+            _initialized = true;
+
+            // Replay event history if thread has prior content
+            await ReplayHistoryAsync(_activeThreadId);
+        }
+    }
+
+    private async Task ReplayHistoryAsync(string threadId)
+    {
+        var history = CliService.GetThreadHistory(threadId);
+        if (history.Count == 0) return;
+
+        // Suppress the welcome banner since we're replaying
+        await JS.InvokeVoidAsync("DirectorCLI.setReplayMode", threadId, true);
+
+        foreach (var evt in history)
+            await JS.InvokeVoidAsync("DirectorCLI.handleEvent", threadId, evt);
+
+        await JS.InvokeVoidAsync("DirectorCLI.setReplayMode", threadId, false);
+    }
+
+    private async Task CreateNewThread()
+    {
+        var threadNum = _threads.Count + 1;
+        var threadId = CliService.CreateThread($"Thread {threadNum}");
+        _activeThreadId = threadId;
+        RefreshThreadList();
+
+        if (_initialized)
+            await JS.InvokeVoidAsync("DirectorCLI.activateThread", threadId, "terminal-container");
+    }
+
+    private async Task SwitchThread(string threadId)
+    {
+        _activeThreadId = threadId;
+        RefreshThreadList();
+        if (_initialized)
+            await JS.InvokeVoidAsync("DirectorCLI.activateThread", threadId, "terminal-container");
+    }
+
+    private async Task CloseThread(string threadId)
+    {
+        CliService.CloseThread(threadId);
+
+        if (_initialized)
+            await JS.InvokeVoidAsync("DirectorCLI.removeThread", threadId);
+
+        RefreshThreadList();
+
+        if (_activeThreadId == threadId)
+        {
+            _activeThreadId = _threads.FirstOrDefault()?.Id;
+            if (_activeThreadId is not null && _initialized)
+                await JS.InvokeVoidAsync("DirectorCLI.activateThread", _activeThreadId, "terminal-container");
+        }
+    }
+
+    [JSInvokable]
+    public async Task OnCommandEntered(string threadId, string command)
+    {
+        RefreshThreadList();
+        await InvokeAsync(StateHasChanged);
+
+        _ = Task.Run(async () =>
+        {
+            await CliService.SendCommandAsync(threadId, command, async (eventJson) =>
+            {
+                await InvokeAsync(async () =>
+                {
+                    await JS.InvokeVoidAsync("DirectorCLI.handleEvent", threadId, eventJson);
+                });
+            });
+
+            await InvokeAsync(() =>
+            {
+                RefreshThreadList();
+                StateHasChanged();
+            });
+        });
+    }
+
+    [JSInvokable]
+    public void OnCancelRequested(string threadId)
+    {
+        CliService.CancelCommand(threadId);
+        RefreshThreadList();
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void RefreshThreadList()
+    {
+        _threads = CliService.GetThreads().ToList();
+        _activeThread = _threads.FirstOrDefault(t => t.Id == _activeThreadId);
+        if (_activeThread?.Model is not null)
+            _currentModel = _activeThread.Model;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_initialized)
+        {
+            try { await JS.InvokeVoidAsync("DirectorCLI.destroy"); } catch { }
+        }
+        _objRef?.Dispose();
+    }
+}

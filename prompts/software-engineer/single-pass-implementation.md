@@ -30,6 +30,7 @@ tags:
      `INTEGRATION EDIT: <path> — <one-sentence reason>`
 - Do NOT re-scaffold the project, regenerate `.sln`/`.csproj` templates, rewrite Program.cs from scratch, or restyle existing CSS — that's NOT integration, that's scope creep.
 - If the task is 'scaffolding' or 'project foundation': emit project manifests, directory structure, placeholder entry-points, and .gitignore ONLY. Do NOT implement pages, components, services, or models — those belong to their own tasks.
+- **CRITICAL for T1 .gitignore**: The `.gitignore` must be comprehensive and technology-specific — derived from the {{tech_stack}} stack and architecture context. Cover ALL categories: build/compiler output, dependency directories, package artifacts, IDE/editor files, OS junk, secrets/env, test/coverage output, logs/temp/cache, and framework-generated files. For multi-component projects, cover ALL technologies in one root file. Do NOT ignore lockfiles, migrations, seed data, or runtime data files the app needs (e.g., data.json).
 - If the task description has a FilePlan (CREATE:/MODIFY:/USE:), follow it strictly for the primary files. Integration edits per the rules above are also allowed.
 - USE: files are references — read them for context but do NOT include them in your output unless you also need an integration edit there.
 - Prefer FEWER files. Every FILE: marker not needed for your task to work (primary OR integration) is scope creep.

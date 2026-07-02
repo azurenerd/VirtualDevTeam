@@ -1,4 +1,4 @@
-"""Generate/update AgentSquad executive documents."""
+"""Generate/update VirtualDevTeam executive documents."""
 from docx import Document
 from docx.shared import Pt, Inches, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -81,7 +81,7 @@ def add_table(doc, headers, rows):
 def generate_executive_summary():
     doc = Document()
 
-    add_title(doc, "AgentSquad: Human-Agent Hybrid Development")
+    add_title(doc, "VirtualDevTeam: Human-Agent Hybrid Development")
     add_subtitle(doc, "A Proposal for AI-Augmented Software Engineering at Microsoft")
     add_subtitle(doc, "Prepared by: Ben Humphrey  |  Date: April 2026  |  CONFIDENTIAL")
     doc.add_paragraph()
@@ -94,7 +94,7 @@ def generate_executive_summary():
         "be AI-augmented, with human engineers directing AI agents through the full software "
         "development lifecycle?")
     add_para(doc,
-        "AgentSquad is a working, battle-tested prototype that demonstrates this future. It is a "
+        "VirtualDevTeam is a working, battle-tested prototype that demonstrates this future. It is a "
         "multi-agent AI system where 7+ specialized AI agents \u2014 Program Manager, Researcher, "
         "Architect, Software Engineer, Software Engineers, and Test Engineer \u2014 "
         "collaborate through real GitHub PRs and Issues to build software end-to-end. Over 85+ "
@@ -102,7 +102,7 @@ def generate_executive_summary():
         "limiting, vision-based PR review, multi-tier test automation (including Playwright UI "
         "tests), and 23 documented operational lessons.")
     add_para(doc,
-        "Since the initial prototype, AgentSquad has evolved significantly with capabilities "
+        "Since the initial prototype, VirtualDevTeam has evolved significantly with capabilities "
         "that dramatically increase its power and flexibility:")
     add_bullet(doc,
         "Dynamic SME Agents \u2014 The PM and SE can spawn Subject Matter Expert agents on-demand "
@@ -128,7 +128,7 @@ def generate_executive_summary():
         "Incremental Code Generation \u2014 Agents now read existing file content before modifying, "
         "making surgical changes rather than full rewrites")
     add_para(doc,
-        "The proposed evolution transforms AgentSquad from a fully autonomous pipeline into a "
+        "The proposed evolution transforms VirtualDevTeam from a fully autonomous pipeline into a "
         "human-agent hybrid development platform where team members inject themselves into the "
         "virtual team at any level \u2014 acting as director of the whole team, or pairing with "
         "their role-matched agent.")
@@ -139,7 +139,7 @@ def generate_executive_summary():
         "constraints, and pressure to ship faster while maintaining quality. Current AI tools "
         "help individual developers write code faster, but they don't address the systemic "
         "challenges of coordinating complex software projects across multiple disciplines.")
-    add_para(doc, "AgentSquad addresses this at the team level:")
+    add_para(doc, "VirtualDevTeam addresses this at the team level:")
     add_bullet(doc,
         "A single developer acting as \"Director\" can manage an entire virtual dev team of 7+ "
         "AI agents, potentially leveraging AI for 85% of development and guiding the remaining "
@@ -204,7 +204,7 @@ def generate_executive_summary():
 
     add_h1(doc, "Benefits for Microsoft Engineering")
     add_bold_para(doc, "Productivity Multiplication: ",
-        "A single developer directing AgentSquad can produce the output equivalent of a small "
+        "A single developer directing VirtualDevTeam can produce the output equivalent of a small "
         "team. Agents handle research, spec writing, architecture, coding, testing, and reviews "
         "autonomously \u2014 the human provides direction and quality gates.")
     add_bold_para(doc, "Quality Through Systematic Review: ",
@@ -225,13 +225,13 @@ def generate_executive_summary():
         "adapts oversight in real time.")
     add_bold_para(doc, "GitHub-Native: ",
         "All artifacts live in GitHub repositories \u2014 no proprietary platform required. Teams "
-        "can adopt AgentSquad alongside their existing workflows.")
+        "can adopt VirtualDevTeam alongside their existing workflows.")
     add_bold_para(doc, "Prompt-Driven Iteration: ",
         "~95 externalized prompt templates in editable .md files allow rapid agent behavior "
         "tuning without code changes, recompilation, or redeployment.")
 
     add_h1(doc, "Implementation Status")
-    add_para(doc, "AgentSquad is not a proposal \u2014 it is a working system with:")
+    add_para(doc, "VirtualDevTeam is not a proposal \u2014 it is a working system with:")
     add_bullet(doc, "7 core agent roles + dynamic SME agents + custom agent definitions")
     add_bullet(doc, "167+ passing automated tests (unit, integration, agent behavior)")
     add_bullet(doc, "15-page Blazor Server dashboard with real-time SignalR updates")
@@ -245,7 +245,7 @@ def generate_executive_summary():
 
     add_h1(doc, "The Vision: Human-Directed AI Development Teams")
     add_para(doc,
-        "The ultimate vision for AgentSquad is a development model where human engineers work "
+        "The ultimate vision for VirtualDevTeam is a development model where human engineers work "
         "alongside AI agents as naturally as they work alongside human colleagues:")
     add_bullet(doc,
         "Solo Director Mode \u2014 One developer manages the entire agent team, reviewing specs, "
@@ -276,13 +276,13 @@ def generate_executive_summary():
     add_bullet(doc,
         "Position Microsoft's internal engineering as a showcase for AI-augmented development")
     add_para(doc,
-        "The AI-augmented development model is not theoretical \u2014 AgentSquad is already building "
+        "The AI-augmented development model is not theoretical \u2014 VirtualDevTeam is already building "
         "software autonomously with human oversight. The next step is to bring a human team into "
         "the loop and measure the impact.")
     doc.add_paragraph()
     add_para(doc, "For questions or discussion, contact Ben Humphrey (behumphr@microsoft.com)")
 
-    path = os.path.join(DOCS_DIR, "AgentSquad-Executive-Summary.docx")
+    path = os.path.join(DOCS_DIR, "VirtualDevTeam-Executive-Summary.docx")
     doc.save(path)
     print(f"Executive Summary saved to {path}")
 
@@ -293,7 +293,7 @@ def generate_executive_summary():
 def generate_detailed_summary():
     doc = Document()
 
-    add_title(doc, "AgentSquad: Complete Solution Guide")
+    add_title(doc, "VirtualDevTeam: Complete Solution Guide")
     add_subtitle(doc, "Architecture, Features, Capabilities, and Differentiation")
     add_subtitle(doc, "Prepared by: Ben Humphrey  |  Date: April 2026  |  CONFIDENTIAL")
     doc.add_paragraph()
@@ -310,7 +310,7 @@ def generate_detailed_summary():
         "7. Dashboard & Monitoring",
         "8. AI Provider Strategy",
         "9. Quality & Safety Engineering",
-        "10. How to Use AgentSquad",
+        "10. How to Use VirtualDevTeam",
         "11. Benefits & Value Proposition",
         "12. Competitive Differentiation",
         "13. Vision & Roadmap",
@@ -321,9 +321,9 @@ def generate_detailed_summary():
     # --- Section 1 ---
     add_h1(doc, "1. Solution Overview")
     add_para(doc,
-        "AgentSquad is a .NET 8 multi-agent AI system that manages a full software development "
+        "VirtualDevTeam is a .NET 8 multi-agent AI system that manages a full software development "
         "team \u2014 from Program Manager through Test Engineer \u2014 to autonomously build software "
-        "projects. You provide a project description and a GitHub repository; AgentSquad handles "
+        "projects. You provide a project description and a GitHub repository; VirtualDevTeam handles "
         "research, architecture, engineering planning, parallel implementation, multi-tier testing, "
         "code review, and delivery.")
     add_para(doc,
@@ -334,7 +334,7 @@ def generate_detailed_summary():
     add_h2(doc, "What Makes It Different")
     add_para(doc,
         "Unlike single-agent coding tools (GitHub Copilot Workspace, Cursor, Cline) that help "
-        "one developer write code faster, AgentSquad simulates an entire development team with "
+        "one developer write code faster, VirtualDevTeam simulates an entire development team with "
         "role specialization, peer review, and workflow coordination. It is not a code generator "
         "\u2014 it is a team simulator that produces auditable, reviewed, tested software through "
         "real GitHub workflows.")
@@ -359,19 +359,19 @@ def generate_detailed_summary():
 
     add_h2(doc, "Project Structure")
     add_para(doc,
-        "AgentSquad is organized as a multi-project .NET solution with clear separation of concerns:")
+        "VirtualDevTeam is organized as a multi-project .NET solution with clear separation of concerns:")
     add_table(doc,
         ["Project", "Purpose"],
         [
-            ["AgentSquad.Core", "Shared abstractions: IAgent, message bus, GitHub service, "
+            ["VirtualDevTeam.Core", "Shared abstractions: IAgent, message bus, GitHub service, "
              "persistence, Semantic Kernel integration, Copilot CLI provider, MCP config, "
              "knowledge pipeline"],
-            ["AgentSquad.Agents", "7 concrete agent implementations + CustomAgent + SmeAgent + AgentFactory"],
-            ["AgentSquad.Orchestrator", "Runtime coordination: workflow state machine, agent registry, "
+            ["VirtualDevTeam.Agents", "7 concrete agent implementations + CustomAgent + SmeAgent + AgentFactory"],
+            ["VirtualDevTeam.Orchestrator", "Runtime coordination: workflow state machine, agent registry, "
              "spawn manager, deadlock detector, health monitor, graceful shutdown"],
-            ["AgentSquad.Runner", "Application host: DI registration, REST API, bootstrap worker"],
-            ["AgentSquad.Dashboard", "Blazor Server UI: 15 pages, SignalR hub, data services"],
-            ["AgentSquad.Dashboard.Host", "Standalone dashboard process (port 5051)"],
+            ["VirtualDevTeam.Runner", "Application host: DI registration, REST API, bootstrap worker"],
+            ["VirtualDevTeam.Dashboard", "Blazor Server UI: 15 pages, SignalR hub, data services"],
+            ["VirtualDevTeam.Dashboard.Host", "Standalone dashboard process (port 5051)"],
         ])
 
     add_h2(doc, "Dual-Layer Communication")
@@ -449,7 +449,7 @@ def generate_detailed_summary():
 
     add_h2(doc, "SME Agent System")
     add_para(doc,
-        "The SME (Subject Matter Expert) system is one of AgentSquad's most innovative features. "
+        "The SME (Subject Matter Expert) system is one of VirtualDevTeam's most innovative features. "
         "When the PM analyzes a project, it determines what specialist expertise is needed beyond "
         "the core team. It can spawn SME agents from pre-configured templates or generate entirely "
         "new agent definitions using AI \u2014 complete with custom personas, MCP tool servers for "
@@ -520,7 +520,7 @@ def generate_detailed_summary():
     # --- Section 5 ---
     add_h1(doc, "5. The Development Workflow")
     add_para(doc,
-        "AgentSquad follows a structured 8-phase development workflow, mirroring how a real "
+        "VirtualDevTeam follows a structured 8-phase development workflow, mirroring how a real "
         "software team operates:")
 
     phases = [
@@ -551,7 +551,7 @@ def generate_detailed_summary():
     # --- Section 6 ---
     add_h1(doc, "6. Human-Agent Collaboration Model")
     add_para(doc,
-        "AgentSquad's most important design principle is that it's built for human-agent "
+        "VirtualDevTeam's most important design principle is that it's built for human-agent "
         "collaboration, not full replacement. The system supports three collaboration modes:")
 
     add_h2(doc, "Solo Director Mode")
@@ -624,7 +624,7 @@ def generate_detailed_summary():
     # --- Section 8 ---
     add_h1(doc, "8. AI Provider Strategy")
     add_para(doc,
-        "AgentSquad uses a four-tier model strategy that assigns model quality based on "
+        "VirtualDevTeam uses a four-tier model strategy that assigns model quality based on "
         "the criticality of each agent's decisions:")
 
     add_table(doc,
@@ -671,7 +671,7 @@ def generate_detailed_summary():
     add_bullet(doc, "Boot-Time Filtering \u2014 Dashboard shows only agents from current run, not stale historical data")
 
     # --- Section 10 ---
-    add_h1(doc, "10. How to Use AgentSquad")
+    add_h1(doc, "10. How to Use VirtualDevTeam")
 
     add_h2(doc, "Prerequisites")
     add_bullet(doc, ".NET 8 SDK or later")
@@ -683,7 +683,7 @@ def generate_detailed_summary():
     add_bold_para(doc, "Step 1: ", "Clone the repository and run dotnet build")
     add_bold_para(doc, "Step 2: ", "Configure appsettings.json with your project name, description, "
                   "and GitHub repo. Store your GitHub PAT via dotnet user-secrets")
-    add_bold_para(doc, "Step 3: ", "Run the Runner (dotnet run from src/AgentSquad.Runner). Agents "
+    add_bold_para(doc, "Step 3: ", "Run the Runner (dotnet run from src/VirtualDevTeam.Runner). Agents "
                   "begin the development lifecycle automatically")
     add_bold_para(doc, "Step 4: ", "Monitor via the dashboard at http://localhost:5050 (embedded) "
                   "or http://localhost:5051 (standalone)")
@@ -692,7 +692,7 @@ def generate_detailed_summary():
 
     add_h2(doc, "Configuration")
     add_para(doc,
-        "All configuration lives under the AgentSquad section in appsettings.json. Key sections: "
+        "All configuration lives under the VirtualDevTeam section in appsettings.json. Key sections: "
         "Project (GitHub repo/PAT), Models (provider/tier definitions), Agents (per-role tier "
         "assignments, MCP servers, knowledge links), Limits (scaling caps, timeouts), Gates "
         "(human gate presets), Dashboard (port, SignalR toggle), SmeAgents (templates, limits).")
@@ -723,13 +723,13 @@ def generate_detailed_summary():
     # --- Section 12 ---
     add_h1(doc, "12. Competitive Differentiation")
     add_para(doc,
-        "AgentSquad occupies a unique position in the AI-assisted development landscape:")
+        "VirtualDevTeam occupies a unique position in the AI-assisted development landscape:")
 
     add_h2(doc, "vs. Single-Agent Coding Tools (Copilot Workspace, Cursor, Cline)")
     add_para(doc,
-        "These tools augment individual developers. AgentSquad augments entire teams. Single-agent "
+        "These tools augment individual developers. VirtualDevTeam augments entire teams. Single-agent "
         "tools lack role specialization, peer review, workflow coordination, and test automation. "
-        "AgentSquad produces reviewed, tested code through real GitHub workflows \u2014 not just "
+        "VirtualDevTeam produces reviewed, tested code through real GitHub workflows \u2014 not just "
         "generated code in an editor.")
 
     add_h2(doc, "vs. Gas Town (Multi-Agent Orchestrator)")
@@ -738,7 +738,7 @@ def generate_detailed_summary():
         "multi-agent workspace manager supporting 20-50+ generic worker agents across 10+ AI "
         "runtimes. Key differences:")
     add_table(doc,
-        ["Dimension", "AgentSquad", "Gas Town"],
+        ["Dimension", "VirtualDevTeam", "Gas Town"],
         [
             ["Philosophy", "Opinionated SDLC pipeline with role specialization",
              "Flexible workspace manager with generic workers"],
@@ -750,14 +750,14 @@ def generate_detailed_summary():
             ["Language", "C# / .NET 8", "Go 1.25"],
         ])
     add_para(doc,
-        "AgentSquad excels at structured SDLC projects where role specialization and systematic "
+        "VirtualDevTeam excels at structured SDLC projects where role specialization and systematic "
         "review matter. Gas Town excels at scale and runtime flexibility. The two approaches are "
-        "complementary \u2014 AgentSquad could use Gas Town as a coordination layer, and Gas Town "
-        "could adopt AgentSquad's SDLC pipeline as a workflow formula.")
+        "complementary \u2014 VirtualDevTeam could use Gas Town as a coordination layer, and Gas Town "
+        "could adopt VirtualDevTeam's SDLC pipeline as a workflow formula.")
 
     add_h2(doc, "vs. Enterprise AI Platforms (Devin, Factory AI, Sweep)")
     add_para(doc,
-        "Enterprise platforms are proprietary, cloud-hosted, and charge per-task. AgentSquad is "
+        "Enterprise platforms are proprietary, cloud-hosted, and charge per-task. VirtualDevTeam is "
         "self-hosted, open-architecture, and uses existing Copilot licenses. It gives teams full "
         "control over agent behavior via externalized prompts, full audit trails via GitHub, "
         "and no vendor lock-in.")
@@ -767,7 +767,7 @@ def generate_detailed_summary():
 
     add_h2(doc, "The 85/15 Development Model")
     add_para(doc,
-        "AgentSquad's vision is a development model where AI handles 85% of execution and humans "
+        "VirtualDevTeam's vision is a development model where AI handles 85% of execution and humans "
         "provide 15% direction. This is not about replacing developers \u2014 it's about evolving "
         "the developer role from maker to director. The human's judgment, creativity, and domain "
         "expertise become more valuable, not less, when amplified by an AI team.")
@@ -784,16 +784,16 @@ def generate_detailed_summary():
     add_bullet(doc, "Agent-to-agent learning \u2014 insights from one project improve future projects")
     add_bullet(doc, "Self-improving prompts \u2014 agents measure their own output quality and refine behavior")
     add_bullet(doc, "Cross-repository coordination \u2014 agent teams working across microservices")
-    add_bullet(doc, "Azure-hosted AgentSquad-as-a-Service for enterprise deployment")
+    add_bullet(doc, "Azure-hosted VirtualDevTeam-as-a-Service for enterprise deployment")
 
     add_para(doc,
         "The AI-augmented development model represents the next evolution of software engineering. "
-        "AgentSquad is the working prototype that proves it's possible today.")
+        "VirtualDevTeam is the working prototype that proves it's possible today.")
 
     doc.add_paragraph()
     add_para(doc, "For questions or discussion, contact Ben Humphrey (behumphr@microsoft.com)")
 
-    path = os.path.join(DOCS_DIR, "AgentSquad-Complete-Solution-Guide.docx")
+    path = os.path.join(DOCS_DIR, "VirtualDevTeam-Complete-Solution-Guide.docx")
     doc.save(path)
     print(f"Detailed Solution Guide saved to {path}")
 

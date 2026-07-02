@@ -1,0 +1,231 @@
+@using VirtualDevTeam.Core.Notifications
+@using VirtualDevTeam.Core.HealthMonitor
+@using VirtualDevTeam.Dashboard.Services
+@inject IServiceProvider ServiceProvider
+@implements IDisposable
+
+<div class="sidebar-brand">
+    <div class="brand-logo">
+        <span class="brand-logo-icon">⚡</span>
+    </div>
+    <div class="brand-text">
+        <div class="brand-title">Virtual Dev Team</div>
+        <div class="brand-subtitle">Dashboard</div>
+    </div>
+</div>
+
+<input type="checkbox" title="Navigation menu" class="navbar-toggler" />
+
+<div class="nav-scrollable" onclick="document.querySelector('.navbar-toggler').click()">
+    <nav class="flex-column">
+        <div class="nav-section-label">Main</div>
+
+        <div class="nav-item" data-testid="nav-overview">
+            <NavLink class="nav-link" href="" Match="NavLinkMatch.All">
+                <span class="nav-icon">🏠</span> Overview
+            </NavLink>
+        </div>
+
+        <div class="nav-item" data-testid="nav-develop">
+            <NavLink class="nav-link" href="develop">
+                <span class="nav-icon">🛠️</span> Develop
+            </NavLink>
+        </div>
+
+        <div class="nav-item" data-testid="nav-walkthrough">
+            <NavLink class="nav-link" href="walkthrough">
+                <span class="nav-icon">📖</span> Walkthrough
+            </NavLink>
+        </div>
+
+        <div class="nav-item" data-testid="nav-configuration">
+            <NavLink class="nav-link" href="configuration">
+                <span class="nav-icon">⚙️</span> Configuration
+            </NavLink>
+        </div>
+
+        @* Strategies page accessible in all modes *@
+        <div class="nav-item" data-testid="nav-strategies">
+            <NavLink class="nav-link" href="strategies">
+                <span class="nav-icon">🧪</span> Frameworks
+                @if (_activeFrameworkCount > 0)
+                {
+                    <span class="nav-badge nav-badge-frameworks" data-testid="nav-frameworks-badge">@_activeFrameworkCount</span>
+                }
+            </NavLink>
+        </div>
+
+        <div class="nav-item" data-testid="nav-approvals">
+            <NavLink class="nav-link" href="approvals">
+                <span class="nav-icon">🚦</span> Approvals / Alerts
+                @if (_openGateCount > 0)
+                {
+                    <span class="nav-badge" data-testid="nav-approvals-badge">@_openGateCount</span>
+                }
+            </NavLink>
+        </div>
+
+        <div class="nav-section-label">Project</div>
+
+        <div class="nav-item" data-testid="nav-timeline">
+            <NavLink class="nav-link" href="timeline">
+                <span class="nav-icon">🗺️</span> Project Timeline
+            </NavLink>
+        </div>
+
+        <div class="nav-item" data-testid="nav-repository">
+            <NavLink class="nav-link" href="repository" Match="NavLinkMatch.All">
+                <span class="nav-icon">📦</span> Repository
+            </NavLink>
+        </div>
+
+        <div class="nav-item" data-testid="nav-scenarios">
+            <NavLink class="nav-link" href="scenarios">
+                <span class="nav-icon">📋</span> Scenarios
+            </NavLink>
+        </div>
+
+        <div class="nav-item" data-testid="nav-testing">
+            <NavLink class="nav-link" href="testing">
+                <span class="nav-icon">🧪</span> Testing
+            </NavLink>
+        </div>
+
+        <div class="nav-section-label">Operations</div>
+
+        <div class="nav-item" data-testid="nav-metrics">
+            <NavLink class="nav-link" href="metrics">
+                <span class="nav-icon">📊</span> Metrics
+            </NavLink>
+        </div>
+
+        <div class="nav-item" data-testid="nav-health">
+            <NavLink class="nav-link" href="health">
+                <span class="nav-icon">🩺</span> Health Monitor
+            </NavLink>
+        </div>
+
+        <div class="nav-item" data-testid="nav-flow-monitor">
+            <NavLink class="nav-link" href="flow-monitor" Match="NavLinkMatch.All">
+                <span class="nav-icon">🔍</span> Flow Monitor
+                @if (_healthScore.HasValue)
+                {
+                    <span class="nav-badge @(_healthScore.Value >= 7 ? "nav-badge-healthy" : _healthScore.Value >= 4 ? "nav-badge-warning" : "nav-badge-critical")"
+                          data-testid="nav-health-badge"
+                          title="AI Pipeline Assessment">@_healthScore.Value/10</span>
+                }
+            </NavLink>
+        </div>
+
+        <div class="nav-item" data-testid="nav-flow-recommendations">
+            <NavLink class="nav-link" href="flow-monitor/recommendations">
+                <span class="nav-icon">🧭</span> Recommendations
+            </NavLink>
+        </div>
+
+        <div class="nav-item" data-testid="nav-team">
+            <NavLink class="nav-link" href="team">
+                <span class="nav-icon">👥</span> Team View
+            </NavLink>
+        </div>
+
+        <div class="nav-item" data-testid="nav-pipelines">
+            <NavLink class="nav-link" href="pipelines">
+                <span class="nav-icon">🔧</span> Pipelines
+            </NavLink>
+        </div>
+
+        <div class="nav-section-label">Advanced</div>
+
+        <div class="nav-item" data-testid="nav-reasoning">
+            <NavLink class="nav-link" href="reasoning">
+                <span class="nav-icon">🧠</span> Reasoning
+            </NavLink>
+        </div>
+
+        <div class="nav-item" data-testid="nav-director-cli">
+            <NavLink class="nav-link" href="director-cli">
+                <span class="nav-icon">💻</span> Director CLI
+            </NavLink>
+        </div>
+    </nav>
+</div>
+
+@code {
+    private int _openGateCount;
+    private int _activeFrameworkCount;
+    private int? _healthScore;
+    private GateNotificationService? _inProcessService;
+    private HttpGateNotificationService? _httpService;
+    private IStrategiesDataService? _strategiesService;
+    private PipelineAssessmentStore? _assessmentStore;
+
+    protected override void OnInitialized()
+    {
+        _httpService = ServiceProvider.GetService<HttpGateNotificationService>();
+        _inProcessService = ServiceProvider.GetService<GateNotificationService>();
+
+        if (_httpService is not null)
+            _httpService.OnChange += OnNotificationChange;
+        else if (_inProcessService is not null)
+            _inProcessService.OnChange += OnNotificationChange;
+
+        _strategiesService = ServiceProvider.GetService<IStrategiesDataService>();
+        if (_strategiesService is not null)
+        {
+            _strategiesService.OnActiveCountChanged += OnFrameworkCountChange;
+            _activeFrameworkCount = _strategiesService.ActiveCount;
+        }
+
+        _assessmentStore = ServiceProvider.GetService<PipelineAssessmentStore>();
+        RefreshCount();
+        RefreshHealthScore();
+    }
+
+    private void OnNotificationChange()
+    {
+        InvokeAsync(() =>
+        {
+            RefreshCount();
+            StateHasChanged();
+        });
+    }
+
+    private void OnFrameworkCountChange()
+    {
+        InvokeAsync(() =>
+        {
+            _activeFrameworkCount = _strategiesService?.ActiveCount ?? 0;
+            StateHasChanged();
+        });
+    }
+
+    private void RefreshCount()
+    {
+        _openGateCount = _httpService?.OpenCount ?? _inProcessService?.OpenCount ?? 0;
+    }
+
+    private void RefreshHealthScore()
+    {
+        try
+        {
+            var latest = _assessmentStore?.GetLatestAssessment();
+            if (latest is not null && latest.AssessedAt > DateTimeOffset.UtcNow.AddMinutes(-30))
+                _healthScore = latest.HealthScore;
+            else
+                _healthScore = null;
+        }
+        catch { _healthScore = null; }
+    }
+
+    public void Dispose()
+    {
+        if (_httpService is not null)
+            _httpService.OnChange -= OnNotificationChange;
+        else if (_inProcessService is not null)
+            _inProcessService.OnChange -= OnNotificationChange;
+
+        if (_strategiesService is not null)
+            _strategiesService.OnActiveCountChanged -= OnFrameworkCountChange;
+    }
+}

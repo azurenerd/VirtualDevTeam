@@ -1,0 +1,60 @@
+@using VirtualDevTeam.Core.Lifecycle
+
+<div class="pr-lifecycle-timeline">
+    @if (Stages is null || Stages.Count == 0)
+    {
+        <div class="lifecycle-loading">Loading lifecycle...</div>
+    }
+    else
+    {
+        @for (int i = 0; i < Stages.Count; i++)
+        {
+            var stage = Stages[i];
+            var isLast = i == Stages.Count - 1;
+            var statusClass = stage.Status switch
+            {
+                StageStatus.Complete => "complete",
+                StageStatus.InProgress => "active",
+                StageStatus.Skipped => "skipped",
+                _ => "pending"
+            };
+
+            <div class="lifecycle-step @statusClass">
+                <div class="lifecycle-icon" title="@(stage.Status == StageStatus.Skipped && !string.IsNullOrEmpty(stage.SkipReason) ? $"{stage.Name}: Skipped — {stage.SkipReason}" : $"{stage.Name}: {stage.Status}")">
+                    <span>@stage.Icon</span>
+                </div>
+                <div class="lifecycle-label">@stage.Name</div>
+                <div class="lifecycle-status">
+                    @switch (stage.Status)
+                    {
+                        case StageStatus.Complete:
+                            <span class="status-complete">Done</span>
+                            if (stage.CompletedAt.HasValue)
+                            {
+                                <LocalTimeText OffsetValue="stage.CompletedAt.Value" CssClass="status-time" />
+                            }
+                            break;
+                        case StageStatus.InProgress:
+                            <span class="status-active">In Progress</span>
+                            break;
+                        case StageStatus.Skipped:
+                            <span class="status-skipped" title="@stage.SkipReason">@(!string.IsNullOrEmpty(stage.SkipReason) ? stage.SkipReason : "Skipped")</span>
+                            break;
+                        default:
+                            <span class="status-pending">Pending</span>
+                            break;
+                    }
+                </div>
+                @if (!isLast)
+                {
+                    <div class="lifecycle-connector @statusClass"></div>
+                }
+            </div>
+        }
+    }
+</div>
+
+@code {
+    [Parameter] public IReadOnlyList<PrLifecycleStage>? Stages { get; set; }
+
+}

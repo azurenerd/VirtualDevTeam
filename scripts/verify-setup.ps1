@@ -1,5 +1,5 @@
 #!/usr/bin/env pwsh
-# verify-setup.ps1 — Checks AgentSquad prerequisites and configuration
+# verify-setup.ps1 — Checks VirtualDevTeam prerequisites and configuration
 # Run from the repository root: ./scripts/verify-setup.ps1
 
 $ErrorActionPreference = "Continue"
@@ -26,7 +26,7 @@ function Test-Prereq {
 
 Write-Host ""
 Write-Host "═══════════════════════════════════════════════" -ForegroundColor Cyan
-Write-Host " AgentSquad — Setup Verification" -ForegroundColor Cyan
+Write-Host " VirtualDevTeam — Setup Verification" -ForegroundColor Cyan
 Write-Host "═══════════════════════════════════════════════" -ForegroundColor Cyan
 Write-Host ""
 
@@ -103,7 +103,7 @@ Write-Host ""
 Write-Host "Configuration:" -ForegroundColor White
 
 # Check if user secrets exist
-$runnerCsproj = Join-Path $PSScriptRoot ".." "src" "AgentSquad.Runner" "AgentSquad.Runner.csproj"
+$runnerCsproj = Join-Path $PSScriptRoot ".." "src" "VirtualDevTeam.Runner" "VirtualDevTeam.Runner.csproj"
 if (Test-Path $runnerCsproj) {
     $content = Get-Content $runnerCsproj -Raw
     if ($content -match '<UserSecretsId>([^<]+)</UserSecretsId>') {
@@ -112,8 +112,8 @@ if (Test-Path $runnerCsproj) {
         Write-Host -NoNewline "  User Secrets... "
         if (Test-Path $secretsPath) {
             $secrets = Get-Content $secretsPath -Raw | ConvertFrom-Json
-            $hasGhToken = $secrets.'AgentSquad:Project:GitHubToken' -and $secrets.'AgentSquad:Project:GitHubToken'.Length -gt 0
-            $hasAdoPat = $secrets.'AgentSquad:DevPlatform:AzureDevOps:Pat' -and $secrets.'AgentSquad:DevPlatform:AzureDevOps:Pat'.Length -gt 0
+            $hasGhToken = $secrets.'VirtualDevTeam:Project:GitHubToken' -and $secrets.'VirtualDevTeam:Project:GitHubToken'.Length -gt 0
+            $hasAdoPat = $secrets.'VirtualDevTeam:DevPlatform:AzureDevOps:Pat' -and $secrets.'VirtualDevTeam:DevPlatform:AzureDevOps:Pat'.Length -gt 0
             if ($hasGhToken -or $hasAdoPat) {
                 $tokenType = if ($hasGhToken) { "GitHub PAT" } else { "ADO PAT" }
                 Write-Host -ForegroundColor Green "PASS ($tokenType configured)"
@@ -121,7 +121,7 @@ if (Test-Path $runnerCsproj) {
             } else {
                 Write-Host -ForegroundColor Yellow "PARTIAL (file exists but no PAT found)"
                 Write-Host "    You can enter your PAT in the /develop wizard or run:" -ForegroundColor Yellow
-                Write-Host '    dotnet user-secrets set "AgentSquad:Project:GitHubToken" "ghp_..."' -ForegroundColor Yellow
+                Write-Host '    dotnet user-secrets set "VirtualDevTeam:Project:GitHubToken" "ghp_..."' -ForegroundColor Yellow
             }
         } else {
             Write-Host -ForegroundColor Yellow "NOT SET (no secrets configured yet)"
@@ -131,10 +131,10 @@ if (Test-Path $runnerCsproj) {
 }
 
 # Check if appsettings.json has a repo configured
-$appsettings = Join-Path $PSScriptRoot ".." "src" "AgentSquad.Runner" "appsettings.json"
+$appsettings = Join-Path $PSScriptRoot ".." "src" "VirtualDevTeam.Runner" "appsettings.json"
 if (Test-Path $appsettings) {
     $config = Get-Content $appsettings -Raw | ConvertFrom-Json
-    $repo = $config.AgentSquad.Project.GitHubRepo
+    $repo = $config.VirtualDevTeam.Project.GitHubRepo
     Write-Host -NoNewline "  Repository... "
     if ($repo -and $repo.Contains('/')) {
         Write-Host -ForegroundColor Green "PASS ($repo)"
@@ -152,7 +152,7 @@ Write-Host ""
 
 if ($failed -eq 0) {
     Write-Host "Ready to go! Run:" -ForegroundColor Green
-    Write-Host "  cd src/AgentSquad.Runner && dotnet run" -ForegroundColor White
+    Write-Host "  cd src/VirtualDevTeam.Runner && dotnet run" -ForegroundColor White
     Write-Host "  Then open http://localhost:5050/develop" -ForegroundColor White
 } else {
     Write-Host "Fix the issues above, then run this script again." -ForegroundColor Yellow

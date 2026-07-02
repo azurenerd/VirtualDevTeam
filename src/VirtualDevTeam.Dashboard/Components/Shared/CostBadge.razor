@@ -1,0 +1,104 @@
+@using VirtualDevTeam.Dashboard.Services
+@using System.Net.Http.Json
+@inject IServiceProvider ServiceProvider
+@inject DashboardMode Mode
+@implements IDisposable
+
+<div class="cost-badge" title="@TooltipText">
+    <span class="cost-amount">@FormatCost(_totalCost)</span>
+    <span class="cost-separator">·</span>
+    <span class="cost-calls">@_totalCalls call@(_totalCalls != 1 ? "s" : "")</span>
+    @if (_premiumRequests > 0)
+    {
+        <span class="cost-separator">·</span>
+        <span class="cost-premium">@_premiumRequests req@(_premiumRequests != 1 ? "s" : "")</span>
+    }
+</div>
+
+@code {
+    private decimal _totalCost;
+    private int _totalCalls;
+    private int _premiumRequests;
+    private Timer? _refreshTimer;
+    private IDashboardDataService? _dataService;
+    private HttpClient? _http;
+
+    protected override void OnInitialized()
+    {
+        if (Mode.IsStandalone)
+        {
+            // Standalone: poll Runner API directly for cost data
+            var factory = ServiceProvider.GetService<IHttpClientFactory>();
+            _http = factory?.CreateClient("RunnerApi");
+        }
+        else
+        {
+            _dataService = ServiceProvider.GetService<IDashboardDataService>();
+            if (_dataService is not null)
+                _dataService.OnChange += HandleChange;
+        }
+
+        _refreshTimer = new Timer(async _ => await RefreshAsync(), null,
+            TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(10));
+    }
+
+    private void HandleChange()
+    {
+        InvokeAsync(() =>
+        {
+            RefreshFromService();
+            StateHasChanged();
+        });
+    }
+
+    private async Task RefreshAsync()
+    {
+        try
+        {
+            if (_http is not null)
+            {
+                // Standalone: fetch from Runner API
+                var result = await _http.GetFromJsonAsync<CostSummaryDto>("/api/dashboard/cost-summary");
+                if (result is not null)
+                {
+                    _totalCost = result.TotalCost;
+                    _totalCalls = result.TotalCalls;
+                    _premiumRequests = result.PremiumRequests;
+                }
+            }
+            else
+            {
+                RefreshFromService();
+            }
+
+            await InvokeAsync(StateHasChanged);
+        }
+        catch { /* Runner not reachable yet */ }
+    }
+
+    private void RefreshFromService()
+    {
+        if (_dataService is null) return;
+        _totalCost = _dataService.GetTotalEstimatedCost();
+        _totalCalls = _dataService.GetTotalAiCalls();
+        _premiumRequests = _dataService.GetTotalPremiumRequests();
+    }
+
+    private static string FormatCost(decimal cost)
+    {
+        if (cost < 0.01m) return "$0.00";
+        return cost.ToString("$#,##0.00");
+    }
+
+    private string TooltipText =>
+        $"Estimated AI cost this run: {FormatCost(_totalCost)} across {_totalCalls} AI calls, {_premiumRequests} premium requests (MSRP pricing)";
+
+    public void Dispose()
+    {
+        _refreshTimer?.Dispose();
+        if (_dataService is not null)
+            _dataService.OnChange -= HandleChange;
+    }
+
+    private record CostSummaryDto(decimal TotalCost, int TotalCalls, int PremiumRequests = 0);
+}

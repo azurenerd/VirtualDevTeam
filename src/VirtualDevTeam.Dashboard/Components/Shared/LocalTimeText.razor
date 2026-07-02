@@ -1,0 +1,69 @@
+@using System.Globalization
+
+@if (_utcValue is null)
+{
+    <span class="@CssClass" @attributes="AdditionalAttributes">@Placeholder</span>
+}
+else
+{
+    <time class="@CssClass"
+          datetime="@UtcIsoString"
+          data-local-time="true"
+          data-utc="@UtcIsoString"
+          data-include-date="@IncludeDate.ToString().ToLowerInvariant()"
+          data-include-date-when-not-today="@IncludeDateWhenNotToday.ToString().ToLowerInvariant()"
+          data-include-seconds="@IncludeSeconds.ToString().ToLowerInvariant()"
+          data-include-year-when-not-current-year="@IncludeYearWhenNotCurrentYear.ToString().ToLowerInvariant()"
+          @attributes="AdditionalAttributes">@FallbackText</time>
+}
+
+@code {
+    [Parameter] public DateTime? Value { get; set; }
+    [Parameter] public DateTimeOffset? OffsetValue { get; set; }
+    [Parameter] public bool IncludeDate { get; set; }
+    [Parameter] public bool IncludeDateWhenNotToday { get; set; } = true;
+    [Parameter] public bool IncludeSeconds { get; set; }
+    [Parameter] public bool IncludeYearWhenNotCurrentYear { get; set; } = true;
+    [Parameter] public string CssClass { get; set; } = string.Empty;
+    [Parameter] public string Placeholder { get; set; } = "—";
+    [Parameter(CaptureUnmatchedValues = true)] public IReadOnlyDictionary<string, object>? AdditionalAttributes { get; set; }
+
+    private DateTime? _utcValue;
+    private string UtcIsoString => _utcValue?.ToString("O", CultureInfo.InvariantCulture) ?? string.Empty;
+    private string FallbackText => _utcValue is { } utc ? FormatFallback(utc) : Placeholder;
+
+    protected override void OnParametersSet()
+    {
+        var resolvedValue = Value is { } value
+            ? NormalizeUtc(value)
+            : OffsetValue?.UtcDateTime;
+
+        _utcValue = resolvedValue is { } utc && utc != DateTime.MinValue
+            ? utc
+            : null;
+    }
+
+    private static DateTime NormalizeUtc(DateTime value) => value.Kind switch
+    {
+        DateTimeKind.Utc => value,
+        DateTimeKind.Local => value.ToUniversalTime(),
+        _ => DateTime.SpecifyKind(value, DateTimeKind.Utc)
+    };
+
+    private string FormatFallback(DateTime utc)
+    {
+        var local = TimeZoneInfo.ConvertTimeFromUtc(utc, TimeZoneInfo.Local);
+        var now = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, TimeZoneInfo.Local);
+        var includeDateForRender = IncludeDate || (IncludeDateWhenNotToday && local.Date != now.Date);
+        var timePattern = IncludeSeconds ? "h:mm:ss tt" : "h:mm tt";
+        if (!includeDateForRender)
+        {
+            return local.ToString(timePattern, CultureInfo.InvariantCulture);
+        }
+
+        var datePattern = IncludeYearWhenNotCurrentYear && local.Year != now.Year
+            ? "MMM d, yyyy"
+            : "MMM d";
+        return $"{local.ToString(datePattern, CultureInfo.InvariantCulture)}, {local.ToString(timePattern, CultureInfo.InvariantCulture)}";
+    }
+}

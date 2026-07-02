@@ -1,0 +1,57 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UserSecretsId>dotnet-VirtualDevTeam.Runner-05b42be2-086a-4fbc-853a-02db14a86dd7</UserSecretsId>
+    <!-- Publish as 'vdt' so install script finds vdt.exe -->
+    <AssemblyName Condition="'$(PublishSingleFile)' == 'true'">vdt</AssemblyName>
+  </PropertyGroup>
+
+  <!-- Ship prompts alongside the published binary (ExcludeFromSingleFile forces on-disk placement) -->
+  <ItemGroup Condition="'$(PublishSingleFile)' == 'true'">
+    <Content Include="..\..\prompts\**\*.md"
+             CopyToPublishDirectory="PreserveNewest"
+             ExcludeFromSingleFile="true"
+             Link="prompts\%(RecursiveDir)%(Filename)%(Extension)" />
+    <Content Include="..\..\scripts\install.ps1"
+             CopyToPublishDirectory="PreserveNewest"
+             ExcludeFromSingleFile="true"
+             Link="scripts\install.ps1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\VirtualDevTeam.Core\VirtualDevTeam.Core.csproj" />
+    <ProjectReference Include="..\VirtualDevTeam.Agents\VirtualDevTeam.Agents.csproj" />
+    <ProjectReference Include="..\VirtualDevTeam.Orchestrator\VirtualDevTeam.Orchestrator.csproj" />
+    <ProjectReference Include="..\VirtualDevTeam.Dashboard\VirtualDevTeam.Dashboard.csproj" />
+    <!--
+      McpEnhancedStrategy spawns VirtualDevTeam.McpServer as a subprocess via `dotnet <dll>`.
+      Reference it so its DLL + .runtimeconfig.json sidecar land in the Runner's output dir.
+      ReferenceOutputAssembly=false: we don't link against the exe; we just need the binary copied.
+    -->
+    <ProjectReference Include="..\VirtualDevTeam.McpServer\VirtualDevTeam.McpServer.csproj"
+                      ReferenceOutputAssembly="false"
+                      Private="true"
+                      PrivateAssets="all"
+                      OutputItemType="None" />
+  </ItemGroup>
+
+  <!--
+    ReferenceOutputAssembly=false suppresses the automatic copy of the referenced exe's
+    build output. Copy the McpServer deployment assets (dll + runtimeconfig + deps) into
+    the Runner's output explicitly so DefaultMcpServerLocator's `beside` probe succeeds.
+  -->
+  <Target Name="CopyMcpServerArtifacts" AfterTargets="AfterBuild">
+    <ItemGroup>
+      <_McpServerArtifacts Include="..\VirtualDevTeam.McpServer\bin\$(Configuration)\$(TargetFramework)\VirtualDevTeam.McpServer.dll" />
+      <_McpServerArtifacts Include="..\VirtualDevTeam.McpServer\bin\$(Configuration)\$(TargetFramework)\VirtualDevTeam.McpServer.runtimeconfig.json" />
+      <_McpServerArtifacts Include="..\VirtualDevTeam.McpServer\bin\$(Configuration)\$(TargetFramework)\VirtualDevTeam.McpServer.deps.json" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_McpServerArtifacts)"
+          DestinationFolder="$(OutDir)"
+          SkipUnchangedFiles="true"
+          Condition="Exists('%(_McpServerArtifacts.FullPath)')" />
+  </Target>
+</Project>

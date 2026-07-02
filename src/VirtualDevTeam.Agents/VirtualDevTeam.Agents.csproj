@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\VirtualDevTeam.Core\VirtualDevTeam.Core.csproj" />
+    <ProjectReference Include="..\VirtualDevTeam.Orchestrator\VirtualDevTeam.Orchestrator.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.SemanticKernel" Version="1.74.0" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="VirtualDevTeam.Agents.Tests" />
+  </ItemGroup>
+
+</Project>

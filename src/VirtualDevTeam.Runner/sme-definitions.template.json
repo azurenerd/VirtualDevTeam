@@ -1,0 +1,3 @@
+{
+  "_comment": "Starter for sme-definitions.json — the runner persists dynamically-spawned Specialist (SME) agent definitions to this file when SmeAgents.PersistDefinitions=true. Copy this template to sme-definitions.json or let the runner create one on first save (SMEAgentDefinitionService handles missing files gracefully). sme-definitions.json is gitignored so per-developer SME catalogs don't leak across the team."
+}

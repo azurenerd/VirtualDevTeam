@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Starts the standalone AgentSquad Dashboard as a detached background process.
+    Starts the standalone VirtualDevTeam Dashboard as a detached background process.
 .DESCRIPTION
     Launches the Dashboard.Host project on port 5051, connecting to the Runner
     API at port 5050. The dashboard can be restarted independently without
@@ -11,7 +11,7 @@
 #>
 param(
     [string]$LogDir = (Join-Path $PSScriptRoot ".." "Logs"),
-    [string]$ProjectDir = (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "src") "AgentSquad.Dashboard.Host"),
+    [string]$ProjectDir = (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "src") "VirtualDevTeam.Dashboard.Host"),
     [string]$PidFile = (Join-Path $PSScriptRoot ".." "Logs" "dashboard.pid")
 )
 
@@ -42,8 +42,8 @@ try {
 New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
 
 # Build first
-Write-Host "Building AgentSquad.Dashboard.Host..." -ForegroundColor Cyan
-$buildResult = & dotnet build (Join-Path $ProjectDir "AgentSquad.Dashboard.Host.csproj") --verbosity quiet 2>&1
+Write-Host "Building VirtualDevTeam.Dashboard.Host..." -ForegroundColor Cyan
+$buildResult = & dotnet build (Join-Path $ProjectDir "VirtualDevTeam.Dashboard.Host.csproj") --verbosity quiet 2>&1
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Build failed:" -ForegroundColor Red
     $buildResult | Write-Host
@@ -68,7 +68,7 @@ $proc = Start-Process -FilePath "dotnet" `
 $proc.Id | Out-File -FilePath $PidFile -NoNewline
 
 Write-Host ""
-Write-Host "AgentSquad Dashboard started!" -ForegroundColor Green
+Write-Host "VirtualDevTeam Dashboard started!" -ForegroundColor Green
 Write-Host "  PID:    $($proc.Id)"
 Write-Host "  Stdout: $stdoutLog"
 Write-Host "  Stderr: $stderrLog"

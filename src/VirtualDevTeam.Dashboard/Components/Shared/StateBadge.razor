@@ -1,0 +1,33 @@
+@*
+    State pill for PR / Issue header.
+
+    PR semantics: open (green) / merged (purple) / closed (red).
+    Issue semantics: open (green) / closed (purple — "resolved").
+
+    Pass IsMerged=true for a PR that has been merged (state is usually "closed" in
+    platform models — IsMerged distinguishes merged from closed-without-merge).
+*@
+
+<span class="state-badge state-badge-@(ResolvedClass)">
+    <span class="state-badge-dot">●</span>
+    @ResolvedLabel
+</span>
+
+@code {
+    [Parameter, EditorRequired] public string State { get; set; } = "open";
+    [Parameter] public bool IsMerged { get; set; }
+    [Parameter] public bool IsPullRequest { get; set; } = true;
+
+    private string ResolvedClass =>
+        IsMerged ? "merged"
+        : State?.Equals("open", System.StringComparison.OrdinalIgnoreCase) == true ? "open"
+        : State?.Equals("closed", System.StringComparison.OrdinalIgnoreCase) == true ? "closed"
+        : "unknown";
+
+    private string ResolvedLabel =>
+        IsMerged ? "Merged"
+        : State?.Equals("open", System.StringComparison.OrdinalIgnoreCase) == true ? "Open"
+        : State?.Equals("closed", System.StringComparison.OrdinalIgnoreCase) == true
+            ? (IsPullRequest ? "Closed" : "Resolved")
+        : (State ?? "Unknown");
+}

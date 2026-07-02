@@ -1,16 +1,15 @@
 ---
-version: "1.0"
-description: "Revision user prompt providing current document and reviewer feedback"
+version: "3.0"
+description: "User prompt for CLI edit-based revision of Research.md"
 variables:
-  - current_doc
   - feedback
+tags:
+  - researcher
+  - revision
 ---
-## Current Research.md:
-
-{{current_doc}}
-
 ## Reviewer Feedback:
 
 {{feedback}}
 
-Please revise the Research.md document to address the reviewer's feedback. Return the COMPLETE revised document (not just the changes).
+Edit the file `Research.md` in your working directory to address ONLY the feedback above.
+Make minimal, surgical changes. Do not rewrite the whole file.

@@ -1,0 +1,39 @@
+@*
+    "Open in {Platform} ↗" external-link button.
+
+    Renders a clearly-labelled "Open in GitHub" / "Open in Azure DevOps" anchor that opens
+    the platform URL in a new tab.  This is the explicit escape hatch from internal navigation:
+    every in-dashboard PR / Issue / File detail page uses it in the top-right so an operator
+    who *wants* to leave can do so deliberately.
+
+    Reads the active dev platform from <see cref="IPlatformLinkService"/> for the label.
+    The Url itself is already correctly formatted by the respective adapter — this component
+    only handles the labelling.
+
+    Usage: <PlatformLinkButton Url="@pr.Url" />
+*@
+
+@using VirtualDevTeam.Dashboard.Services
+@using Microsoft.Extensions.Options
+@using VirtualDevTeam.Core.Configuration
+@using VirtualDevTeam.Core.DevPlatform.Config
+
+@inject IPlatformLinkService LinkService
+@inject IOptionsMonitor<VirtualDevTeamConfig> Config
+
+@if (!string.IsNullOrWhiteSpace(Url) && !IsLocalPlatform)
+{
+    <a class="platform-link-btn" href="@Url" target="_blank" rel="noopener" title="Opens in a new tab">
+        @ButtonLabel
+        <span class="platform-link-arrow">↗</span>
+    </a>
+}
+
+@code {
+    [Parameter, EditorRequired] public string? Url { get; set; }
+
+    private string ButtonLabel => $"Open in {LinkService.PlatformDisplayName}";
+
+    private bool IsLocalPlatform =>
+        Config.CurrentValue?.DevPlatform?.Platform == DevPlatformType.Local;
+}

@@ -1,8 +1,8 @@
 <#
 .SYNOPSIS
-    Starts the AgentSquad runner as a detached background process.
+    Starts the VirtualDevTeam runner as a detached background process.
 .DESCRIPTION
-    Launches dotnet run for AgentSquad.Runner as an independent process that
+    Launches dotnet run for VirtualDevTeam.Runner as an independent process that
     survives shell/terminal crashes. Writes PID to runner.pid and redirects
     stdout/stderr to timestamped log files.
 .EXAMPLE
@@ -11,11 +11,18 @@
 #>
 param(
     [string]$LogDir = (Join-Path $PSScriptRoot ".." "Logs"),
-    [string]$ProjectDir = (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "src") "AgentSquad.Runner"),
+    [string]$ProjectDir = (Join-Path (Join-Path (Join-Path $PSScriptRoot "..") "src") "VirtualDevTeam.Runner"),
     [string]$PidFile = (Join-Path $PSScriptRoot ".." "Logs" "runner.pid")
 )
 
 $ErrorActionPreference = "Stop"
+
+# Ensure PowerShell 7+ — agency wrapper freezes under PS 5.1 due to environment differences
+if ($PSVersionTable.PSVersion.Major -lt 7) {
+    Write-Host "ERROR: PowerShell 7+ required (current: $($PSVersionTable.PSVersion)). Run from pwsh, not powershell." -ForegroundColor Red
+    Write-Host "  Install: winget install Microsoft.PowerShell" -ForegroundColor Yellow
+    exit 1
+}
 
 # Check if already running
 if (Test-Path $PidFile) {
@@ -32,8 +39,8 @@ if (Test-Path $PidFile) {
 New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
 
 # Build first to catch errors early
-Write-Host "Building AgentSquad.Runner..." -ForegroundColor Cyan
-$buildResult = & dotnet build (Join-Path $ProjectDir "AgentSquad.Runner.csproj") --verbosity quiet 2>&1
+Write-Host "Building VirtualDevTeam.Runner..." -ForegroundColor Cyan
+$buildResult = & dotnet build (Join-Path $ProjectDir "VirtualDevTeam.Runner.csproj") --verbosity quiet 2>&1
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Build failed:" -ForegroundColor Red
     $buildResult | Write-Host
@@ -50,9 +57,14 @@ $stderrLog = Join-Path $LogDir "runner-$timestamp-stderr.log"
 $latestStdout = Join-Path $LogDir "runner-latest-stdout.log"
 $latestStderr = Join-Path $LogDir "runner-latest-stderr.log"
 
-# Launch as detached process
+# Launch as detached process.
+# -WorkingDirectory is REQUIRED: without it, the runner inherits the operator's shell CWD,
+# which (combined with empty-WorkingDirectory CLI invocations) leaks target-project files
+# into the VDT source tree. See GridGuardians.Api leak incident 2026-05-11.
+$resolvedProjectDir = (Resolve-Path $ProjectDir).Path
 $proc = Start-Process -FilePath "dotnet" `
     -ArgumentList "run", "--project", $ProjectDir, "--no-build" `
+    -WorkingDirectory $resolvedProjectDir `
     -RedirectStandardOutput $stdoutLog `
     -RedirectStandardError $stderrLog `
     -WindowStyle Hidden `
@@ -66,7 +78,7 @@ $stdoutLog | Out-File -FilePath $latestStdout -NoNewline
 $stderrLog | Out-File -FilePath $latestStderr -NoNewline
 
 Write-Host ""
-Write-Host "AgentSquad Runner started!" -ForegroundColor Green
+Write-Host "VirtualDevTeam Runner started!" -ForegroundColor Green
 Write-Host "  PID:    $($proc.Id)"
 Write-Host "  Stdout: $stdoutLog"
 Write-Host "  Stderr: $stderrLog"

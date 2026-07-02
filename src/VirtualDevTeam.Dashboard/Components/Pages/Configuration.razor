@@ -1,0 +1,2634 @@
+@page "/configuration"
+@using VirtualDevTeam.Core.Configuration
+@using VirtualDevTeam.Core.Services
+@using VirtualDevTeam.Core.Workspace
+@using VirtualDevTeam.Dashboard.Services
+@using Microsoft.Extensions.Options
+@using VirtualDevTeam.Core.Prompts
+@using VirtualDevTeam.Core.DevPlatform.Config
+@using VirtualDevTeam.Core.DevPlatform.Models
+@using VirtualDevTeam.Core.GitHub.Models
+@using VirtualDevTeam.Core.Frameworks
+@inject IConfigurationService ConfigService
+@inject IDashboardDataService DataService
+@inject IPromptTemplateService PromptService
+@inject IOptions<VirtualDevTeamConfig> SquadConfig
+@inject DevelopSettingsService DevelopSettingsService
+@inject ILogger<Configuration> Logger
+@inject IServiceProvider ServiceProvider
+@rendermode InteractiveServer
+
+<div class="page-header" data-testid="page-configuration">
+    <h1 class="page-title">⚙️ Configuration</h1>
+    <div class="header-badges">
+        @if (_saveSuccess)
+        {
+            <span class="badge badge-success">✓ Saved</span>
+        }
+        @if (_saveError is not null)
+        {
+            <span class="badge badge-error">⚠ Error</span>
+        }
+    </div>
+</div>
+
+@if (_loading)
+{
+    <div class="config-loading">Loading configuration...</div>
+}
+else if (_config is not null)
+{
+    <div class="config-container">
+        @* ═══════════════════════════════════════════════════════════════════
+           CONFIGURATION EDITOR
+           ═══════════════════════════════════════════════════════════════════ *@
+        <div class="config-section-header">
+            <span class="config-section-icon">📝</span>
+            <div>
+                <h2 class="config-section-title">Application Settings</h2>
+                <p class="config-section-desc">Configure Virtual Dev Team behavior, models, and agent settings. Changes are saved to appsettings.json.</p>
+            </div>
+        </div>
+
+        @* ── Copilot CLI Settings ── *@
+        <div class="config-card">
+            <div class="config-card-header" @onclick="() => _copilotExpanded = !_copilotExpanded" data-testid="config-card-copilot">
+                <span class="config-card-icon">🤖</span>
+                <span class="config-card-title">Copilot CLI</span>
+                <span class="config-card-chevron @(_copilotExpanded ? "expanded" : "")">▶</span>
+            </div>
+            @if (_copilotExpanded)
+            {
+                <div class="config-card-body">
+                    <div class="config-field-row">
+                        <div class="config-field" title="When enabled, all AI calls route through the GitHub Copilot CLI instead of direct API keys. Requires 'copilot' CLI v1.0.18+ installed.">
+                            <label>Enabled</label>
+                            <label class="config-toggle">
+                                <input type="checkbox" @bind="_config.CopilotCli.Enabled" />
+                                <span class="config-toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="config-field" title="Uses a faster, cheaper model for non-critical operations like status updates and simple classifications. Reduces cost without sacrificing quality on important tasks.">
+                            <label>Fast Mode</label>
+                            <label class="config-toggle">
+                                <input type="checkbox" @bind="_config.CopilotCli.FastMode" />
+                                <span class="config-toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="config-field" title="Sends the entire multi-turn conversation as a single prompt instead of multiple turns. Can improve coherence but uses more tokens per request.">
+                            <label>Single-Pass Mode</label>
+                            <label class="config-toggle">
+                                <input type="checkbox" @bind="_config.CopilotCli.SinglePassMode" />
+                                <span class="config-toggle-slider"></span>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="config-field-row">
+                        <div class="config-field" title="Suppresses CLI banners, progress indicators, and decorative output. Cleaner logs but less visibility into what the CLI is doing.">
+                            <label>Silent Mode</label>
+                            <label class="config-toggle">
+                                <input type="checkbox" @bind="_config.CopilotCli.SilentMode" />
+                                <span class="config-toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="config-field" title="Uses '--output-format json' for structured JSONL responses. More reliable parsing but some models may not support it.">
+                            <label>JSON Output</label>
+                            <label class="config-toggle">
+                                <input type="checkbox" @bind="_config.CopilotCli.JsonOutput" />
+                                <span class="config-toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="config-field" title="Automatically responds 'y' to any interactive prompts from the CLI. Required for unattended operation. Disable only for debugging.">
+                            <label>Auto-Approve Prompts</label>
+                            <label class="config-toggle">
+                                <input type="checkbox" @bind="_config.CopilotCli.AutoApprovePrompts" />
+                                <span class="config-toggle-slider"></span>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="config-field-row">
+                        <div class="config-field">
+                            <label title="The default AI model for standard operations. Uses dot notation (e.g., 'claude-sonnet-4.6', 'gpt-5.2').">Model Name</label>
+                            <input type="text" @bind="_config.CopilotCli.ModelName" class="config-input"
+                                title="Default model ID. Examples: claude-sonnet-4.6, claude-opus-4.6, gpt-5.2. Model IDs use dots, not dashes." />
+                        </div>
+                        <div class="config-field">
+                            <label title="A smaller/faster model used when Fast Mode is enabled. Typically a 'haiku' or 'mini' variant.">Fast Mode Model</label>
+                            <input type="text" @bind="_config.CopilotCli.FastModeModel" class="config-input"
+                                title="Cheaper model for fast-mode operations. Examples: claude-haiku-4.5, gpt-5.4-mini." />
+                        </div>
+                    </div>
+                    <div class="config-field-row">
+                        <div class="config-field">
+                            <label title="Maximum number of simultaneous Copilot CLI processes. Higher = more parallelism but more system resources.">Max Concurrent Requests</label>
+                            <input type="number" @bind="_config.CopilotCli.MaxConcurrentRequests" class="config-input config-input-number" min="1" max="20"
+                                title="Controls the SemaphoreSlim limit for parallel CLI invocations. Default: 4. Increase if agents are waiting too long for AI responses." />
+                        </div>
+                        <div class="config-field">
+                            <label title="How long to wait for a single CLI request before timing out. Complex prompts (architecture, code generation) may need more time.">Request Timeout (seconds)</label>
+                            <input type="number" @bind="_config.CopilotCli.RequestTimeoutSeconds" class="config-input config-input-number" min="30" max="7200"
+                                title="Per-request timeout. Default: 300s (5 min). Increase for complex multi-turn conversations. Max: 7200s (2 hours)." />
+                        </div>
+                        <div class="config-field">
+                            <label title="Number of automatic retries on transient failures (timeouts, rate limits). Each retry waits progressively longer.">Max Retries</label>
+                            <input type="number" @bind="_config.CopilotCli.MaxRetries" class="config-input config-input-number" min="0" max="10"
+                                title="Retry count for failed CLI invocations. Default: 2. Set to 0 to fail fast on errors." />
+                        </div>
+                    </div>
+                    <div class="config-field">
+                        <label title="Full path to the 'copilot' executable. Usually auto-detected from PATH. Set manually if installed in a non-standard location.">Executable Path</label>
+                        <input type="text" @bind="_config.CopilotCli.ExecutablePath" class="config-input"
+                            title="Override the CLI executable location. Leave as 'copilot' to use PATH discovery. Example: 'C:\\Program Files\\GitHub CLI\\copilot.exe'" />
+                    </div>
+                    <div class="config-field">
+                        <label title="Controls how much 'thinking' the model does before responding. Higher = better quality but slower and more expensive.">Reasoning Effort</label>
+                        <select @bind="_copilotReasoningEffort" class="config-select"
+                            title="Model reasoning depth. Options filtered by selected model's capabilities.">
+                            <option value="">(default)</option>
+                            @foreach (var level in GetSupportedReasoningLevels())
+                            {
+                                <option value="@level">@(char.ToUpper(level[0]) + level[1..])</option>
+                            }
+                        </select>
+                        @if (!IsReasoningLevelSupported(_copilotReasoningEffort))
+                        {
+                            <span class="config-warning" title="The selected reasoning level may not be supported by the current model. This could cause errors or silent downgrades.">
+                                ⚠️ @(_config?.CopilotCli.ModelName ?? "Model") may not support this level
+                            </span>
+                        }
+                    </div>
+                    <div class="config-field">
+                        <label title="Selects the context window tier. 'Long Context' uses the model's extended (1M) context window. Replaces the old per-model '-1m' suffix which Copilot CLI no longer recognizes.">Context Window</label>
+                        <select @bind="_copilotContextTier" class="config-select"
+                            title="Context window tier passed to the Copilot CLI via --context.">
+                            <option value="">(default)</option>
+                            <option value="long_context">Long Context (1M)</option>
+                        </select>
+                    </div>
+                </div>
+            }
+        </div>
+
+        @* ── Frameworks ── *@
+        <div class="config-card">
+            <div class="config-card-header" @onclick="() => _strategiesExpanded = !_strategiesExpanded" data-testid="config-card-strategies">
+                <span class="config-card-icon">🧠</span>
+                <span class="config-card-title">Frameworks</span>
+                <span class="config-card-chevron @(_strategiesExpanded ? "expanded" : "")">▶</span>
+            </div>
+            @if (_strategiesExpanded)
+            {
+                <div class="config-card-body">
+                    <p class="config-hint" style="margin-bottom: 12px;">
+                        Choose which AI code-generation frameworks run under the hood when Software Engineers implement a task. Virtual Dev Team orchestrates visibility, approvals, and metrics regardless of which framework generates code. When <strong>disabled</strong>, engineers use the legacy single-shot generator (fastest, least autonomous). When <strong>enabled</strong>, every listed framework runs in parallel for each task and the winning patch is applied.
+                    </p>
+
+                    <div class="config-field-row">
+                        <div class="config-field" title="Master switch for the multi-framework pipeline. When OFF, all Software Engineer tasks use the legacy single-pass code generator regardless of the per-framework toggles below. Turn this ON to route code generation through the selected frameworks.">
+                            <label>Frameworks Enabled</label>
+                            <label class="config-toggle">
+                                <input type="checkbox" @bind="_config.StrategyFramework.Enabled" />
+                                <span class="config-toggle-slider"></span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="config-subsection-header" style="margin-top: 12px; font-weight: 600; font-size: 0.9rem;">Active Frameworks</div>
+                    <p class="config-hint" style="font-size: 0.8rem; margin-bottom: 8px;">
+                        Check the frameworks you want to run. Unchecked frameworks are skipped. At least one must be enabled when the pipeline is on, otherwise all tasks will fall back to the legacy generator.
+                    </p>
+
+                    <div class="config-field-row">
+                        <div class="config-field" title="Single-pass generator PLUS an MCP (Model Context Protocol) server that exposes repo-aware tools to the model. Second of three options. Better than baseline because the model can read files before writing, but still one-shot — cannot iterate on build failures.">
+                            <label>MCP-Enhanced</label>
+                            <label class="config-toggle">
+                                <input type="checkbox" checked="@IsStrategyEnabled(StrategyMcp)"
+                                    @onchange="e => SetStrategyEnabled(StrategyMcp, (bool)(e.Value ?? false))" />
+                                <span class="config-toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="config-field" title="Interactive CLI session (third option) — the engineer delegates the entire task to 'copilot --allow-all' running autonomously in the worktree. The CLI can read/write files, run builds, and iterate until the task works. Most robust but slowest and most expensive. This is the Method-3 path the user wants to keep.">
+                            <label>GitHub Copilot (Agent Mode)</label>
+                            <label class="config-toggle">
+                                <input type="checkbox" checked="@IsStrategyEnabled(StrategyAgentic)"
+                                    @onchange="e => SetStrategyEnabled(StrategyAgentic, (bool)(e.Value ?? false))" />
+                                <span class="config-toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="config-field" title="External framework — delegates the task to Squad (Brady Gaster's multi-agent team). Squad coordinates multiple AI sub-agents (lead developer, frontend, backend, tester) working in parallel inside the worktree. Requires Squad CLI installed. Slowest but most thorough for complex tasks.">
+                            <label>Squad (multi-agent team)</label>
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <label class="config-toggle">
+                                    <input type="checkbox" checked="@IsStrategyEnabled(StrategySquad)"
+                                        @onchange="e => SetStrategyEnabled(StrategySquad, (bool)(e.Value ?? false))" />
+                                    <span class="config-toggle-slider"></span>
+                                </label>
+                                @if (_squadReadinessChecking)
+                                {
+                                    <span style="font-size: 0.75rem; color: #64748b;">⏳ Checking...</span>
+                                }
+                                else if (_squadReadiness is not null)
+                                {
+                                    @if (_squadReadiness.Status == FrameworkReadiness.Ready)
+                                    {
+                                        <span style="font-size: 0.75rem; color: #16a34a;" title="@_squadReadiness.Message">✅ Ready</span>
+                                    }
+                                    else if (_squadReadiness.Status == FrameworkReadiness.InstallRequired)
+                                    {
+                                        <span style="font-size: 0.75rem; color: #d97706;" title="@_squadReadiness.Message">⚠️ Install Required</span>
+                                        <button class="btn-sm" style="font-size: 0.7rem; padding: 2px 8px; cursor: pointer;" @onclick="InstallSquadAsync" disabled="@_squadInstalling">
+                                            @(_squadInstalling ? "Installing..." : "Install Now")
+                                        </button>
+                                    }
+                                    else
+                                    {
+                                        <span style="font-size: 0.75rem; color: #dc2626;" title="@_squadReadiness.Message">❌ @_squadReadiness.Status</span>
+                                    }
+                                }
+                                <button class="btn-sm" style="font-size: 0.7rem; padding: 2px 8px; cursor: pointer; background: #1e293b; color: #e2e8f0; border: 1px solid #475569; border-radius: 4px;" @onclick="CheckSquadReadinessAsync" disabled="@_squadReadinessChecking" title="Run readiness check for Squad CLI and all dependencies">
+                                    🔍 Check
+                                </button>
+                            </div>
+                        </div>
+                        @if (_squadReadiness is not null && _squadReadiness.MissingDependencies.Count > 0)
+                        {
+                            <div style="margin-top: 4px; margin-bottom: 8px; padding: 5px 10px; background: rgba(217, 119, 6, 0.15); border: 1px solid rgba(217, 119, 6, 0.4); border-radius: 4px; font-size: 0.75rem; color: #fbbf24; display: flex; align-items: center; gap: 6px;">
+                                <span style="flex: 1;">⚠️ <strong>Missing:</strong> @string.Join(", ", _squadReadiness.MissingDependencies)</span>
+                                <button style="background: none; border: none; cursor: pointer; color: #fbbf24; font-size: 0.85rem; padding: 0; line-height: 1;" @onclick="() => _squadReadiness = null" title="Dismiss">✕</button>
+                            </div>
+                        }
+                        @if (_squadInstallMessage is not null)
+                        {
+                            <div style="margin-top: 4px; margin-bottom: 8px; padding: 5px 10px; background: @(_squadInstallSuccess ? "rgba(16, 185, 129, 0.15)" : "rgba(239, 68, 68, 0.15)"); border: 1px solid @(_squadInstallSuccess ? "rgba(16, 185, 129, 0.4)" : "rgba(239, 68, 68, 0.4)"); border-radius: 4px; font-size: 0.75rem; color: @(_squadInstallSuccess ? "#34d399" : "#f87171");">
+                                @_squadInstallMessage
+                            </div>
+                        }
+                    </div>
+
+                    @if (_config.StrategyFramework.Enabled && GetEnabledStrategyCount() == 0)
+                    {
+                        <div class="config-warning" style="margin-top: 10px; padding: 8px 12px; background: rgba(217, 119, 6, 0.15); border: 1px solid rgba(217, 119, 6, 0.4); border-radius: 4px; color: #fbbf24;">
+                            ⚠️ Frameworks are enabled but none are checked. With nothing to run, every task will silently fall back to the legacy generator.
+                        </div>
+                    }
+
+                    <div class="config-field-row" style="margin-top: 12px;">
+                        <div class="config-field" title="How often the enabled strategies run. 'always' = every task (highest cost). 'high-complexity-only' = only when the task complexity is High (score ≥ 3). 'sampled-20' = ~20% of tasks, deterministic by task ID hash. 'first-wave-only' = only the first ParallelDevelopment wave.">
+                            <label>Sampling Policy</label>
+                            <select @bind="_config.StrategyFramework.SamplingPolicy" class="config-select">
+                                <option value="always">always</option>
+                                <option value="high-complexity-only">high-complexity-only</option>
+                                <option value="sampled-20">sampled-20</option>
+                                <option value="first-wave-only">first-wave-only</option>
+                            </select>
+                        </div>
+                        <div class="config-field" title="What happens after the orchestrator picks a winning patch. 'full-review' = Architect → PM → Test Engineer pipeline (recommended). 'fast-track' = PR opens ready-for-review, skip the extra Architect pass. 'auto-merge' = fast-forward merge if all gates pass (risky, not recommended).">
+                            <label>Post-Winner Flow</label>
+                            <select @bind="_config.StrategyFramework.PostWinnerFlow" class="config-select">
+                                <option value="full-review">full-review</option>
+                                <option value="fast-track">fast-track</option>
+                                <option value="auto-merge">auto-merge</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+
+        @* ── Agent Settings ── *@
+        <div class="config-card">
+            <div class="config-card-header" @onclick="() => _agentsExpanded = !_agentsExpanded" data-testid="config-card-agents">
+                <span class="config-card-icon">👥</span>
+                <span class="config-card-title">Agents</span>
+                <span class="config-card-chevron @(_agentsExpanded ? "expanded" : "")">▶</span>
+            </div>
+            @if (_agentsExpanded)
+            {
+                <div class="config-card-body">
+                    <p class="config-hint" style="margin-bottom: 12px;" title="Each agent can be assigned a model tier, role customization, MCP servers, and knowledge links. Click an agent to expand its configuration.">
+                        Configure each agent's model tier, role behavior, MCP tools, and knowledge sources. Click an agent to expand.
+                    </p>
+                    <div class="config-agent-grid">
+                        @foreach (var agent in GetAgentEntries())
+                        {
+                            var agentName = agent.Name;
+                            var isExpanded = IsAgentPanelExpanded(agentName);
+                            <div class="config-agent-accordion">
+                                <div class="config-agent-row" title="@GetAgentTooltip(agentName)" @onclick="() => ToggleAgentPanel(agentName)" style="cursor: pointer;">
+                                    <div class="config-agent-name">
+                                        <span class="config-agent-chevron @(isExpanded ? "expanded" : "")">▶</span>
+                                        @agentName
+                                        @if (!string.IsNullOrWhiteSpace(agent.Config.RoleDescription) || agent.Config.McpServers.Count > 0 || agent.Config.KnowledgeLinks.Count > 0)
+                                        {
+                                            <span class="config-agent-customized" title="This agent has custom role configuration">✦</span>
+                                        }
+                                    </div>
+                                    <div class="config-agent-controls" @onclick:stopPropagation="true">
+                                        <select @bind="agent.Config.ModelTier" class="config-select config-select-sm"
+                                            title="AI model quality tier. Premium: best quality (Opus-class). Standard: good balance (Sonnet-class). Budget: cheapest (GPT-mini). Local: Ollama self-hosted.">
+                                            <option value="premium">Premium</option>
+                                            <option value="standard">Standard</option>
+                                            <option value="budget">Budget</option>
+                                            <option value="local">Local</option>
+                                        </select>
+                                        <label class="config-toggle config-toggle-sm" title="@GetAgentDisableWarning(agentName)">
+                                            <input type="checkbox" @bind="agent.Config.Enabled" />
+                                            <span class="config-toggle-slider"></span>
+                                        </label>
+                                    </div>
+                                </div>
+                                @if (isExpanded)
+                                {
+                                    <div class="config-agent-details" @onclick:stopPropagation="true">
+                                        @* Auto-Spawn Toggle *@
+                                        <div class="config-field" style="display: flex; align-items: center; gap: 0.75rem;">
+                                            <label class="config-toggle config-toggle-sm" title="When enabled, this agent is automatically spawned at startup. When disabled, the agent is available but only spawned when the PM activates it via team composition.">
+                                                <input type="checkbox" @bind="agent.Config.AutoSpawn" />
+                                                <span class="config-toggle-slider"></span>
+                                            </label>
+                                            <span style="font-size: 0.8rem; color: var(--text-secondary);">Auto-spawn at startup</span>
+                                        </div>
+
+                                        @* Role Description *@
+                                        <div class="config-field">
+                                            <label title="Custom role description that augments the agent's default persona. This is prepended to every AI system prompt, giving the agent a specialized identity and behavioral guidelines.">
+                                                Role Description <span class="config-hint">(augments default persona)</span>
+                                            </label>
+                                            <textarea @bind="agent.Config.RoleDescription" class="config-textarea" rows="3"
+                                                placeholder="@GetDefaultRoleDescription(agentName)"
+                                                title="Custom instructions prepended to every AI prompt for this agent. Click 'Load Default' to start from the built-in persona."></textarea>
+                                            <div class="config-field-actions">
+                                                @if (string.IsNullOrWhiteSpace(agent.Config.RoleDescription))
+                                                {
+                                                    <button class="config-btn-inline" @onclick="() => LoadDefaultRoleDescription(agent.Config, agentName)" title="Populate with the built-in default persona so you can tweak it">
+                                                        📋 Load Default
+                                                    </button>
+                                                }
+                                                else
+                                                {
+                                                    <button class="config-btn-inline config-btn-inline-warn" @onclick="() => agent.Config.RoleDescription = string.Empty" title="Clear customization and revert to built-in default">
+                                                        🔄 Reset
+                                                    </button>
+                                                }
+                                            </div>
+                                        </div>
+
+                                        @* MCP Servers *@
+                                        <div class="config-field">
+                                            <label title="MCP (Model Context Protocol) servers extend the agent's capabilities with external tools. Each server name is passed as --mcp-server to the Copilot CLI.">
+                                                MCP Servers <span class="config-hint">(tool integrations)</span>
+                                            </label>
+                                            @for (var i = 0; i < agent.Config.McpServers.Count; i++)
+                                            {
+                                                var idx = i;
+                                                <div class="config-list-item">
+                                                    <input type="text" value="@agent.Config.McpServers[idx]"
+                                                        @onchange="e => UpdateMcpServer(agent.Config, idx, e.Value?.ToString() ?? string.Empty)"
+                                                        class="config-input" placeholder="server-name"
+                                                        title="MCP server name (e.g., 'filesystem', 'github', 'database')" />
+                                                    <button class="config-btn-remove" @onclick="() => RemoveMcpServer(agent.Config, idx)" title="Remove this MCP server">✕</button>
+                                                </div>
+                                            }
+                                            @{
+                                                var availableMcp = GetAvailableMcpServers(agent.Config);
+                                            }
+                                            @if (availableMcp.Count > 0)
+                                            {
+                                                <div class="config-mcp-available">
+                                                    @foreach (var mcp in availableMcp)
+                                                    {
+                                                        <button class="config-btn-mcp-add" @onclick="() => { agent.Config.McpServers.Add(mcp); }"
+                                                            title="Add '@mcp' to this agent">+ @mcp</button>
+                                                    }
+                                                </div>
+                                            }
+                                            else
+                                            {
+                                                <button class="config-btn-add" @onclick="() => AddMcpServer(agent.Config)" title="Add an MCP server for this agent">
+                                                    + Add MCP Server
+                                                </button>
+                                            }
+                                        </div>
+
+                                        @* Knowledge Links *@
+                                        <div class="config-field">
+                                            <label title="URLs to documentation, wikis, or reference pages. Content is fetched once at agent startup and summarized into compact context that informs the agent's decisions.">
+                                                Knowledge Links <span class="config-hint">(reference documentation)</span>
+                                            </label>
+                                            @for (var i = 0; i < agent.Config.KnowledgeLinks.Count; i++)
+                                            {
+                                                var idx = i;
+                                                <div class="config-list-item">
+                                                    <input type="text" value="@agent.Config.KnowledgeLinks[idx]"
+                                                        @onchange="e => UpdateKnowledgeLink(agent.Config, idx, e.Value?.ToString() ?? string.Empty)"
+                                                        class="config-input" placeholder="https://docs.example.com/standards"
+                                                        title="URL to a documentation page. Content is fetched and summarized at agent startup." />
+                                                    <button class="config-btn-remove" @onclick="() => RemoveKnowledgeLink(agent.Config, idx)" title="Remove this knowledge link">✕</button>
+                                                </div>
+                                            }
+                                            <button class="config-btn-add" @onclick="() => AddKnowledgeLink(agent.Config)" title="Add a knowledge link for this agent">
+                                                + Add Knowledge Link
+                                            </button>
+                                        </div>
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </div>
+
+                    @* ── Implementation Mode ── *@
+                    <div class="config-section-divider">
+                        <span>Implementation Mode</span>
+                    </div>
+                    <div class="config-field-row">
+                        <div class="config-field" title="When enabled, engineers produce all code in a single commit per PR instead of step-by-step commits. Faster, less context bloat, but less granular PR history.">
+                            <label>Single Commit Mode</label>
+                            <label class="config-toggle">
+                                <input type="checkbox" @bind="_config.Agents.SingleCommitMode" />
+                                <span class="config-toggle-slider"></span>
+                            </label>
+                        </div>
+                    </div>
+
+                    @* ── Custom Agents ── *@
+                    <div class="config-custom-agents-section">
+                        <div class="config-section-divider">
+                            <span>Custom Agents</span>
+                        </div>
+                        @if (_config!.Agents.CustomAgents.Count == 0)
+                        {
+                            <p class="config-hint" style="margin: 8px 0;">No custom agents configured. Add one to extend your team with specialized roles.</p>
+                        }
+                        else
+                        {
+                            <div class="config-agent-grid">
+                                @foreach (var customAgent in _config.Agents.CustomAgents)
+                                {
+                                    var agentKey = $"custom:{customAgent.Name}";
+                                    var isExpanded = IsAgentPanelExpanded(agentKey);
+                                    <div class="config-agent-accordion">
+                                        <div class="config-agent-row" @onclick="() => ToggleAgentPanel(agentKey)" style="cursor: pointer;">
+                                            <div class="config-agent-name">
+                                                <span class="config-agent-chevron @(isExpanded ? "expanded" : "")">▶</span>
+                                                <span class="config-custom-agent-badge">Custom</span>
+                                                @if (string.IsNullOrWhiteSpace(customAgent.Name))
+                                                {
+                                                    <em style="opacity: 0.5;">(unnamed)</em>
+                                                }
+                                                else
+                                                {
+                                                    @customAgent.Name
+                                                }
+                                                @if (!string.IsNullOrWhiteSpace(customAgent.RoleDescription) || customAgent.McpServers.Count > 0 || customAgent.KnowledgeLinks.Count > 0)
+                                                {
+                                                    <span class="config-agent-customized" title="This agent has custom role configuration">✦</span>
+                                                }
+                                            </div>
+                                            <div class="config-agent-controls" @onclick:stopPropagation="true">
+                                                <select @bind="customAgent.ModelTier" class="config-select config-select-sm"
+                                                    title="AI model quality tier for this custom agent.">
+                                                    <option value="premium">Premium</option>
+                                                    <option value="standard">Standard</option>
+                                                    <option value="budget">Budget</option>
+                                                    <option value="local">Local</option>
+                                                </select>
+                                                <label class="config-toggle config-toggle-sm" title="Enable or disable this custom agent.">
+                                                    <input type="checkbox" @bind="customAgent.Enabled" />
+                                                    <span class="config-toggle-slider"></span>
+                                                </label>
+                                                <button class="config-btn-remove" style="margin-left: 8px;"
+                                                    @onclick="() => RemoveCustomAgent(customAgent)"
+                                                    title="Remove this custom agent">✕</button>
+                                            </div>
+                                        </div>
+                                        @if (isExpanded)
+                                        {
+                                            <div class="config-agent-details" @onclick:stopPropagation="true">
+                                                @* Agent Name *@
+                                                <div class="config-field">
+                                                    <label title="Unique name for this custom agent. Used as its display name and for task assignment matching.">
+                                                        Agent Name <span class="config-hint">(required)</span>
+                                                    </label>
+                                                    <input type="text" @bind="customAgent.Name" class="config-input"
+                                                        placeholder="e.g., Security Reviewer, API Specialist, DevOps Engineer"
+                                                        title="The agent's display name. Must be unique across all custom agents." />
+                                                </div>
+
+                                                @* Role Description *@
+                                                <div class="config-field">
+                                                    <label title="Define this agent's persona, expertise, and behavioral guidelines. This is the primary way to shape what the custom agent does and how it thinks.">
+                                                        Role Description <span class="config-hint">(defines persona — highly recommended)</span>
+                                                    </label>
+                                                    <textarea @bind="customAgent.RoleDescription" class="config-textarea" rows="4"
+                                                        placeholder="e.g., 'You are a Security Reviewer specializing in OWASP top 10, dependency vulnerability scanning, and secure coding practices. Review all PRs for security concerns...'"
+                                                        title="The agent's core persona. This is prepended to every AI prompt and defines the agent's identity, expertise, and approach."></textarea>
+                                                </div>
+
+                                                @* MCP Servers *@
+                                                <div class="config-field">
+                                                    <label title="MCP servers extend this agent's tool capabilities.">
+                                                        MCP Servers <span class="config-hint">(tool integrations)</span>
+                                                    </label>
+                                                    @for (var i = 0; i < customAgent.McpServers.Count; i++)
+                                                    {
+                                                        var idx = i;
+                                                        <div class="config-list-item">
+                                                            <input type="text" value="@customAgent.McpServers[idx]"
+                                                                @onchange="e => UpdateMcpServer(customAgent, idx, e.Value?.ToString() ?? string.Empty)"
+                                                                class="config-input" placeholder="server-name"
+                                                                title="MCP server name" />
+                                                            <button class="config-btn-remove" @onclick="() => RemoveMcpServer(customAgent, idx)" title="Remove this MCP server">✕</button>
+                                                        </div>
+                                                    }
+                                                    <button class="config-btn-add" @onclick="() => AddMcpServer(customAgent)" title="Add an MCP server">
+                                                        + Add MCP Server
+                                                    </button>
+                                                </div>
+
+                                                @* Knowledge Links *@
+                                                <div class="config-field">
+                                                    <label title="URLs to documentation or reference pages for this agent's context.">
+                                                        Knowledge Links <span class="config-hint">(reference documentation)</span>
+                                                    </label>
+                                                    @for (var i = 0; i < customAgent.KnowledgeLinks.Count; i++)
+                                                    {
+                                                        var idx = i;
+                                                        <div class="config-list-item">
+                                                            <input type="text" value="@customAgent.KnowledgeLinks[idx]"
+                                                                @onchange="e => UpdateKnowledgeLink(customAgent, idx, e.Value?.ToString() ?? string.Empty)"
+                                                                class="config-input" placeholder="https://docs.example.com/standards"
+                                                                title="URL to a documentation page" />
+                                                            <button class="config-btn-remove" @onclick="() => RemoveKnowledgeLink(customAgent, idx)" title="Remove this knowledge link">✕</button>
+                                                        </div>
+                                                    }
+                                                    <button class="config-btn-add" @onclick="() => AddKnowledgeLink(customAgent)" title="Add a knowledge link">
+                                                        + Add Knowledge Link
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        }
+                                    </div>
+                                }
+                            </div>
+                        }
+                        <button class="config-btn-add config-btn-add-agent" @onclick="AddCustomAgent"
+                            title="Add a new custom agent with its own role, model tier, MCP servers, and knowledge links">
+                            + Add Custom Agent
+                        </button>
+                    </div>
+                </div>
+            }
+        </div>
+
+        @* ── Engineer Pool ── *@
+        <div class="config-card">
+            <div class="config-card-header" @onclick="() => _poolExpanded = !_poolExpanded" data-testid="config-card-pool">
+                <span class="config-card-icon">🏊</span>
+                <span class="config-card-title">Engineer Pool</span>
+                <span class="config-card-chevron @(_poolExpanded ? "expanded" : "")">▶</span>
+            </div>
+            @if (_poolExpanded)
+            {
+                <div class="config-card-body">
+                    <p class="config-hint" style="margin-bottom: 12px;" title="Controls how many ADDITIONAL Software Engineers can be dynamically spawned beyond the core SWE. The core SWE (rank 0) is always created.">
+                        Configure the pool of additional engineers that can be spawned for parallel development. The core Software Engineer is always active.
+                    </p>
+                    <div class="config-field-row">
+                        <div class="config-field">
+                            <label title="Additional Software Engineers beyond the core SWE. SWEs handle coding tasks across all complexity levels.">Software Engineers</label>
+                            <input type="number" @bind="_config.Limits.EngineerPool.SoftwareEngineerPool" class="config-input config-input-number" min="0" max="10"
+                                title="Number of ADDITIONAL SWEs to spawn (the core SWE always exists). Recommended: 1-3 for large projects." />
+                            <span class="config-hint">Additional SWEs</span>
+                        </div>
+                    </div>
+                    <div class="config-pool-summary">
+                        Total additional engineers: <strong>@(_config.Limits.EngineerPool.SoftwareEngineerPool)</strong>
+                        (+ 1 core SWE always active)
+                    </div>
+                </div>
+            }
+        </div>
+
+        @* ── Limits ── *@
+        <div class="config-card">
+            <div class="config-card-header" @onclick="() => _limitsExpanded = !_limitsExpanded" data-testid="config-card-limits">
+                <span class="config-card-icon">📏</span>
+                <span class="config-card-title">Limits</span>
+                <span class="config-card-chevron @(_limitsExpanded ? "expanded" : "")">▶</span>
+            </div>
+            @if (_limitsExpanded)
+            {
+                <div class="config-card-body">
+                    <div class="config-field-row">
+                        <div class="config-field">
+                            <label title="Maximum number of agents that can run simultaneously. Includes core agents + spawned engineers.">Max Concurrent Agents</label>
+                            <input type="number" @bind="_config.Limits.MaxConcurrentAgents" class="config-input config-input-number" min="1" max="50"
+                                title="Upper bound on total running agents. Default: 10. Increase for large projects with many parallel tasks." />
+                        </div>
+                        <div class="config-field">
+                            <label title="How long an agent can run before being forcefully stopped. Prevents runaway agents from consuming resources indefinitely.">Agent Timeout (minutes)</label>
+                            <input type="number" @bind="_config.Limits.AgentTimeoutMinutes" class="config-input config-input-number" min="5" max="240"
+                                title="Per-agent timeout. Default: 60 min. Complex tasks (architecture, large PRs) may need more. Max: 240 min (4 hours)." />
+                        </div>
+                        <div class="config-field">
+                            <label title="How often agents poll the platform for new work items, PR comments, and review feedback. Lower = more responsive but more API calls.">Platform Poll Interval (seconds)</label>
+                            <input type="number" @bind="_config.Limits.GitHubPollIntervalSeconds" class="config-input config-input-number" min="5" max="300"
+                                title="Polling frequency for GitHub API. Default: 30s. Lower values use more API rate limit. Minimum: 5s." />
+                        </div>
+                    </div>
+                    <div class="config-field-row">
+                        <div class="config-field">
+                            <label title="Maximum total tokens (input + output) across all agents per day. Prevents runaway costs. Set high for active development.">Max Daily Token Budget</label>
+                            <input type="number" @bind="_config.Limits.MaxDailyTokenBudget" class="config-input config-input-number" min="10000"
+                                title="Daily token spending cap across all agents. Default: 1,000,000. Set to a high value if using Copilot CLI (no direct cost)." />
+                        </div>
+                        <div class="config-field">
+                            <label title="Maximum back-and-forth exchanges between agents when clarifying requirements. Prevents infinite loops of agents asking each other questions.">Max Clarification Round-Trips</label>
+                            <input type="number" @bind="_config.Limits.MaxClarificationRoundTrips" class="config-input config-input-number" min="1" max="20"
+                                title="Cap on clarification exchanges between agents. Default: 3. Higher = more thorough but slower progression." />
+                        </div>
+                        <div class="config-field">
+                            <label title="Maximum times an agent can rework code after a review rejection. Prevents endless fix-review cycles.">Max Rework Cycles</label>
+                            <input type="number" @bind="_config.Limits.MaxReworkCycles" class="config-input config-input-number" min="1" max="10"
+                                title="Max code rework iterations after review feedback. Default: 3. After this, the agent escalates or marks as blocked." />
+                        </div>
+                    </div>
+                    <div class="config-field-row">
+                        <div class="config-field">
+                            <label title="Minimum time an agent must spend on a task before it can self-complete. Prevents premature completion of complex tasks.">Self-Completion Threshold (min)</label>
+                            <input type="number" @bind="_config.Limits.SelfCompletionThresholdMinutes" class="config-input config-input-number" min="1" max="120"
+                                title="Agents can't mark their own task complete until this much time has passed. Encourages thorough work. Default: 5 min." />
+                        </div>
+                        <div class="config-field">
+                            <label title="Minimum number of parallelizable tasks required before the orchestrator will spawn a new engineer. Prevents spawning for small workloads.">Min Tasks for New Engineer</label>
+                            <input type="number" @bind="_config.Limits.MinParallelizableTasksForNewEngineer" class="config-input config-input-number" min="1" max="20"
+                                title="Task threshold for auto-scaling. Default: 2. The spawn manager won't create new engineers unless this many tasks are waiting." />
+                        </div>
+                    </div>
+                    <div class="config-field-row">
+                        <div class="config-field">
+                            <label title="Max rework cycles for Architect when architecture review requests changes.">Max Architect Rework</label>
+                            <input type="number" @bind="_config.Limits.MaxArchitectReworkCycles" class="config-input config-input-number" min="1" max="10"
+                                title="How many times the Architect can revise Architecture.md after PE feedback. Default: 3." />
+                        </div>
+                        <div class="config-field">
+                            <label title="Max rework cycles for PM when PM spec review requests changes.">Max PM Rework</label>
+                            <input type="number" @bind="_config.Limits.MaxPmReworkCycles" class="config-input config-input-number" min="1" max="10"
+                                title="How many times the PM can revise PMSpec.md after feedback. Default: 3." />
+                        </div>
+                        <div class="config-field">
+                            <label title="Max rework cycles for Test Engineer when tests fail build/review.">Max Test Rework</label>
+                            <input type="number" @bind="_config.Limits.MaxTestReworkCycles" class="config-input config-input-number" min="1" max="10"
+                                title="How many times the TE can fix failed tests before giving up. Default: 2." />
+                        </div>
+                        <div class="config-field">
+                            <label title="Max rounds of source bug fix attempts before escalating to human.">Max Source Bug Rounds</label>
+                            <input type="number" @bind="_config.Limits.MaxSourceBugRounds" class="config-input config-input-number" min="1" max="10"
+                                title="How many times the engineer can attempt to fix a source bug found by TE. Default: 2." />
+                        </div>
+                        <div class="config-field">
+                            <label title="Maximum times the user can request additional clarifying questions in the Develop wizard. This is separate from agent-to-agent clarification round-trips.">Wizard Question Iterations</label>
+                            <input type="number" @bind="_config.Limits.MaxWizardQuestionIterations" class="config-input config-input-number" min="1" max="10"
+                                title="How many 'Ask More' rounds of clarifying questions the wizard allows. Default: 3. Not related to agent-to-agent clarification." />
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+
+        @* ── Dashboard Settings ── *@
+        <div class="config-card">
+            <div class="config-card-header" @onclick="() => _dashboardExpanded = !_dashboardExpanded" data-testid="config-card-dashboard">
+                <span class="config-card-icon">📊</span>
+                <span class="config-card-title">Dashboard</span>
+                <span class="config-card-chevron @(_dashboardExpanded ? "expanded" : "")">▶</span>
+            </div>
+            @if (_dashboardExpanded)
+            {
+                <div class="config-card-body">
+                    <div class="config-field-row">
+                        <div class="config-field">
+                            <label title="The port the Runner process listens on (hosts API + embedded dashboard). Requires restart.">Runner Port</label>
+                            <input type="number" @bind="_config.Dashboard.Port" class="config-input config-input-number" min="1024" max="65535"
+                                title="Runner HTTP port (API + embedded dashboard). Default: 5050. Requires app restart." />
+                        </div>
+                        <div class="config-field">
+                            <label title="The port the standalone Dashboard.Host process listens on. Requires restart.">Dashboard Port</label>
+                            <input type="number" @bind="_config.Dashboard.StandalonePort" class="config-input config-input-number" min="1024" max="65535"
+                                title="Standalone dashboard HTTP port. Default: 5051. Requires app restart." />
+                        </div>
+                        <div class="config-field" title="Enables real-time push updates to the dashboard via SignalR WebSockets. When off, the dashboard uses polling instead.">
+                            <label>Enable SignalR</label>
+                            <label class="config-toggle">
+                                <input type="checkbox" @bind="_config.Dashboard.EnableSignalR" />
+                                <span class="config-toggle-slider"></span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+
+        @* ── Workspace Settings ── *@
+        <div class="config-card">
+            <div class="config-card-header" @onclick="() => _workspaceExpanded = !_workspaceExpanded" data-testid="config-card-workspace">
+                <span class="config-card-icon">🔧</span>
+                <span class="config-card-title">Workspace</span>
+                <span class="config-card-chevron @(_workspaceExpanded ? "expanded" : "")">▶</span>
+            </div>
+            @if (_workspaceExpanded)
+            {
+                <div class="config-card-body">
+                    @if (_developSettings is not null)
+                    {
+                        <div style="padding: 0.75rem 1rem; margin-bottom: 1rem; border: 1px solid rgba(88,166,255,0.2); border-radius: 8px; background: rgba(88,166,255,0.05);">
+                            <div class="config-field" title="When enabled, agents create lightweight virtual PRs and issues using local SQLite + git instead of real platform PRs during development. At project completion, one polished PR is submitted to the selected platform (GitHub/ADO) for human review and merge. Ideal for enterprise environments with strict branch policies, required reviewers, or limited API quotas — agents can iterate freely without triggering CI pipelines or approval gates on every intermediate PR.">
+                                <label style="font-weight: 600;">💻 Local Dev Mode</label>
+                                <label class="config-toggle">
+                                    <input type="checkbox" checked="@_developSettings.UseLocalDevMode"
+                                           @onchange="@(async e => { _developSettings.UseLocalDevMode = (bool)(e.Value ?? false); await DevelopSettingsService.SaveAsync(_developSettings); })" />
+                                    <span class="config-toggle-slider"></span>
+                                </label>
+                            </div>
+                            <p style="margin: 0.25rem 0 0 0; font-size: 0.8em; opacity: 0.6; line-height: 1.4;">
+                                Agents work with virtual PRs locally — no real PRs on @(_developSettings.Platform) until the final result is ready. Avoids branch policy overhead and API rate limits.
+                            </p>
+                        </div>
+                    }
+                    <div class="config-field-row">
+                        <div class="config-field">
+                            <label title="Path to your local git checkout. Agents work in lightweight worktrees — your files are never modified.">Project Path</label>
+                            <input type="text" @bind="_config.Workspace.LocalCheckoutPath" class="config-input" placeholder="C:\src\MyProject"
+                                title="Absolute path to your local git checkout. Leave empty to auto-detect from develop-settings." />
+                        </div>
+                        <div class="config-field">
+                            <label title="Root directory for agent workspaces (legacy Clone mode) or worktree base path.">Root Path</label>
+                            <input type="text" @bind="_config.Workspace.RootPath" class="config-input" placeholder="C:\Agents"
+                                title="Base directory for workspaces. Ensure sufficient disk space." />
+                        </div>
+                    </div>
+                    <div class="config-field-row">
+                        <div class="config-field">
+                            <label title="Shell command to build the project. Run in the workspace root after code changes. Must exit 0 on success.">Build Command</label>
+                            <input type="text" @bind="_config.Workspace.BuildCommand" class="config-input"
+                                title="e.g., 'dotnet build', 'npm run build', 'make'. Executed in the agent's workspace directory." />
+                        </div>
+                        <div class="config-field">
+                            <label title="Shell command to run tests. Executed after successful build. Must exit 0 when all tests pass.">Test Command</label>
+                            <input type="text" @bind="_config.Workspace.TestCommand" class="config-input"
+                                title="e.g., 'dotnet test', 'npm test', 'pytest'. Agents use this to validate their code changes before creating PRs." />
+                        </div>
+                    </div>
+                    <div class="config-field-row">
+                        <div class="config-field">
+                            <label title="Test workflow mode: 'inline' pushes tests to source PR, 'separate' creates a separate test PR.">Test Workflow</label>
+                            <select @bind="_config.Workspace.TestWorkflow" class="config-input">
+                                <option value="inline">Inline (tests in source PR)</option>
+                                <option value="separate">Separate (test PR per source PR)</option>
+                            </select>
+                        </div>
+                        <div class="config-field">
+                            <label title="Command to start the application for UI/E2E testing. Leave empty if not using UI tests.">App Start Command <span class="config-hint">(for UI tests)</span></label>
+                            <input type="text" @bind="_config.Workspace.AppStartCommand" class="config-input" placeholder="e.g. dotnet run --project src/MyApp"
+                                title="Shell command to start the app for Playwright tests. The app must be running before UI tests execute." />
+                        </div>
+                    </div>
+                    <div class="config-field-row">
+                        <div class="config-field">
+                            <label title="Base URL of the running application for UI tests.">App Base URL</label>
+                            <input type="text" @bind="_config.Workspace.AppBaseUrl" class="config-input" placeholder="http://localhost:5000"
+                                title="URL where the running app is accessible for Playwright tests. Default: http://localhost:5000" />
+                        </div>
+                        <div class="config-field">
+                            <label title="How long to wait for the app to start before running UI tests.">App Startup Timeout (sec)</label>
+                            <input type="number" @bind="_config.Workspace.AppStartupTimeoutSeconds" class="config-input config-input-number" min="10" max="300"
+                                title="Seconds to wait for the app to start responding before timing out. Default: 90." />
+                        </div>
+                    </div>
+                    <div class="config-field-row">
+                        <div class="config-field">
+                            <label title="Maximum time for a build command before it's killed. Prevents hung builds from blocking agents.">Build Timeout (sec)</label>
+                            <input type="number" @bind="_config.Workspace.BuildTimeoutSeconds" class="config-input config-input-number" min="10" max="600"
+                                title="Build timeout in seconds. Default: 120. Increase for large solutions or first-time NuGet restore." />
+                        </div>
+                        <div class="config-field">
+                            <label title="Maximum time for a test command before it's killed. Prevents hung test suites from blocking agents.">Test Timeout (sec)</label>
+                            <input type="number" @bind="_config.Workspace.TestTimeoutSeconds" class="config-input config-input-number" min="10" max="600"
+                                title="Test timeout in seconds. Default: 180. Increase for large test suites or integration tests." />
+                        </div>
+                        <div class="config-field">
+                            <label title="How many times to retry a failed build before giving up. Each retry includes AI-assisted fix attempts.">Max Build Retries</label>
+                            <input type="number" @bind="_config.Workspace.MaxBuildRetries" class="config-input config-input-number" min="0" max="10"
+                                title="Build retry count with AI fix attempts between retries. Default: 3. Set to 0 to fail immediately on build errors." />
+                        </div>
+                        <div class="config-field">
+                            <label title="How many times to retry failed tests before giving up.">Max Test Retries</label>
+                            <input type="number" @bind="_config.Workspace.MaxTestRetries" class="config-input config-input-number" min="0" max="10"
+                                title="Test retry count. Default: 3. Set to 0 to fail immediately on test failures." />
+                        </div>
+                    </div>
+                    <div class="config-field-row">
+                        <div class="config-field" title="Enable Playwright-based end-to-end UI tests. When on, the Test Engineer can generate and run browser-based tests.">
+                            <label>Enable UI Tests</label>
+                            <label class="config-toggle">
+                                <input type="checkbox" @bind="_config.Workspace.EnableUITests" />
+                                <span class="config-toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="config-field" title="When enabled, only UI/E2E tests are generated (skips unit and integration). Useful for UI-focused projects.">
+                            <label>UI Tests Only</label>
+                            <label class="config-toggle">
+                                <input type="checkbox" @bind="_config.Workspace.UITestsOnly" />
+                                <span class="config-toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="config-field" title="Capture screenshots during UI test runs for visual verification.">
+                            <label>Capture Screenshots</label>
+                            <label class="config-toggle">
+                                <input type="checkbox" @bind="_config.Workspace.CaptureScreenshots" />
+                                <span class="config-toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="config-field" title="Run MCP (AI-driven) and Direct (C# Playwright) screenshot capture in parallel during strategy evaluation. Both are read-only — safe to run simultaneously. Provides richer page coverage and capture comparison metrics. Disable to use only Direct capture (faster, less resource usage).">
+                            <label>Dual Capture (MCP + Direct)</label>
+                            <label class="config-toggle">
+                                <input type="checkbox" @bind="_config.Workspace.DualCaptureEnabled" />
+                                <span class="config-toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="config-field" title="Run Playwright browser tests in headless mode (no visible browser window). Always recommended for CI/agent environments.">
+                            <label>Playwright Headless</label>
+                            <label class="config-toggle">
+                                <input type="checkbox" @bind="_config.Workspace.PlaywrightHeadless" />
+                                <span class="config-toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="config-field" title="Automatically delete agent workspace directories when the project completes. Frees disk space but loses local build caches.">
+                            <label>Cleanup on Complete</label>
+                            <label class="config-toggle">
+                                <input type="checkbox" @bind="_config.Workspace.CleanupOnProjectComplete" />
+                                <span class="config-toggle-slider"></span>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="config-field-row">
+                        <div class="config-field">
+                            <label title="Git user.name for commits made by agents in their workspaces. Shows up in git log and PR commit history.">Git User Name</label>
+                            <input type="text" @bind="_config.Workspace.GitUserName" class="config-input"
+                                title="The git author name used for agent commits. e.g., 'Virtual Dev Team Bot'" />
+                        </div>
+                        <div class="config-field">
+                            <label title="Git user.email for commits made by agents. Should be a valid email or a noreply address.">Git User Email</label>
+                            <input type="text" @bind="_config.Workspace.GitUserEmail" class="config-input"
+                                title="The git author email used for agent commits. e.g., 'virtualdevteam@noreply.github.com'" />
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+
+        @* ── Human Interaction Settings ── *@
+        <div class="config-card">
+            <div class="config-card-header" @onclick="() => _humanInteractionExpanded = !_humanInteractionExpanded" data-testid="config-card-human-interaction">
+                <span class="config-card-icon">🧑‍💼</span>
+                <span class="config-card-title">Human Interaction</span>
+                <span class="config-card-chevron @(_humanInteractionExpanded ? "expanded" : "")">▶</span>
+            </div>
+            @if (_humanInteractionExpanded)
+            {
+                <div class="config-card-body">
+                    <div class="config-field" title="Master switch for human interaction gates. When off, all gates auto-proceed and agents run fully autonomously — no pauses, no approvals, no waiting. When on, you control which workflow checkpoints require your review before agents continue.">
+                        <label>Enable Human Checkpoints</label>
+                        <label class="config-toggle">
+                            <input type="checkbox" @bind="_config.HumanInteraction.Enabled" />
+                            <span class="config-toggle-slider"></span>
+                        </label>
+                        <span class="config-hint">When enabled, individual gates below can pause for human approval</span>
+                    </div>
+
+                    <div class="config-preset-bar">
+                        <span class="config-preset-label">Presets:</span>
+                        <button class="config-preset-btn @(!_config.HumanInteraction.Enabled ? "config-preset-active" : "")"
+                            @onclick="() => ApplyHumanPreset(HumanInteractionPreset.FullAuto)"
+                            title="All gates auto-proceed. Agents operate fully autonomously with zero human involvement. Best for trusted projects, overnight runs, or when you want maximum speed. No pauses, no approvals — agents make all decisions end-to-end.">
+                            🤖 Full Auto
+                        </button>
+                        <button class="config-preset-btn @(IsPresetActive(HumanInteractionPreset.Supervised) ? "config-preset-active" : "")"
+                            @onclick="() => ApplyHumanPreset(HumanInteractionPreset.Supervised)"
+                            title="Critical gates require human approval: PM Spec, Architecture, Engineering Plan, Final PR Approval, and Deployment. Routine gates (research, task assignment, individual reviews) auto-proceed. Best balance of oversight and speed — you review the important decisions while agents handle day-to-day work.">
+                            👁️ Supervised
+                        </button>
+                        <button class="config-preset-btn @(IsPresetActive(HumanInteractionPreset.FullControl) ? "config-preset-active" : "")"
+                            @onclick="() => ApplyHumanPreset(HumanInteractionPreset.FullControl)"
+                            title="Every gate requires human approval. Maximum oversight — agents pause at every workflow checkpoint and wait for your go-ahead. Best for sensitive projects, learning the system, or when you want to review every decision. Significantly slower since agents wait for you at each step.">
+                            🛡️ Full Control
+                        </button>
+                    </div>
+
+                    @if (_config.HumanInteraction.Enabled)
+                    {
+                        @foreach (var phaseGroup in GateIds.AllGates.GroupBy(g => g.Phase))
+                        {
+                            <div class="config-gate-phase">
+                                <h4 class="config-gate-phase-title">@phaseGroup.Key</h4>
+                                <div class="config-gate-grid">
+                                    @foreach (var gate in phaseGroup)
+                                    {
+                                        var gateConfig = GetOrCreateGate(gate.Id);
+                                        <div class="config-gate-item" title="@gate.Description">
+                                            <div class="config-gate-header">
+                                                <label class="config-toggle config-toggle-sm">
+                                                    <input type="checkbox" @bind="gateConfig.RequiresHuman" />
+                                                    <span class="config-toggle-slider"></span>
+                                                </label>
+                                                <span class="config-gate-name">@gate.Name</span>
+                                            </div>
+                                            <span class="config-gate-badge @(gateConfig.RequiresHuman ? "config-gate-human" : "config-gate-auto")">
+                                                @(gateConfig.RequiresHuman ? "👤 Human" : "🤖 Auto")
+                                            </span>
+                                        </div>
+                                    }
+                                </div>
+                            </div>
+                        }
+                    }
+                    else
+                    {
+                        <div class="config-gate-disabled-notice">
+                            <span>🤖 All gates are set to <strong>Full Auto</strong> — agents operate autonomously without human checkpoints.</span>
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+
+        @* ═══════════════════════════════════════════════════════════════════
+           SME AGENTS — dynamic specialist agents
+           ═══════════════════════════════════════════════════════════════════ *@
+        <div class="config-divider"></div>
+
+        <div class="config-section-header">
+            <span class="config-section-icon">🧠</span>
+            <div>
+                <h2 class="config-section-title">SME Agent System</h2>
+                <p class="config-section-desc">
+                    Configure dynamic specialist (SME) agents that can be created by the PM or PE during workflow.
+                    MCP servers provide tool capabilities; templates define reusable specialist roles.
+                </p>
+            </div>
+        </div>
+
+        <div class="config-card">
+            <div class="config-card-body">
+                <div class="config-field-row">
+                    <div class="config-field" title="When enabled, PM can propose team composition and PE can request specialist agents">
+                        <label>SME System Enabled</label>
+                        <label class="config-toggle">
+                            <input type="checkbox" @bind="_config.SmeAgents.Enabled" />
+                            <span class="config-toggle-slider"></span>
+                        </label>
+                    </div>
+                    <div class="config-field" title="Maximum number of SME agents that can run simultaneously">
+                        <label>Max Total SME Agents</label>
+                        <input type="number" class="config-input config-input-number"
+                               @bind="_config.SmeAgents.MaxTotalSmeAgents" min="1" max="20" />
+                    </div>
+                    <div class="config-field" title="Allow PM/PE to create new SME definitions at runtime (still human-gated)">
+                        <label>Allow Agent-Created Definitions</label>
+                        <label class="config-toggle">
+                            <input type="checkbox" @bind="_config.SmeAgents.AllowAgentCreatedDefinitions" />
+                            <span class="config-toggle-slider"></span>
+                        </label>
+                    </div>
+                    <div class="config-field" title="Save agent-created definitions to JSON for reuse across runs">
+                        <label>Persist Definitions</label>
+                        <label class="config-toggle">
+                            <input type="checkbox" @bind="_config.SmeAgents.PersistDefinitions" />
+                            <span class="config-toggle-slider"></span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        @* MCP Servers *@
+        <div class="config-card">
+            <div class="config-card-header" @onclick="() => _mcpServersExpanded = !_mcpServersExpanded" data-testid="config-card-mcp-servers">
+                <span class="config-card-icon">🔌</span>
+                <span class="config-card-title">Registered MCP Servers</span>
+                <span class="config-card-chevron @(_mcpServersExpanded ? "expanded" : "")">▶</span>
+            </div>
+            @if (_mcpServersExpanded)
+            {
+                <div class="config-card-body">
+                    <p class="config-hint" style="margin-bottom: 0.75rem">
+                        MCP servers provide tools (GitHub, fetch, filesystem, etc.) that agents can use.
+                        Configure in appsettings.json → McpServers section.
+                    </p>
+                    @if (_config.McpServers.Count == 0)
+                    {
+                        <p class="config-hint"><em>No MCP servers configured. Add to appsettings.json → McpServers section.</em></p>
+                    }
+                    else
+                    {
+                        <div class="mcp-server-list">
+                            @foreach (var (name, server) in _config.McpServers)
+                            {
+                                <div class="mcp-server-card">
+                                    <div class="mcp-server-name">
+                                        <span class="mcp-transport-badge">@server.Transport</span>
+                                        @name
+                                    </div>
+                                    <div class="mcp-server-desc">@server.Description</div>
+                                    @if (server.ProvidedCapabilities.Count > 0)
+                                    {
+                                        <div class="mcp-capabilities">
+                                            @foreach (var cap in server.ProvidedCapabilities)
+                                            {
+                                                <span class="mcp-cap-tag">@cap</span>
+                                            }
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+
+        @* SME Templates *@
+        <div class="config-card">
+            <div class="config-card-header" @onclick="() => _smeTemplatesExpanded = !_smeTemplatesExpanded" data-testid="config-card-sme-templates">
+                <span class="config-card-icon">📋</span>
+                <span class="config-card-title">SME Templates</span>
+                <span class="config-card-chevron @(_smeTemplatesExpanded ? "expanded" : "")">▶</span>
+            </div>
+            @if (_smeTemplatesExpanded)
+            {
+                <div class="config-card-body">
+                    <p class="config-hint" style="margin-bottom: 0.75rem">
+                        Pre-configured specialist roles. The PM can activate these during team composition.
+                        Configure in appsettings.json → SmeAgents → Templates section.
+                    </p>
+                    @if (_config.SmeAgents.Templates.Count == 0)
+                    {
+                        <p class="config-hint"><em>No SME templates configured.</em></p>
+                    }
+                    else
+                    {
+                        <div class="sme-template-list">
+                            @foreach (var (id, template) in _config.SmeAgents.Templates)
+                            {
+                                <div class="sme-template-card">
+                                    <div class="sme-template-header">
+                                        <span class="sme-template-name">@template.RoleName</span>
+                                        <span class="sme-template-id">@id</span>
+                                    </div>
+                                    <div class="sme-template-details">
+                                        <span>Tier: @template.ModelTier</span>
+                                        <span>Mode: @template.WorkflowMode</span>
+                                        <span>Max: @template.MaxInstances</span>
+                                    </div>
+                                    @if (template.Capabilities.Count > 0)
+                                    {
+                                        <div class="mcp-capabilities">
+                                            @foreach (var cap in template.Capabilities)
+                                            {
+                                                <span class="mcp-cap-tag">@cap</span>
+                                            }
+                                        </div>
+                                    }
+                                    @if (template.McpServers.Count > 0)
+                                    {
+                                        <div class="sme-template-servers">
+                                            MCP: @string.Join(", ", template.McpServers)
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+
+        @* Persisted SME Agents (PM-created or saved from previous runs) *@
+        @if (_persistedSmeDefinitions is not null && _persistedSmeDefinitions.Count > 0)
+        {
+            var nonTemplateDefs = _persistedSmeDefinitions
+                .Where(kv => _config?.SmeAgents.Templates.ContainsKey(kv.Key) != true)
+                .ToList();
+
+            @if (nonTemplateDefs.Count > 0)
+            {
+                <div class="config-card">
+                    <div class="config-card-header" @onclick="() => _persistedSmeExpanded = !_persistedSmeExpanded" data-testid="config-card-persisted-sme">
+                        <span class="config-card-icon">🤖</span>
+                        <span class="config-card-title">Active SME Agents</span>
+                        <span class="sme-count-badge">@nonTemplateDefs.Count</span>
+                        <span class="config-card-chevron @(_persistedSmeExpanded ? "expanded" : "")">▶</span>
+                    </div>
+                    @if (_persistedSmeExpanded)
+                    {
+                        <div class="config-card-body">
+                            <p class="config-hint" style="margin-bottom: 0.75rem">
+                                SME agents created by the PM during team composition or spawned from templates.
+                                These are persisted and will be respawned on restart (Continuous mode).
+                            </p>
+                            <div class="sme-template-list">
+                                @foreach (var (id, def) in nonTemplateDefs)
+                                {
+                                    <div class="sme-template-card">
+                                        <div class="sme-template-header">
+                                            <span class="sme-template-name">@def.RoleName</span>
+                                            @if (!string.IsNullOrWhiteSpace(def.CreatedByAgentId))
+                                            {
+                                                <span class="sme-created-badge">PM-created</span>
+                                            }
+                                            <span class="sme-template-id">@id</span>
+                                        </div>
+                                        <div class="sme-template-details">
+                                            <span>Tier: @def.ModelTier</span>
+                                            <span>Mode: @def.WorkflowMode</span>
+                                            <span>Max: @def.MaxInstances</span>
+                                        </div>
+                                        @if (!string.IsNullOrWhiteSpace(def.SystemPrompt))
+                                        {
+                                            <div class="sme-template-prompt">
+                                                @(def.SystemPrompt.Length > 200 ? def.SystemPrompt[..200] + "…" : def.SystemPrompt)
+                                            </div>
+                                        }
+                                        @if (def.Capabilities.Count > 0)
+                                        {
+                                            <div class="mcp-capabilities">
+                                                @foreach (var cap in def.Capabilities)
+                                                {
+                                                    <span class="mcp-cap-tag">@cap</span>
+                                                }
+                                            </div>
+                                        }
+                                        @if (def.McpServers.Count > 0)
+                                        {
+                                            <div class="sme-template-servers">
+                                                MCP: @string.Join(", ", def.McpServers)
+                                            </div>
+                                        }
+                                    </div>
+                                }
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+        }
+
+        @* ── Review Settings ── *@
+        <div class="config-card">
+            <div class="config-card-header" @onclick="() => _reviewExpanded = !_reviewExpanded" data-testid="config-card-review">
+                <span class="config-card-icon">🔍</span>
+                <span class="config-card-title">PR Review</span>
+                <span class="config-card-chevron @(_reviewExpanded ? "expanded" : "")">▶</span>
+            </div>
+            @if (_reviewExpanded)
+            {
+                <div class="config-card-body">
+                    <div class="config-field-row">
+                        <div class="config-field" title="When enabled, the Architect posts inline code comments on specific lines in PRs instead of only a summary comment. Comments appear directly on the diff, making feedback more actionable for engineers.">
+                            <label>Enable Inline Comments</label>
+                            <label class="config-toggle">
+                                <input type="checkbox" @bind="_config.Review.EnableInlineComments" />
+                                <span class="config-toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="config-field" title="When enabled, the Architect includes a risk assessment (LOW/MEDIUM/HIGH) with each PR review. Risk levels indicate the scope of impact: LOW = cosmetic changes, MEDIUM = modifies shared models or APIs, HIGH = breaking changes or security-sensitive code.">
+                            <label>Enable Risk Assessment</label>
+                            <label class="config-toggle">
+                                <input type="checkbox" @bind="_config.Review.EnableRiskAssessment" />
+                                <span class="config-toggle-slider"></span>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="config-field-row">
+                        <div class="config-field">
+                            <label title="The minimum risk level that triggers a human review gate. When a PR's risk meets or exceeds this threshold, the Architect adds a 'human-review-required' label and pauses before promoting the PR. Remove the label on GitHub to allow the pipeline to continue. Set to 'None' to disable human risk gating.">Min Risk Level for Human Review</label>
+                            <select @bind="_minRiskLevel" class="config-input"
+                                title="The minimum risk level that triggers a human review gate. When a PR's risk meets or exceeds this threshold, the Architect adds a 'human-review-required' label and pauses before promoting the PR. Remove the label on GitHub to allow the pipeline to continue. Set to 'None' to disable human risk gating.">
+                                <option value="None">None</option>
+                                <option value="Low">Low</option>
+                                <option value="Medium">Medium</option>
+                                <option value="High">High</option>
+                            </select>
+                        </div>
+                        <div class="config-field">
+                            <label title="Maximum number of inline comments the Architect can post per review. Prevents overwhelming PRs with too many comments. Only the highest-priority comments are included when the limit is reached.">Max Inline Comments Per Review</label>
+                            <input type="number" @bind="_config.Review.MaxInlineCommentsPerReview" class="config-input config-input-number" min="1" max="50"
+                                title="Maximum number of inline comments the Architect can post per review. Prevents overwhelming PRs with too many comments. Only the highest-priority comments are included when the limit is reached." />
+                        </div>
+                    </div>
+                    <div class="config-field-row">
+                        <div class="config-field" title="Master toggle for the Test Engineer agent. When OFF, the TE doesn't spawn — PRs flow architect-approved → pm-approved → merge with no test-coverage gate. When toggled mid-run: switching ON spawns the TE; switching OFF stops the running TE and clears 'tests-rework-requested' / TE-blocking labels from any PR currently architect-approved so PM/SE can advance them. Hot-reloaded via IOptionsMonitor — no restart required.">
+                            <label>Test Engineer Reviews</label>
+                            <label class="config-toggle">
+                                <input type="checkbox" @bind="_config.Review.TestEngineerReviews" />
+                                <span class="config-toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="config-field" title="When enabled, the PM reviews PRs for business alignment and acceptance-criteria coverage. Disabling skips PM review entirely.">
+                            <label>PM Reviews</label>
+                            <label class="config-toggle">
+                                <input type="checkbox" @bind="_config.Review.PmReviews" />
+                                <span class="config-toggle-slider"></span>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="config-field-row">
+                        <div class="config-field" title="When enabled, the Architect reviews PRs for design compliance and patterns from Architecture.md. Disabling skips architect review entirely.">
+                            <label>Architect Reviews</label>
+                            <label class="config-toggle">
+                                <input type="checkbox" @bind="_config.Review.ArchitectReviews" />
+                                <span class="config-toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="config-field" title="When enabled, other Software Engineers do peer reviews of each other's PRs. Disabling skips engineer-to-engineer review entirely.">
+                            <label>Engineer Reviews</label>
+                            <label class="config-toggle">
+                                <input type="checkbox" @bind="_config.Review.EngineerReviews" />
+                                <span class="config-toggle-slider"></span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+
+        @* ── Decision Gating Settings ── *@
+        <div class="config-card">
+            <div class="config-card-header" @onclick="() => _decisionGatingExpanded = !_decisionGatingExpanded" data-testid="config-card-decision-gating">
+                <span class="config-card-icon">🚦</span>
+                <span class="config-card-title">Decision Gating</span>
+                <span class="config-card-chevron @(_decisionGatingExpanded ? "expanded" : "")">▶</span>
+            </div>
+            @if (_decisionGatingExpanded)
+            {
+                <div class="config-card-body">
+                    <div class="config-field-row">
+                        <div class="config-field" title="When enabled, agents pause before executing impactful decisions and present a structured analysis with alternatives. Decisions are classified by impact level (XS to XL) and only those at or above the MinimumGateLevel require explicit approval.">
+                            <label>Enabled</label>
+                            <label class="config-toggle">
+                                <input type="checkbox" @bind="_config.DecisionGating.Enabled" />
+                                <span class="config-toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="config-field" title="When enabled, gated decisions include a generated implementation plan showing exactly what changes will be made before proceeding.">
+                            <label>Require Plan for Gated</label>
+                            <label class="config-toggle">
+                                <input type="checkbox" @bind="_config.DecisionGating.RequirePlanForGated" />
+                                <span class="config-toggle-slider"></span>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="config-field-row">
+                        <div class="config-field">
+                            <label title="The minimum decision impact level that triggers a gate. Decisions below this level auto-proceed. XS = trivial naming/formatting. S = single-file changes. M = multi-file refactors. L = architectural changes. XL = breaking/irreversible changes.">Minimum Gate Level</label>
+                            <select @bind="_config.DecisionGating.MinimumGateLevel" class="config-input"
+                                title="The minimum decision impact level that triggers a gate. Decisions below this level auto-proceed. XS = trivial naming/formatting. S = single-file changes. M = multi-file refactors. L = architectural changes. XL = breaking/irreversible changes.">
+                                <option value="None">None</option>
+                                <option value="XS">XS</option>
+                                <option value="S">S</option>
+                                <option value="M">M</option>
+                                <option value="L">L</option>
+                                <option value="XL">XL</option>
+                            </select>
+                        </div>
+                        <div class="config-field">
+                            <label title="What happens when a gated decision times out waiting for approval. 'auto-approve' = proceed anyway. 'block' = mark agent as blocked. 'escalate' = create an executive-request issue.">Timeout Fallback Action</label>
+                            <select @bind="_config.DecisionGating.TimeoutFallbackAction" class="config-input"
+                                title="What happens when a gated decision times out waiting for approval. 'auto-approve' = proceed anyway. 'block' = mark agent as blocked. 'escalate' = create an executive-request issue.">
+                                <option value="auto-approve">auto-approve</option>
+                                <option value="block">block</option>
+                                <option value="escalate">escalate</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="config-field-row">
+                        <div class="config-field">
+                            <label title="Maximum number of AI deliberation turns when evaluating a decision. More turns = more thorough analysis but slower. Default: 2.">Max Decision Turns</label>
+                            <input type="number" @bind="_config.DecisionGating.MaxDecisionTurns" class="config-input config-input-number" min="1" max="10"
+                                title="Maximum number of AI deliberation turns when evaluating a decision. More turns = more thorough analysis but slower. Default: 2." />
+                        </div>
+                        <div class="config-field">
+                            <label title="How long to wait for human approval before taking the fallback action. 0 = wait indefinitely. Default: 0 minutes.">Gate Timeout (minutes)</label>
+                            <input type="number" @bind="_config.DecisionGating.GateTimeoutMinutes" class="config-input config-input-number" min="0" max="1440"
+                                title="How long to wait for human approval before taking the fallback action. 0 = wait indefinitely. Default: 0 minutes." />
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+
+        @* ── Self Assessment Settings ── *@
+        <div class="config-card">
+            <div class="config-card-header" @onclick="() => _agenticLoopExpanded = !_agenticLoopExpanded" data-testid="config-card-agentic-loop">
+                <span class="config-card-icon">🔍</span>
+                <span class="config-card-title">Self Assessment</span>
+                <span class="config-card-chevron @(_agenticLoopExpanded ? "expanded" : "")">▶</span>
+            </div>
+            @if (_agenticLoopExpanded)
+            {
+                <div class="config-card-body">
+                    <div class="config-field-row">
+                        <div class="config-field" title="When enabled, agents perform iterative self-assessment after generating documents or code. Each iteration critiques and refines the output, improving quality at the cost of additional AI calls.">
+                            <label>Enabled</label>
+                            <label class="config-toggle">
+                                <input type="checkbox" @bind="_config.AgenticLoop.Enabled" />
+                                <span class="config-toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="config-field">
+                            <label title="Maximum number of self-assessment refinement iterations. Default: 2. Higher values produce more polished output but cost more tokens and take longer.">Max Iterations</label>
+                            <input type="number" @bind="_config.AgenticLoop.MaxIterations" class="config-input config-input-number" min="1" max="10"
+                                title="Maximum number of self-assessment refinement iterations. Default: 2. Higher values produce more polished output but cost more tokens and take longer." />
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+
+        @* ── FlowMonitor Settings ── *@
+        <div class="config-card">
+            <div class="config-card-header" @onclick="() => _flowMonitorExpanded = !_flowMonitorExpanded" data-testid="config-card-flow-monitor">
+                <span class="config-card-icon">🔴</span>
+                <span class="config-card-title">FlowMonitor</span>
+                <span class="config-card-chevron @(_flowMonitorExpanded ? "expanded" : "")">▶</span>
+            </div>
+            @if (_flowMonitorExpanded)
+            {
+                <div class="config-card-body">
+                    <div class="config-field-row">
+                        <div class="config-field">
+                            <label title="Minutes before FlowMonitor auto-approves any pending gate or decision. When a gate or decision has been waiting for human approval longer than this threshold, FlowMonitor will automatically approve it and post an informational notification on the Approvals page. Set to 0 to disable auto-approval entirely (gates wait indefinitely for human action). Default: 30 minutes.">Auto-Approval Timeout (minutes)</label>
+                            <input type="number" @bind="_config.FlowMonitor.AutoApprovalMinutes" class="config-input config-input-number" min="0" max="1440"
+                                title="Minutes before FlowMonitor auto-approves any pending gate or decision. Set to 0 to disable. Default: 30." />
+                        </div>
+                    </div>
+                    <p class="config-hint" style="color: var(--text-muted); font-size: 0.85rem; margin-top: 0.5rem;">
+                        When enabled, FlowMonitor auto-approves stuck gates after the timeout. Actions appear on the Approvals page with a Dismiss button for awareness.
+                        Set to <strong>0</strong> to require manual approval for all gates.
+                    </p>
+                </div>
+            }
+        </div>
+
+        @* ── Save Button ── *@
+        <div class="config-save-bar">
+            @if (_saveError is not null)
+            {
+                <div class="config-save-error">⚠️ @_saveError</div>
+            }
+            <button class="config-save-btn @(_saveSuccess ? "config-save-btn--saved" : "")" @onclick="SaveConfig" disabled="@(_saving || _saveSuccess)" data-testid="config-save-btn">
+                @if (_saving)
+                {
+                    <span class="config-spinner"></span>
+                    <span>Saving...</span>
+                }
+                else if (_saveSuccess)
+                {
+                    <span>✅ Saved!</span>
+                }
+                else
+                {
+                    <span>💾 Save Configuration</span>
+                }
+            </button>
+        </div>
+
+        @* ═══════════════════════════════════════════════════════════════════
+           PROMPT TEMPLATE EDITOR
+           ═══════════════════════════════════════════════════════════════════ *@
+        <div class="config-divider"></div>
+
+        <div class="config-section-header">
+            <span class="config-section-icon">📝</span>
+            <div>
+                <h2 class="config-section-title">Prompt Templates</h2>
+                <p class="config-section-desc">Edit agent AI prompts. Changes are hot-reloaded automatically — no restart required.</p>
+            </div>
+        </div>
+
+        @if (_promptRoles is not null)
+        {
+            @foreach (var role in _promptRoles)
+            {
+                <div class="config-card">
+                    <div class="config-card-header" @onclick="() => TogglePromptRole(role)"
+                        title="@GetPromptRoleTooltip(role)">
+                        <span class="config-card-icon">🤖</span>
+                        <span class="config-card-title">@FormatRoleName(role)</span>
+                        <span class="config-card-badge">@(GetTemplateCount(role)) templates</span>
+                        <span class="config-card-chevron @(_expandedPromptRoles.Contains(role) ? "expanded" : "")">▶</span>
+                    </div>
+                    @if (_expandedPromptRoles.Contains(role))
+                    {
+                        <div class="config-card-body">
+                            @if (_promptTemplates.TryGetValue(role, out var templates))
+                            {
+                                    @foreach (var tmpl in templates)
+                                    {
+                                        var key = tmpl;
+                                        var displayName = tmpl.Contains('/') ? tmpl[(tmpl.LastIndexOf('/') + 1)..] : tmpl;
+                                    <div class="prompt-template-item">
+                                        <div class="prompt-template-header" @onclick="() => TogglePromptTemplate(key)"
+                                            title="@GetTemplateTooltip(key)">
+                                            <span class="prompt-template-name">@displayName</span>
+                                            @if (_promptMetadata.TryGetValue(key, out var meta))
+                                            {
+                                                <span class="prompt-template-desc">@meta.Description</span>
+                                            }
+                                            <span class="config-card-chevron @(_expandedPromptTemplates.Contains(key) ? "expanded" : "")">▶</span>
+                                        </div>
+                                        @if (_expandedPromptTemplates.Contains(key))
+                                        {
+                                            <div class="prompt-template-editor">
+                                                <textarea class="prompt-textarea" rows="15"
+                                                    value="@GetPromptContent(key)"
+                                                    @oninput="e => SetPromptContent(key, e.Value?.ToString() ?? string.Empty)"></textarea>
+                                                <div class="prompt-template-actions">
+                                                    <button class="prompt-save-btn" @onclick="() => SavePromptTemplate(key)"
+                                                        disabled="@(!_modifiedPrompts.Contains(key))">
+                                                        💾 Save
+                                                    </button>
+                                                    <button class="prompt-reset-btn" @onclick="() => ResetPromptTemplate(key)">
+                                                        🔄 Reset to Default
+                                                    </button>
+                                                    @if (_promptSaveSuccess == key)
+                                                    {
+                                                        <span class="badge badge-success">✓ Saved</span>
+                                                    }
+                                                </div>
+                                            </div>
+                                        }
+                                    </div>
+                                }
+                            }
+                            else
+                            {
+                                <div class="config-empty">Loading templates...</div>
+                            }
+                        </div>
+                    }
+                </div>
+            }
+        }
+
+        @* ═══════════════════════════════════════════════════════════════════
+           GITHUB REPO CLEANUP — hidden until admin controls are implemented.
+           Code remains intact but is not rendered in the UI.
+           ═══════════════════════════════════════════════════════════════════ *@
+        @if (false) // Hidden: reset functionality locked down for org-wide deployment
+        {
+        <div class="config-divider"></div>
+
+        <div class="config-section-header config-section-danger">
+            <span class="config-section-icon">🧹</span>
+            <div>
+                <h2 class="config-section-title">Repository Cleanup</h2>
+                @if (_hasConfiguredProject)
+                {
+                    <p class="config-section-desc">
+                        Dangerous operation — permanently closes all @WorkItemLabel and PRs, and deletes all code from
+                        <strong>@GetRepoDisplayName()</strong>. This cannot be undone.
+                    </p>
+                }
+                else
+                {
+                    <p class="config-section-desc">
+                        No project has been configured yet. Use the <strong>Develop</strong> wizard to set up a project before cleanup is available.
+                    </p>
+                }
+            </div>
+        </div>
+
+        @if (_hasConfiguredProject)
+        {
+        <div class="config-card config-card-danger">
+            <div class="config-card-body">
+                <div class="cleanup-info">
+                    <div class="cleanup-repo">
+                        <span class="cleanup-repo-icon">📦</span>
+                        <span class="cleanup-repo-name">@GetRepoDisplayName()</span>
+                        <span class="cleanup-branch">(@GetActiveBranch())</span>
+                    </div>
+                    <p class="cleanup-warning">
+                        ⚠️ This will close all open @WorkItemLabel, close all open pull requests, delete all agent branches,
+                        and remove all files from the <code>@GetActiveBranch()</code> branch.
+                    </p>
+                </div>
+
+                <button class="cleanup-scan-btn" @onclick="ScanRepo" disabled="@_scanning">
+                    @if (_scanning)
+                    {
+                        <span class="config-spinner"></span>
+                        <span>Scanning repository...</span>
+                    }
+                    else
+                    {
+                        <span>🔍 Scan Repository</span>
+                    }
+                </button>
+
+                @if (_cleanupSummary is not null)
+                {
+                    <div class="cleanup-summary">
+                        <div class="cleanup-stat-grid">
+                            <div class="cleanup-stat">
+                                <div class="cleanup-stat-value">@_cleanupSummary.FileCount</div>
+                                <div class="cleanup-stat-label">Files</div>
+                            </div>
+                            <div class="cleanup-stat">
+                                <div class="cleanup-stat-value">@_cleanupSummary.OpenIssues</div>
+                                <div class="cleanup-stat-label">Open @WorkItemLabel</div>
+                            </div>
+                            <div class="cleanup-stat">
+                                <div class="cleanup-stat-value">@_cleanupSummary.OpenPrs</div>
+                                <div class="cleanup-stat-label">Open PRs</div>
+                            </div>
+                            <div class="cleanup-stat">
+                                <div class="cleanup-stat-value">@_cleanupSummary.TotalIssues</div>
+                                <div class="cleanup-stat-label">Total @WorkItemLabel</div>
+                            </div>
+                        </div>
+
+                        <button class="cleanup-execute-btn" @onclick="ShowCleanupModal"
+                            title="Stop all agents, clean the repository, reset workflow state, and restart a fresh project">
+                            🔄 Clean &amp; Restart Project
+                        </button>
+                    </div>
+                }
+            </div>
+        </div>
+        }
+
+        @if (_cleanupResult is not null)
+        {
+            <div class="config-card @(_cleanupResult.Success ? "" : "config-card-danger")">
+                <div class="config-card-body">
+                    <h3 class="cleanup-result-title">@(_cleanupResult.Success ? "✅ Clean & Restart Complete" : "⚠️ Cleanup Completed with Errors")</h3>
+                    <div class="cleanup-result-stats">
+                        <span>Agents stopped: <strong>@_cleanupResult.AgentsStopped</strong></span>
+                        <span>@WorkItemLabel deleted: <strong>@_cleanupResult.IssuesDeleted</strong></span>
+                        @if (_cleanupResult.IssuesClosed > 0)
+                        {
+                            <span>@WorkItemLabel closed (delete failed): <strong>@_cleanupResult.IssuesClosed</strong></span>
+                        }
+                        <span>PRs closed: <strong>@_cleanupResult.PrsClosed</strong></span>
+                        <span>PRs labeled "tested": <strong>@_cleanupResult.PrsLabeled</strong></span>
+                        <span>Files deleted: <strong>@_cleanupResult.FilesDeleted</strong></span>
+                        <span>Files preserved: <strong>@_cleanupResult.FilesPreserved</strong></span>
+                        <span>Branches deleted: <strong>@_cleanupResult.BranchesDeleted</strong></span>
+                        <span>Agents restarted: <strong>@_cleanupResult.AgentsStarted</strong></span>
+                    </div>
+                    @if (_cleanupResult.Success)
+                    {
+                        <p style="margin-top:8px;color:#3fb950;">🚀 A fresh project is now running — agents are starting from the Research phase.</p>
+                    }
+                    @if (_cleanupResult.Errors.Count > 0)
+                    {
+                        <details class="cleanup-errors">
+                            <summary>@_cleanupResult.Errors.Count error(s)</summary>
+                            <ul>
+                                @foreach (var err in _cleanupResult.Errors)
+                                {
+                                    <li>@err</li>
+                                }
+                            </ul>
+                        </details>
+                    }
+                </div>
+            </div>
+        }
+        } @* End of hidden reset section *@
+    </div>
+}
+
+@* ═══════════════════════════════════════════════════════════════════
+   CONFIRMATION MODAL — fully inlined styles to avoid any CSS conflicts.
+   Only Cancel/✕ dismiss it (correct UX for destructive actions).
+   ═══════════════════════════════════════════════════════════════════ *@
+@if (_showModal)
+{
+    <div style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:9999;display:flex;align-items:center;justify-content:center;">
+        <div style="background:#161b22;border:1px solid #30363d;border-radius:12px;width:600px;max-width:90vw;max-height:85vh;overflow-y:auto;box-shadow:0 16px 48px rgba(0,0,0,0.4);">
+            <div class="modal-header modal-header-danger">
+                <h3 class="modal-title">⚠️ Clean &amp; Restart Project</h3>
+                <button class="modal-close" @onclick="HideCleanupModal">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="modal-repo-badge">
+                    <span class="cleanup-repo-icon">📦</span>
+                    <strong>@GetRepoDisplayName() (@PlatformLabel)</strong>
+                </div>
+
+                <div class="modal-impact">
+                    <h4>This will clean the repo and kick off a fresh project:</h4>
+                    <ul class="modal-impact-list">
+                        <li class="impact-info">🛑 <strong>Stop all running agents</strong> (PM, Researcher, Architect, PE, TE)</li>
+                        <li class="impact-danger">Delete <strong>@(_cleanupSummary?.TotalIssues ?? 0)</strong> @WorkItemLabel (@(_cleanupSummary?.OpenIssues ?? 0) open, @(_cleanupSummary?.ClosedIssues ?? 0) closed)</li>
+                        <li class="impact-danger">Close <strong>@(_cleanupSummary?.OpenPrs ?? 0)</strong> open pull requests</li>
+                        <li class="impact-warning">Label <strong>@(_cleanupSummary?.MergedPrs ?? 0)</strong> merged PRs as "tested"</li>
+                        <li class="impact-danger">Delete all agent branches</li>
+                        <li class="impact-danger">Delete <strong>@(_cleanupSummary?.FileCount ?? 0)</strong> files from <code>@_config?.Project.DefaultBranch</code></li>
+                        <li class="impact-info">🔄 <strong>Reset workflow state</strong> to Initialization (clear all signals &amp; checkpoints)</li>
+                        <li class="impact-info">▶ <strong>Click "Start Project"</strong> on the Overview page to begin a new run</li>
+                    </ul>
+                    <p class="modal-project-note">
+                        📋 <strong>New project:</strong> "@(_config?.Project.Name)" — agents will start fresh from Research phase
+                        using the Project Description and settings configured above.
+                    </p>
+                    <p class="modal-irreversible">🚫 This action <strong>cannot be undone</strong>.</p>
+                </div>
+
+                <div class="modal-caveats">
+                    <label class="modal-caveats-label">
+                        Exceptions / Caveats <span class="config-hint">(optional)</span>
+                    </label>
+                    <textarea @bind="_cleanupCaveats" class="config-textarea modal-caveats-input"
+                        rows="3" placeholder="e.g., Leave the Design.html file in the code, but remove everything else."></textarea>
+                    <span class="config-hint">Mention any files or patterns to preserve. Files matching names you mention will be kept.</span>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="modal-cancel-btn" @onclick="HideCleanupModal">Cancel</button>
+                <button class="modal-approve-btn" @onclick="ExecuteCleanup" disabled="@_cleaningUp">
+                    @if (_cleaningUp)
+                    {
+                        <span class="config-spinner config-spinner-light"></span>
+                        <span>@_cleanupPhase</span>
+                    }
+                    else
+                    {
+                        <span>🗑️ Clean &amp; Restart Project</span>
+                    }
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private VirtualDevTeamConfig? _config;
+    private DevelopSettings? _developSettings;
+    private bool _hasConfiguredProject;
+    private bool _loading = true;
+    private bool _saving;
+    private bool _saveSuccess;
+    private string? _saveError;
+
+    // Section expand states
+    private bool _copilotExpanded = true;
+    private bool _agentsExpanded = true;
+    private bool _poolExpanded = true;
+    private bool _limitsExpanded;
+    private bool _dashboardExpanded;
+    private bool _workspaceExpanded;
+    private bool _humanInteractionExpanded;
+    private bool _mcpServersExpanded;
+    private bool _smeTemplatesExpanded;
+    private bool _persistedSmeExpanded;
+    private bool _reviewExpanded;
+    private bool _decisionGatingExpanded;
+    private bool _agenticLoopExpanded;
+    private bool _flowMonitorExpanded;
+    private bool _strategiesExpanded = true;
+
+    /// <summary>Ensures the ADO sub-config exists for binding.</summary>
+    private AzureDevOpsConfig AdoConfig
+        => _config!.DevPlatform.AzureDevOps ??= new AzureDevOpsConfig();
+
+    /// <summary>Returns a display name for the repo appropriate to the platform.</summary>
+    /// <summary>Gets the active repo name from develop-settings (actual configured project), not appsettings defaults.</summary>
+    private string GetActiveRepoName()
+    {
+        if (_developSettings is not null)
+        {
+            var platform = _developSettings.Platform;
+            if (string.Equals(platform, "AzureDevOps", StringComparison.OrdinalIgnoreCase))
+            {
+                var ado = _developSettings.AzureDevOps;
+                if (!string.IsNullOrEmpty(ado.Organization))
+                    return $"{ado.Organization}/{ado.Project}/{ado.Repository}";
+            }
+            else if (!string.IsNullOrWhiteSpace(_developSettings.GitHub.Repo))
+            {
+                return _developSettings.GitHub.Repo;
+            }
+        }
+        return "";
+    }
+
+    /// <summary>Gets the default branch from develop-settings.</summary>
+    private string GetActiveBranch()
+    {
+        if (_developSettings is not null)
+        {
+            var platform = _developSettings.Platform;
+            if (string.Equals(platform, "AzureDevOps", StringComparison.OrdinalIgnoreCase))
+                return _developSettings.AzureDevOps.DefaultBranch;
+            return _developSettings.GitHub.DefaultBranch;
+        }
+        return _config?.Project.DefaultBranch ?? "main";
+    }
+
+    private string GetRepoDisplayName()
+    {
+        // Prefer the actual configured project from develop-settings
+        var active = GetActiveRepoName();
+        if (!string.IsNullOrEmpty(active)) return active;
+
+        // Fallback to appsettings config
+        if (_config is null) return "";
+        if (_config.DevPlatform.Platform == DevPlatformType.AzureDevOps)
+        {
+            var ado = _config.DevPlatform.AzureDevOps;
+            if (ado is not null && !string.IsNullOrEmpty(ado.Organization))
+                return $"{ado.Organization}/{ado.Project}/{ado.Repository}";
+        }
+        return _config.Project.GitHubRepo ?? "";
+    }
+
+    private bool IsAdo => _config?.DevPlatform.Platform == DevPlatformType.AzureDevOps;
+    private string WorkItemLabel => IsAdo ? "work items" : "issues";
+    private string PlatformLabel => IsAdo ? "ADO" : "GitHub";
+
+    // Strategy/Framework IDs — keep in sync with ICodeGenerationStrategy.Id and
+    // IAgenticFrameworkAdapter.Id values.
+    private const string StrategyBaseline = "baseline";
+    private const string StrategyMcp = "mcp-enhanced";
+    private const string StrategyAgentic = "copilot-cli";
+    private const string StrategySquad = "squad";
+
+    // Squad readiness state
+    private FrameworkReadinessResult? _squadReadiness;
+    private bool _squadReadinessChecking;
+    private bool _squadInstalling;
+    private string? _squadInstallMessage;
+    private bool _squadInstallSuccess;
+
+    private bool IsStrategyEnabled(string id)
+        => _config?.StrategyFramework.EnabledStrategies
+            .Any(s => string.Equals(s, id, StringComparison.OrdinalIgnoreCase)) ?? false;
+
+    private void SetStrategyEnabled(string id, bool enabled)
+    {
+        if (_config is null) return;
+        var list = _config.StrategyFramework.EnabledStrategies;
+        var existing = list.FirstOrDefault(s => string.Equals(s, id, StringComparison.OrdinalIgnoreCase));
+        if (enabled && existing is null)
+            list.Add(id);
+        else if (!enabled && existing is not null)
+            list.RemoveAll(s => string.Equals(s, id, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private int GetEnabledStrategyCount()
+        => _config?.StrategyFramework.EnabledStrategies.Count ?? 0;
+
+    private async Task CheckSquadReadinessAsync()
+    {
+        _squadReadinessChecking = true;
+        _squadInstallMessage = null;
+        StateHasChanged();
+        try
+        {
+            var checker = ServiceProvider.GetService<SquadReadinessChecker>();
+            if (checker is null)
+            {
+                _squadReadiness = new FrameworkReadinessResult(
+                    FrameworkReadiness.Error, "SquadReadinessChecker not registered in DI", Array.Empty<string>());
+                return;
+            }
+            _squadReadiness = await checker.CheckReadinessAsync(CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _squadReadiness = new FrameworkReadinessResult(
+                FrameworkReadiness.Error, $"Check failed: {ex.Message}", Array.Empty<string>());
+        }
+        finally
+        {
+            _squadReadinessChecking = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task InstallSquadAsync()
+    {
+        _squadInstalling = true;
+        _squadInstallMessage = null;
+        StateHasChanged();
+        try
+        {
+            var checker = ServiceProvider.GetService<SquadReadinessChecker>();
+            if (checker is null)
+            {
+                _squadInstallMessage = "SquadReadinessChecker not available in DI.";
+                _squadInstallSuccess = false;
+                return;
+            }
+            var result = await checker.EnsureInstalledAsync(CancellationToken.None);
+            _squadInstallSuccess = result.Succeeded;
+            _squadInstallMessage = result.Message;
+            if (result.Succeeded)
+            {
+                // Re-check readiness after install
+                _squadReadiness = await checker.CheckReadinessAsync(CancellationToken.None);
+            }
+        }
+        catch (Exception ex)
+        {
+            _squadInstallSuccess = false;
+            _squadInstallMessage = $"Install failed: {ex.Message}";
+        }
+        finally
+        {
+            _squadInstalling = false;
+            StateHasChanged();
+        }
+    }
+
+    // Per-agent accordion expansion tracking
+    private readonly HashSet<string> _expandedAgentPanels = new();
+
+    // Copilot reasoning effort helper (nullable string)
+    private string _copilotReasoningEffort
+    {
+        get => _config?.CopilotCli.ReasoningEffort ?? "";
+        set { if (_config is not null) _config.CopilotCli.ReasoningEffort = string.IsNullOrEmpty(value) ? null : value; }
+    }
+
+    // Copilot context window tier helper (nullable string: "" = default, "long_context" = 1M window)
+    private string _copilotContextTier
+    {
+        get => _config?.CopilotCli.ContextTier ?? "";
+        set { if (_config is not null) _config.CopilotCli.ContextTier = string.IsNullOrEmpty(value) ? null : value; }
+    }
+
+    /// <summary>
+    /// Model → max supported reasoning level mapping. Models not listed default to "high".
+    /// </summary>
+    private static readonly Dictionary<string, string[]> ModelReasoningLevels = new(StringComparer.OrdinalIgnoreCase)
+    {
+        // Claude models
+        ["claude-opus-4.8"] = new[] { "low", "medium", "high", "xhigh", "max" },
+        ["claude-opus-4.7"] = new[] { "low", "medium", "high", "xhigh" },
+        ["claude-opus-4.6"] = new[] { "low", "medium", "high" },
+        ["claude-opus-4.5"] = new[] { "low", "medium", "high" },
+        ["claude-sonnet-4.6"] = new[] { "low", "medium", "high" },
+        ["claude-sonnet-4.5"] = new[] { "low", "medium", "high" },
+        ["claude-haiku-4.5"] = new[] { "low", "medium" },
+        // GPT models
+        ["gpt-5.5"] = new[] { "low", "medium", "high" },
+        ["gpt-5.4"] = new[] { "low", "medium", "high" },
+        ["gpt-5.2"] = new[] { "low", "medium", "high" },
+        ["gpt-5.4-mini"] = new[] { "low", "medium" },
+        ["gpt-5-mini"] = new[] { "low", "medium" },
+        ["gpt-4.1"] = new[] { "low", "medium", "high" },
+    };
+
+    private string[] GetSupportedReasoningLevels()
+    {
+        var model = _config?.CopilotCli.ModelName ?? "";
+        // Try exact match first, then prefix match for variants (e.g. claude-opus-4.6-1m → claude-opus-4.6)
+        if (ModelReasoningLevels.TryGetValue(model, out var levels))
+            return levels;
+        foreach (var kvp in ModelReasoningLevels)
+        {
+            if (model.StartsWith(kvp.Key, StringComparison.OrdinalIgnoreCase))
+                return kvp.Value;
+        }
+        return new[] { "low", "medium", "high" }; // safe default
+    }
+
+    private bool IsReasoningLevelSupported(string level)
+    {
+        if (string.IsNullOrEmpty(level)) return true; // "(default)" is always valid
+        return GetSupportedReasoningLevels().Contains(level, StringComparer.OrdinalIgnoreCase);
+    }
+
+    // Review risk level helper (enum ↔ string binding)
+    private string _minRiskLevel
+    {
+        get => _config?.Review.MinRiskLevelForHumanReview.ToString() ?? "None";
+        set { if (_config is not null) _config.Review.MinRiskLevelForHumanReview = Enum.Parse<ReviewRiskLevel>(value); }
+    }
+
+    // Cleanup state
+    private CleanupSummary? _cleanupSummary;
+    private CleanupResult? _cleanupResult;
+    private bool _scanning;
+    private bool _showModal;
+    private string _cleanupCaveats = "";
+    private bool _cleaningUp;
+    private string _cleanupPhase = "Cleaning up...";
+
+    // Persisted SME definitions(loaded from SMEAgentDefinitionService)
+    private IReadOnlyDictionary<string, SMEAgentDefinition>? _persistedSmeDefinitions;
+
+    // Prompt template editor state
+    private List<string>? _promptRoles;
+    private readonly Dictionary<string, List<string>> _promptTemplates = new();
+    private readonly Dictionary<string, Core.Prompts.PromptMetadata> _promptMetadata = new();
+    private readonly Dictionary<string, string> _promptContents = new();
+    private readonly HashSet<string> _expandedPromptRoles = new();
+    private readonly HashSet<string> _expandedPromptTemplates = new();
+    private readonly HashSet<string> _modifiedPrompts = new();
+    private string? _promptSaveSuccess;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            // Re-read from disk to pick up any external changes (manual edits, other processes)
+            var current = ConfigService.RefreshFromDisk();
+            _config = DeepCopy(current);
+
+            // Load develop-settings to get the actual configured repo (not the appsettings default)
+            _developSettings = await DevelopSettingsService.LoadAsync();
+            _hasConfiguredProject = !string.IsNullOrWhiteSpace(GetActiveRepoName());
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to load configuration");
+        }
+        finally
+        {
+            _loading = false;
+        }
+
+        // Only scan repo if there's actually a configured project
+        await Task.Yield(); // ensure UI renders before long network call
+        if (_hasConfiguredProject)
+        {
+            _ = ScanRepoBackground();
+        }
+        _ = LoadPromptRolesBackground();
+        _ = LoadRoleDescriptionsBackground();
+        _ = LoadPersistedSmeDefinitionsBackground();
+
+        // Auto-check Squad readiness if squad strategy is enabled
+        if (IsStrategyEnabled(StrategySquad))
+            _ = CheckSquadReadinessBackground();
+    }
+
+    /// <summary>
+    /// Background Squad readiness check on page load — auto-disables squad if not installed.
+    /// </summary>
+    private async Task CheckSquadReadinessBackground()
+    {
+        try
+        {
+            var checker = ServiceProvider.GetService<SquadReadinessChecker>();
+            if (checker is null) return;
+            _squadReadiness = await checker.CheckReadinessAsync(CancellationToken.None);
+            if (_squadReadiness.Status != FrameworkReadiness.Ready)
+            {
+                // Auto-disable squad if not installed — prevents wasted framework runs
+                SetStrategyEnabled(StrategySquad, false);
+                Logger.LogInformation(
+                    "Squad auto-disabled on page load: {Status} — {Message}",
+                    _squadReadiness.Status, _squadReadiness.Message);
+            }
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex, "Background Squad readiness check failed");
+        }
+    }
+
+    private async Task ScanRepoBackground()
+    {
+        try
+        {
+            _scanning = true;
+            await InvokeAsync(StateHasChanged);
+            _cleanupSummary = await ConfigService.ScanRepoForCleanupAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Background repo scan failed");
+        }
+        finally
+        {
+            _scanning = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task LoadRoleDescriptionsBackground()
+    {
+        try
+        {
+            await LoadRoleDescriptionsAsync();
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to load role descriptions from prompt files");
+        }
+    }
+
+    private async Task LoadPersistedSmeDefinitionsBackground()
+    {
+        try
+        {
+            var defService = ServiceProvider.GetService<SMEAgentDefinitionService>();
+            if (defService is null) return;
+
+            _persistedSmeDefinitions = await defService.GetAllAsync();
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to load persisted SME definitions");
+        }
+    }
+
+    private async Task SaveConfig()
+    {
+        if (_config is null) return;
+        _saving = true;
+        _saveSuccess = false;
+        _saveError = null;
+
+        try
+        {
+            await ConfigService.SaveConfigAsync(_config);
+            DataService.RefreshActiveModels();
+            _saveSuccess = true;
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(5000);
+                _saveSuccess = false;
+                await InvokeAsync(StateHasChanged);
+            });
+        }
+        catch (Exception ex)
+        {
+            _saveError = ex.Message;
+            Logger.LogError(ex, "Failed to save configuration");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task ScanRepo()
+    {
+        _scanning = true;
+        _cleanupSummary = null;
+        _cleanupResult = null;
+        StateHasChanged();
+
+        try
+        {
+            _cleanupSummary = await ConfigService.ScanRepoForCleanupAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to scan repo");
+        }
+        finally
+        {
+            _scanning = false;
+        }
+    }
+
+    private void ShowCleanupModal() => _showModal = true;
+    private void HideCleanupModal() => _showModal = false;
+
+    private async Task ExecuteCleanup()
+    {
+        _cleaningUp = true;
+        _cleanupPhase = "Stopping agents...";
+        StateHasChanged();
+
+        try
+        {
+            // Run cleanup in a background task so we can update UI with phase progress
+            _cleanupResult = await Task.Run(async () =>
+            {
+                var result = await ConfigService.ExecuteCleanupAsync(_cleanupCaveats);
+                return result;
+            });
+
+            _showModal = false;
+            _cleanupSummary = null; // clear stale scan
+
+            // After cleanup + restart, re-scan for the (now empty) repo state
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(2000); // let agents settle
+                await InvokeAsync(async () =>
+                {
+                    await ScanRepoBackground();
+                    StateHasChanged();
+                });
+            });
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Cleanup failed");
+            _cleanupResult = new CleanupResult
+            {
+                Errors = { $"Cleanup failed: {ex.Message}" }
+            };
+        }
+        finally
+        {
+            _cleaningUp = false;
+            _cleanupPhase = "Cleaning up...";
+        }
+    }
+
+    private List<AgentEntry> GetAgentEntries() => new()
+    {
+        new("Program Manager", _config!.Agents.ProgramManager),
+        new("Researcher", _config.Agents.Researcher),
+        new("Architect", _config.Agents.Architect),
+        new("Software Engineer", _config.Agents.SoftwareEngineer),
+        new("Test Engineer", _config.Agents.TestEngineer),
+    };
+
+    private sealed record AgentEntry(string Name, AgentConfig Config);
+
+    private void ToggleAgentPanel(string agentName)
+    {
+        if (!_expandedAgentPanels.Remove(agentName))
+            _expandedAgentPanels.Add(agentName);
+    }
+
+    private bool IsAgentPanelExpanded(string agentName) => _expandedAgentPanels.Contains(agentName);
+
+    private void AddMcpServer(AgentConfig config)
+    {
+        config.McpServers.Add("");
+    }
+
+    private void RemoveMcpServer(AgentConfig config, int index)
+    {
+        if (index >= 0 && index < config.McpServers.Count)
+            config.McpServers.RemoveAt(index);
+    }
+
+    private void AddKnowledgeLink(AgentConfig config)
+    {
+        config.KnowledgeLinks.Add("");
+    }
+
+    private void RemoveKnowledgeLink(AgentConfig config, int index)
+    {
+        if (index >= 0 && index < config.KnowledgeLinks.Count)
+            config.KnowledgeLinks.RemoveAt(index);
+    }
+
+    private void UpdateMcpServer(AgentConfig config, int index, string value)
+    {
+        if (index >= 0 && index < config.McpServers.Count)
+            config.McpServers[index] = value;
+    }
+
+    private void UpdateKnowledgeLink(AgentConfig config, int index, string value)
+    {
+        if (index >= 0 && index < config.KnowledgeLinks.Count)
+            config.KnowledgeLinks[index] = value;
+    }
+
+    private void AddCustomAgent()
+    {
+        _config?.Agents.CustomAgents.Add(new CustomAgentConfig
+        {
+            Name = "",
+            ModelTier = "standard",
+            Enabled = true
+        });
+    }
+
+    private readonly Dictionary<string, string> _roleDescriptionCache = new();
+
+    private static string AgentNameToPromptDir(string agentName) => agentName switch
+    {
+        "Program Manager" => "pm",
+        "Researcher" => "researcher",
+        "Architect" => "architect",
+        "Software Engineer" => "software-engineer",
+        "Test Engineer" => "test-engineer",
+        _ => agentName.ToLowerInvariant().Replace(' ', '-')
+    };
+
+    private string GetDefaultRoleDescription(string agentName)
+    {
+        if (_roleDescriptionCache.TryGetValue(agentName, out var cached))
+            return cached;
+        return ""; // loaded async, placeholder until OnInitializedAsync completes
+    }
+
+    private async Task LoadRoleDescriptionsAsync()
+    {
+        var roles = new[] { "Program Manager", "Researcher", "Architect", "Software Engineer", "Test Engineer" };
+        foreach (var role in roles)
+        {
+            var dir = AgentNameToPromptDir(role);
+            var content = await PromptService.GetRawContentAsync($"{dir}/role-description", CancellationToken.None);
+            if (!string.IsNullOrWhiteSpace(content))
+                _roleDescriptionCache[role] = content.Trim();
+        }
+    }
+
+    private void LoadDefaultRoleDescription(AgentConfig config, string agentName)
+    {
+        config.RoleDescription = GetDefaultRoleDescription(agentName);
+    }
+
+    private List<string> GetAvailableMcpServers(AgentConfig config)
+    {
+        if (_config?.McpServers is null) return new();
+        return _config.McpServers.Keys
+            .Where(name => !config.McpServers.Contains(name, StringComparer.OrdinalIgnoreCase))
+            .OrderBy(n => n)
+            .ToList();
+    }
+
+    private void RemoveCustomAgent(CustomAgentConfig agent)
+    {
+        _config?.Agents.CustomAgents.Remove(agent);
+        // Clean up expanded panel state
+        var key = $"custom:{agent.Name}";
+        _expandedAgentPanels.Remove(key);
+    }
+
+    private static string GetAgentTooltip(string agentName) => agentName switch
+    {
+        "Program Manager" => "Coordinates the entire project. Creates the PMSpec.md from research, breaks work into issues, assigns tasks, reviews PRs, and manages the workflow pipeline. Quality-critical — use premium tier.",
+        "Researcher" => "Gathers technical context at project start. Analyzes the project description, explores existing code/docs, and produces Research.md that all downstream agents reference.",
+        "Architect" => "Designs the system architecture. Reads PMSpec.md and Research.md, produces Architecture.md with component diagrams, API contracts, and technology decisions. Quality-critical.",
+        "Software Engineer" => "The core engineer responsible for coding tasks across all complexity levels. Creates the EngineeringPlan.md, implements features, and reviews other engineers' PRs.",
+        "Test Engineer" => "Generates and runs tests (unit, integration, UI) for every PR. Analyzes code changes to determine which test tiers are needed. Creates test PRs with passing test suites.",
+        _ => agentName
+    };
+
+    private static string GetAgentDisableWarning(string agentName) => agentName switch
+    {
+        "Program Manager" => "⚠️ CRITICAL: Disabling the PM will STALL the pipeline. The PM is required for Initialization, PMSpec generation, story extraction, PR reviews, and workflow progression. No other agent can substitute for the PM.",
+        "Researcher" => "⚠️ WARNING: Disabling the Researcher will stall the pipeline at the Research phase unless bypass logic is implemented. The research.doc.ready and research.complete signals will never fire, blocking progression to Architecture. If Research.md already exists from a prior run, the HealthMonitor may auto-detect it.",
+        "Architect" => "⚠️ CRITICAL: Disabling the Architect will STALL the pipeline at the Architecture phase. The architecture.doc.ready and architecture.complete signals will never fire, permanently blocking all engineering work. No other agent generates Architecture.md.",
+        "Software Engineer" => "⚠️ CRITICAL: Disabling the Software Engineer will STALL the pipeline at ParallelDevelopment. No agent will pick up engineering tasks, create PRs, or produce code. The SE leader is also responsible for the engineering plan and integration PR.",
+        "Test Engineer" => "Safe to disable. The workflow has built-in bypass logic — the testing gate auto-passes when the Test Engineer is disabled (IsTestEngineerDisabled). PRs will skip automated test generation and proceed directly to review.",
+        _ => "Enable or disable this agent. Disabled agents won't be spawned at startup."
+    };
+
+    // Human Interaction helpers
+    private void ApplyHumanPreset(HumanInteractionPreset preset)
+    {
+        _config?.HumanInteraction.ApplyPreset(preset);
+        StateHasChanged();
+    }
+
+    private bool IsPresetActive(HumanInteractionPreset preset)
+    {
+        if (_config is null) return false;
+        var hi = _config.HumanInteraction;
+        if (!hi.Enabled) return preset == HumanInteractionPreset.FullAuto;
+        return preset switch
+        {
+            HumanInteractionPreset.Supervised =>
+                hi.Enabled && hi.Gates.Values.Any(g => g.RequiresHuman) && hi.Gates.Values.Any(g => !g.RequiresHuman),
+            HumanInteractionPreset.FullControl =>
+                hi.Enabled && hi.Gates.Values.All(g => g.RequiresHuman),
+            _ => false
+        };
+    }
+
+    private GateConfig GetOrCreateGate(string gateId)
+    {
+        if (_config is null) return new GateConfig();
+        if (!_config.HumanInteraction.Gates.TryGetValue(gateId, out var gate))
+        {
+            gate = new GateConfig();
+            _config.HumanInteraction.Gates[gateId] = gate;
+        }
+        return gate;
+    }
+
+    /// <summary>Deep-copy via JSON round-trip so edits don't touch live config.</summary>
+    private static VirtualDevTeamConfig DeepCopy(VirtualDevTeamConfig src)
+    {
+        var json = System.Text.Json.JsonSerializer.Serialize(src);
+        return System.Text.Json.JsonSerializer.Deserialize<VirtualDevTeamConfig>(json) ?? new();
+    }
+
+    // ── Prompt Template Methods ──
+
+    private async Task LoadPromptRolesBackground()
+    {
+        try
+        {
+            var roles = PromptService.ListRoles();
+            _promptRoles = roles.OrderBy(r => r).ToList();
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to load prompt roles");
+        }
+    }
+
+    private async void TogglePromptRole(string role)
+    {
+        if (!_expandedPromptRoles.Remove(role))
+        {
+            _expandedPromptRoles.Add(role);
+            // Lazy-load templates for this role
+            if (!_promptTemplates.ContainsKey(role))
+            {
+                var templates = PromptService.ListTemplates(role);
+                _promptTemplates[role] = templates.OrderBy(t => t).ToList();
+            }
+        }
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async void TogglePromptTemplate(string key)
+    {
+        if (!_expandedPromptTemplates.Remove(key))
+        {
+            _expandedPromptTemplates.Add(key);
+            // Lazy-load content and metadata
+            if (!_promptContents.ContainsKey(key))
+            {
+                try
+                {
+                    var content = await PromptService.GetRawContentAsync(key);
+                    _promptContents[key] = content ?? "";
+
+                    var metadata = await PromptService.GetMetadataAsync(key);
+                    if (metadata is not null)
+                    {
+                        _promptMetadata[key] = metadata;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogWarning(ex, "Failed to load prompt template {Key}", key);
+                    _promptContents[key] = $"Error loading template: {ex.Message}";
+                }
+            }
+        }
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private string GetPromptContent(string key) =>
+        _promptContents.TryGetValue(key, out var content) ? content : "";
+
+    private void SetPromptContent(string key, string value)
+    {
+        _promptContents[key] = value;
+        _modifiedPrompts.Add(key);
+    }
+
+    private int GetTemplateCount(string role) =>
+        _promptTemplates.TryGetValue(role, out var t) ? t.Count : 0;
+
+    private async Task SavePromptTemplate(string key)
+    {
+        try
+        {
+            if (_promptContents.TryGetValue(key, out var content))
+            {
+                await PromptService.SaveRawContentAsync(key, content);
+                _modifiedPrompts.Remove(key);
+                _promptSaveSuccess = key;
+                StateHasChanged();
+                _ = ClearPromptSaveSuccess(key);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to save prompt template {Key}", key);
+        }
+    }
+
+    private async Task ResetPromptTemplate(string key)
+    {
+        try
+        {
+            var promptsBase = Path.GetFullPath(SquadConfig.Value.Prompts.BasePath);
+            var defaultsPath = Path.Combine(Path.GetDirectoryName(promptsBase)!, "prompts-defaults");
+            var defaultFile = Path.Combine(defaultsPath, key + ".md");
+            if (File.Exists(defaultFile))
+            {
+                var defaultContent = await File.ReadAllTextAsync(defaultFile);
+                await PromptService.SaveRawContentAsync(key, defaultContent);
+                _promptContents[key] = defaultContent;
+                _modifiedPrompts.Remove(key);
+                _promptSaveSuccess = key;
+                StateHasChanged();
+                _ = ClearPromptSaveSuccess(key);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to reset prompt template {Key}", key);
+        }
+    }
+
+    private async Task ClearPromptSaveSuccess(string key)
+    {
+        await Task.Delay(2000);
+        if (_promptSaveSuccess == key)
+        {
+            _promptSaveSuccess = null;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private static string FormatRoleName(string role) =>
+        string.Join(' ', role.Split('-').Select(w =>
+            char.ToUpper(w[0]) + w[1..]));
+
+    private static string GetPromptRoleTooltip(string role) => role switch
+    {
+        "architect" => "Prompts that control the Architect agent's behavior: architecture document generation (multi-turn and single-pass), PR review criteria, revision handling, and design reference formatting. Changes here affect how Architecture.md is created and how PRs are evaluated for architectural alignment.",
+        "pm" => "Prompts for the Program Manager agent: PMSpec generation, story extraction and review, clarification dialogs, blocker triage, PR review from a product perspective, screenshot analysis, and the rubber-duck critique pass. These shape how requirements are specified and how the PM evaluates deliverables.",
+        "researcher" => "Prompts for the Researcher agent: technology research generation (multi-turn with sub-questions, deep-dive, and synthesis), revision handling, and design reference context. These control the depth and focus of Research.md.",
+        "engineer-base" => "Shared prompts inherited by ALL engineer agents: implementation planning, step-by-step execution, rework handling, build/test fix attempts, clarification follow-ups, and code regeneration. Changes here affect every engineer role.",
+        "software-engineer" => "Software Engineer prompts: implementation, engineering plan generation, enhancement coverage evaluation, integration review, code review analysis, PR description writing, visual validation, and SME assessment.",
+        "test-engineer" => "Test Engineer prompts: test generation across tiers (unit, integration, UI/E2E), testability assessment, Blazor-specific guidance, build/test failure classification and fixing, test removal decisions, and rework handling. Controls test quality and coverage strategy.",
+        "custom" => "Prompts for user-defined custom agents: generic task execution and issue processing templates. These provide the base behavior for any custom agent you create.",
+        _ => $"Prompts for the {role} agent role. Edit these to customize how the agent thinks, responds, and makes decisions."
+    };
+
+    private string GetTemplateTooltip(string key) => key switch
+    {
+        // ── _shared ──
+        "_shared/api-interface-contract" => "Included in engineer prompts to enforce locking a public API surface before writing the implementation. Prevents breaking changes from ad-hoc refactoring.",
+        "_shared/code-simplicity-self-check" => "Reviewer checklist included in self-assessment and peer review passes. Ensures code doesn't over-engineer or add unnecessary abstractions.",
+        "_shared/context-engineering" => "Token-budget guidance appended to engineering tasks. Tells agents what to read, how deep to go, and when to stop gathering context.",
+        "_shared/image-gen-instructions" => "Instructions for generating images via Azure OpenAI REST endpoint. Injected into any agent prompt that needs to create design mockups or art assets.",
+        "_shared/image-gen-prompt-guidance" => "Guidance on writing effective prompts for the generate_image tool. Helps agents produce higher-quality image generation requests.",
+        "_shared/performance-checklist" => "Pre-merge performance checklist appended to review prompts. Catches obvious performance issues (N+1 queries, missing indexes, unbounded lists) before they ship.",
+        "_shared/security-checklist" => "Web security checklist for review and implementation prompts. Covers XSS, CSRF, auth, input validation, and other common vulnerabilities.",
+        "_shared/triage-on-failure" => "Discipline for diagnosing build/test/runtime failures. Tells agents to analyze root cause before patching — prevents cargo-cult fixes.",
+
+        // ── architect ──
+        "architect/design-reference" => "Visual design reference context (screenshots, mockups) appended to the Architect's system prompt. Ensures architecture decisions align with the intended UI/UX design.",
+        "architect/full-system" => "The full system prompt defining the Architect agent's persona, responsibilities, and output format. This is the core identity prompt — changes fundamentally alter how the Architect thinks and writes.",
+        "architect/multi-turn-compile" => "Multi-turn step 5: Compiles all prior analysis into structured Architecture.md. Controls the final document format, sections, and quality of the architecture deliverable.",
+        "architect/multi-turn-components" => "Multi-turn step 2: Designs system components and their interactions. Defines how the Architect breaks down the system into modules, services, and boundaries.",
+        "architect/multi-turn-cross-cutting" => "Multi-turn step 4: Addresses security, scaling, error handling, and risk mitigation. Controls the depth of non-functional requirements analysis.",
+        "architect/multi-turn-data-model" => "Multi-turn step 3: Designs data models, API contracts, and infrastructure. Shapes database schemas, endpoint definitions, and deployment topology.",
+        "architect/multi-turn-decisions" => "Multi-turn step 1: Identifies key architectural decisions and trade-offs. The starting point that frames all subsequent architecture analysis.",
+        "architect/pr-review-system" => "System prompt for architecture alignment PR reviews. Defines what the Architect checks when reviewing code: pattern adherence, abstraction boundaries, dependency direction.",
+        "architect/quick-system" => "System prompt for quick-mode minimal architecture. Used when speed is prioritized over depth — produces a concise architecture document in one pass.",
+        "architect/quick-user" => "User prompt for quick-mode architecture. Provides project context and constraints for the quick architecture generation pass.",
+        "architect/revision-system" => "System prompt for revising Architecture.md after feedback. Controls how the Architect incorporates review comments and makes targeted edits.",
+        "architect/revision-user" => "User prompt for architecture revision. Provides the specific feedback and requested changes for the revision pass.",
+        "architect/role-description" => "Brief role identity used when the Architect introduces itself or when other agents need to understand the Architect's capabilities.",
+        "architect/single-pass-user" => "Single-pass user prompt for complete architecture in one turn. Used with SinglePassMode — trades multi-turn depth for speed.",
+
+        // ── custom ──
+        "custom/issue-system" => "System prompt for custom agents processing GitHub/ADO issues. Defines the agent's persona and approach when working on issue-based tasks.",
+        "custom/issue-user" => "User prompt providing issue context to custom agents. Contains the issue title, body, labels, and any additional context for task processing.",
+        "custom/task-system" => "System prompt for custom agent task execution. The base behavior template for any custom-defined agent role.",
+        "custom/task-user" => "User prompt for custom agent tasks. Provides task details and expected deliverables to the custom agent.",
+
+        // ── engineer-base (affects ALL engineers) ──
+        "engineer-base/build-fix" => "Prompt for fixing build errors. Gives the agent the error output and asks for targeted fixes. Used after failed dotnet build/npm build attempts.",
+        "engineer-base/build-fix-cli-edit" => "Build fix using Copilot CLI's native edit tools instead of FILE: block parsing. More reliable edits for complex fixes. Used when CLI edit mode is enabled.",
+        "engineer-base/clarification-followup" => "Prompt for incorporating PM answers to clarification questions into the implementation plan. Ensures agent adjusts approach based on feedback.",
+        "engineer-base/gitignore-guidance" => "Guidance for generating technology-appropriate .gitignore files. Included when creating new repositories or adding new tech stacks.",
+        "engineer-base/planning-system" => "System prompt for breaking a coding task into an ordered implementation plan. Controls how engineers decompose work into steps before coding.",
+        "engineer-base/planning-user" => "User prompt providing task context for implementation planning. Includes issue requirements, architecture constraints, and acceptance criteria.",
+        "engineer-base/pre-pr-questions" => "Generates up to 10 clarifying questions with proposed answers before each PR. Critical for validating assumptions — changes affect question quality and relevance.",
+        "engineer-base/regeneration" => "Regeneration prompt used when repeated build failures exhaust normal fix attempts. Tells the agent to start implementation from scratch with lessons learned.",
+        "engineer-base/rework-system" => "System prompt for addressing PR review feedback. Defines how engineers interpret and apply reviewer comments surgically.",
+        "engineer-base/rework-system-cli-edit" => "Rework system prompt for CLI edit mode. Uses Copilot CLI's native file editing instead of FILE: block parsing for more reliable rework.",
+        "engineer-base/rework-user" => "User prompt providing specific review feedback and requested changes for rework. Contains the reviewer's comments and expectations.",
+        "engineer-base/rework-user-cli-edit" => "User prompt for CLI edit-mode rework. Provides review feedback formatted for CLI tool-based editing.",
+        "engineer-base/self-assessment-fix-system" => "System prompt for fixing gaps found during pre-publish self-assessment. Runs after self-assessment identifies issues — makes targeted corrections.",
+        "engineer-base/self-assessment-system" => "System prompt for the pre-publish self-assessment pass. A fresh AI context re-reads requirements and compares against actual code. Controls the quality bar for PRs.",
+        "engineer-base/self-assessment-user" => "User prompt providing task context for self-assessment. Includes issue requirements, implementation notes, and changed files for the assessor to evaluate.",
+        "engineer-base/single-pass-implementation" => "Single-pass implementation prompt that generates all code in one turn. Faster but less iterative than step-by-step. Used with SinglePassMode enabled.",
+        "engineer-base/step-implementation-system" => "System prompt for implementing a single step from the plan. Controls how engineers write code for each discrete step — file creation, modifications, and testing.",
+        "engineer-base/step-planning-system" => "System prompt for decomposing a task into ordered implementation steps. Shapes the granularity and sequencing of the step-by-step plan.",
+        "engineer-base/step-planning-user" => "User prompt for step planning. Provides the full task context, architecture, and constraints for the planning phase.",
+        "engineer-base/test-fix" => "Prompt for fixing failing tests. Gives the agent test output and asks for targeted fixes. Consider: changes affect how aggressively agents fix vs. remove tests.",
+        "engineer-base/test-removal" => "Prompt for removing unfixable failing tests as a last resort. Controls the criteria for when test removal is acceptable vs. requiring more fix attempts.",
+
+        // ── frontend-engineer / infra-engineer ──
+        "frontend-engineer/role-description" => "Role identity for Frontend Engineer specialists. Defines expertise areas (React, CSS, accessibility, responsive design) that shape implementation decisions.",
+        "infra-engineer/role-description" => "Role identity for Infrastructure Engineer specialists. Defines expertise (CI/CD, Docker, cloud infra, monitoring) that shapes infrastructure-related implementations.",
+
+        // ── pm ──
+        "pm/blocker-triage-system" => "System prompt for triaging blocker issues. Controls how the PM evaluates severity, assigns priority, and recommends resolution paths for blocked work.",
+        "pm/blocker-triage-user" => "User prompt providing blocker context. Contains the issue details, affected agents, and current project state for triage decisions.",
+        "pm/clarification-system" => "System prompt for answering engineer clarification questions. Shapes how the PM interprets technical questions and provides actionable guidance.",
+        "pm/clarification-user" => "User prompt providing the engineer's questions and project context. The PM uses this to formulate precise, implementation-helpful answers.",
+        "pm/critique-system" => "System prompt for the rubber-duck critique pass. Controls how the PM critically reviews its own PMSpec or other documents for gaps and inconsistencies.",
+        "pm/critique-user" => "User prompt providing the document to critique. Includes the content and specific areas to evaluate for completeness and correctness.",
+        "pm/design-reference" => "Design context (screenshots, mockups, brand guidelines) appended to PM prompts. Ensures the PMSpec aligns with the intended visual design.",
+        "pm/design-sections" => "Defines the sections and structure of design-related content in the PMSpec. Controls which design aspects are specified for engineers.",
+        "pm/full-system" => "Full system prompt for PMSpec generation. The core PM identity — defines persona, quality bar, output format, and specification methodology.",
+        "pm/multi-turn-analysis" => "Multi-turn Turn 1: Analyzes the project description and identifies all requirements. The foundation that shapes the entire specification.",
+        "pm/multi-turn-compile" => "Multi-turn Turn 2: Compiles analysis into the structured PMSpec document. Controls section ordering, depth, and cross-referencing.",
+        "pm/pr-review-retry" => "Retry prompt when the PM's PR review response is malformed or off-topic. Provides clearer instructions to recover from bad AI output.",
+        "pm/pr-review-screenshots" => "Screenshot validation section appended to PR reviews. Tells the PM how to evaluate visual correctness from Playwright screenshots.",
+        "pm/pr-review-system" => "System prompt for PM final review of PRs. Defines business alignment criteria, acceptance validation, and approval/rejection standards.",
+        "pm/quick-system" => "Quick-mode PM persona for rapid PMSpec generation. Produces a concise spec in fewer turns — useful for smaller projects.",
+        "pm/quick-user" => "User prompt for quick PMSpec mode. Provides condensed project context optimized for one-pass specification.",
+        "pm/revision-system" => "System prompt for revising PMSpec after stakeholder feedback. Controls how the PM incorporates change requests without losing document coherence.",
+        "pm/revision-user" => "User prompt providing specific revision feedback for the PMSpec. Contains the requested changes and their business justification.",
+        "pm/role-description" => "Brief PM role identity used for introductions and when other agents reference the PM's capabilities.",
+        "pm/single-pass-spec" => "Single-pass PMSpec generation — complete specification in one turn. Faster but less thorough than multi-turn. Used with SinglePassMode.",
+        "pm/story-extraction-system" => "System prompt for extracting user stories from PMSpec into GitHub Issues/ADO Work Items. Controls story granularity, acceptance criteria format, and labeling.",
+        "pm/story-extraction-user" => "User prompt providing PMSpec content for story extraction. The PM parses this into individual actionable work items.",
+        "pm/story-review-system" => "System prompt for reviewing whether a PR delivers on its story requirements. Evaluates acceptance criteria completion.",
+        "pm/story-review-user" => "User prompt providing the story and PR details for delivery review. Contains acceptance criteria, PR diff summary, and test results.",
+
+        // ── researcher ──
+        "researcher/design-reference" => "Design reference context appended to researcher prompts. Ensures research considers visual design implications and UI/UX requirements.",
+        "researcher/full-system" => "Full system prompt defining the Researcher's persona and methodology. Controls research depth, source evaluation criteria, and output format.",
+        "researcher/multi-turn-deepdive" => "Multi-turn Turn 2: Deep-dive analysis of identified sub-topics. Controls how thoroughly the Researcher explores each area.",
+        "researcher/multi-turn-subquestions" => "Multi-turn Turn 1: Breaks the research topic into sub-questions. Shapes the scope and direction of the entire research phase.",
+        "researcher/multi-turn-synthesis" => "Multi-turn Turn 3: Synthesizes deep-dive findings into Research.md. Controls the final document structure and recommendation quality.",
+        "researcher/quick-system" => "Quick-mode researcher persona for rapid research. Produces concise research in fewer turns for smaller projects.",
+        "researcher/quick-user" => "User prompt for quick research mode. Provides focused project context for one-pass research generation.",
+        "researcher/revision-system" => "System prompt for revising Research.md after feedback. Controls how the Researcher incorporates revision requests.",
+        "researcher/revision-user" => "User prompt providing specific feedback for Research.md revision.",
+        "researcher/role-description" => "Brief Researcher role identity for introductions and capability references by other agents.",
+        "researcher/single-pass-research" => "Single-pass research generation — complete Research.md in one turn. Used with SinglePassMode for speed.",
+
+        // ── software-engineer ──
+        "software-engineer/code-review-system" => "System prompt for SE code review of other engineers' PRs. Defines review criteria: correctness, patterns, test coverage, architecture adherence.",
+        "software-engineer/enhancement-coverage-system" => "System prompt for evaluating whether all PMSpec enhancements are covered by engineering tasks. Identifies gaps in task planning.",
+        "software-engineer/enhancement-coverage-user" => "User prompt providing PMSpec enhancements and current task list for coverage gap analysis.",
+        "software-engineer/implementation-system" => "System prompt for SE implementation. Defines coding standards, file organization, error handling patterns, and quality expectations.",
+        "software-engineer/integration-review-system" => "System prompt for reviewing the final integration PR (T-FINAL). Controls merge-readiness criteria and cross-PR consistency checks.",
+        "software-engineer/integration-review-user" => "User prompt for integration review. Provides all merged PR summaries and the integration PR context.",
+        "software-engineer/plan-generation-system" => "System prompt for generating the engineering task plan. Controls how the SE leader decomposes PMSpec into wave-ordered, dependency-tracked tasks.",
+        "software-engineer/plan-generation-user-suffix" => "Appended to the plan generation user prompt. Contains additional constraints, task sizing rules, and dependency guidance.",
+        "software-engineer/pr-description-system" => "System prompt for auto-generating PR descriptions. Controls the format, detail level, and sections included in PR descriptions.",
+        "software-engineer/pr-description-user" => "User prompt providing changed files and task context for PR description generation.",
+        "software-engineer/rework-system" => "SE-specific rework system prompt. May include SE leader-specific rework strategies beyond the base engineer rework.",
+        "software-engineer/role-description" => "SE role identity defining leadership responsibilities: task planning, integration PR creation, and team coordination.",
+        "software-engineer/single-pass-implementation" => "SE-specific single-pass implementation. Generates all code in one turn with SE-specific patterns and conventions.",
+        "software-engineer/sme-assessment" => "Prompt for assessing whether a task requires SME/specialist expertise. Controls when the SE delegates work to specialist agents.",
+        "software-engineer/visual-validation-supplement" => "Supplement appended when Playwright screenshots are available. Tells the SE how to evaluate visual correctness alongside code review.",
+
+        // ── specialist-engineer ──
+        "specialist-engineer/implementation-system" => "System prompt for specialist engineer implementation. Extends the base engineer with domain-specific expertise (frontend, backend, game engine, etc.).",
+        "specialist-engineer/rework-system" => "Specialist-specific rework prompt. Includes domain expertise context for more targeted rework on specialized code.",
+        "specialist-engineer/role-description" => "Specialist engineer role identity. Dynamically customized based on the specialist's domain (frontend, infra, artist, etc.).",
+
+        // ── test-engineer ──
+        "test-engineer/blazor-test-guidance" => "Blazor-specific test guidance appended when the project uses Blazor. Covers bUnit, render testing, and Blazor component patterns.",
+        "test-engineer/build-fix-inline-system" => "System prompt for fixing build errors in test files using inline code fixes. More targeted than full regeneration.",
+        "test-engineer/build-fix-inline-user" => "User prompt providing build error output and test file context for inline fixes.",
+        "test-engineer/classify-failures-system" => "System prompt for classifying test failures as real bugs vs. test issues. Prevents agents from fixing tests that expose actual code bugs.",
+        "test-engineer/classify-failures-user" => "User prompt providing test failure output for classification. Contains stack traces, assertion messages, and test code context.",
+        "test-engineer/remove-failing-tests" => "Prompt for removing unfixable tests after exhausting fix attempts. Controls the bar for when test removal is acceptable.",
+        "test-engineer/rework-system" => "System prompt for reworking tests after review feedback. Controls how the TE refines tests based on reviewer comments.",
+        "test-engineer/rework-user" => "User prompt providing review feedback for test rework. Contains specific issues identified in the test review.",
+        "test-engineer/role-description" => "TE role identity defining testing philosophy: coverage strategy, tier priorities, and quality standards.",
+        "test-engineer/single-pass-system" => "Combined system prompt for single-pass test generation. Produces all tests in one turn — faster but may miss edge cases vs. per-tier generation.",
+        "test-engineer/testability-assessment" => "Prompt for assessing whether code changes are testable and what test approaches are viable. Runs before test generation to set strategy.",
+        "test-engineer/test-fix-user" => "User prompt for fixing failing test code. Provides test output, source code, and failure patterns for targeted fixes.",
+        "test-engineer/tier-integration-guidance" => "Integration test guidance appended to per-tier generation. Covers API testing, service integration, database testing patterns.",
+        "test-engineer/tier-system-base" => "Base system prompt for per-tier test generation. Shared foundation customized by each tier's guidance (unit, integration, UI).",
+        "test-engineer/tier-ui-guidance" => "UI/E2E Playwright test guidance. Covers page object models, visual testing, user flow validation, and Playwright best practices.",
+        "test-engineer/tier-unit-guidance" => "Unit test guidance. Covers isolation, mocking strategies, edge cases, boundary testing, and assertion patterns.",
+        "test-engineer/workspace-build-fix-system" => "System prompt for workspace-level build fixes in test projects. Handles project reference issues, missing packages, and configuration problems.",
+        "test-engineer/workspace-build-fix-user" => "User prompt for workspace build fixes. Provides the full build error context and project structure.",
+
+        // ── wizard ──
+        "wizard/clarifying-questions" => "Generates clarifying questions during the Develop wizard. Controls what the PM asks to fill knowledge gaps before creating the project spec.",
+        "wizard/clarifying-questions-more" => "Generates additional follow-up clarifying questions. Used when the user requests more questions after the initial set.",
+        "wizard/scenario-generation" => "Generates end-to-end test scenarios from the project plan. These scenarios become the verification contract for the entire build.",
+
+        // ── other roles ──
+        "artist/role-description" => "Artist agent role identity. Defines expertise in visual design, asset creation, and OpenAI image generation capabilities.",
+        "artist/work-on-asset-task" => "Prompt for the Artist agent to create visual assets. Includes image generation instructions and design quality criteria.",
+        "flow-monitor/role-description" => "Flow Monitor role identity. Defines the watchdog agent's detection and escalation responsibilities.",
+        "missing-work/planner" => "Prompt for identifying missing work items that should exist based on the PMSpec but weren't created. Fills planning gaps.",
+        "playtester/report-narrative" => "Prompt for generating narrative test reports from Playwright test results. Creates human-readable test summaries.",
+        "playtester/role-description" => "Playtester role identity. Defines the QA agent's approach to exploratory testing and scenario validation.",
+        "playtester/system" => "System prompt for Playtester agents running scenario verification. Controls how thoroughly scenarios are tested.",
+        "playtester/verify-scenario-user" => "User prompt providing a specific scenario for the Playtester to verify against the running application.",
+        "security-auditor/role-description" => "Security Auditor role identity. Defines expertise in security review, vulnerability assessment, and compliance checking.",
+        "strategy-judge/visual-judge-system" => "System prompt for the AI judge that scores agentic framework candidates. Defines scoring criteria (0-10), comparison methodology, and winner selection logic.",
+
+        _ => _promptMetadata.TryGetValue(key, out var m) && !string.IsNullOrEmpty(m.Description)
+            ? m.Description
+            : "Prompt template — hover over the role header above for context about this agent's prompts."
+    };
+}

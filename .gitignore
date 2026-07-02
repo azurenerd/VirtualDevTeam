@@ -3,6 +3,10 @@ bin/
 obj/
 publish/
 out/
+dist/
+
+## Node.js
+node_modules/
 
 ## Visual Studio
 .vs/
@@ -73,8 +77,9 @@ coverage/
 ## JetBrains
 _ReSharper.Caches/
 
-# Dashboarduser data - contains project-specific info, use data.template.json as reference
-src/ReportingDashboard/wwwroot/data/data.json*.pid
+# Dashboard user data - contains project-specific info, use data.template.json as reference
+# (fix: previous pattern `data.json*.pid` was a typo and matched nothing useful)
+src/ReportingDashboard/wwwroot/data/data.json
 
 ## Strategy framework (InteractiveCLIPlan) — per-candidate worktrees and experiment records
 .candidates/
@@ -91,6 +96,98 @@ experiment-data/
 ## Test captures (GIFs, screenshots, videos from UI tests)
 tests/Captures/
 
+## Pipeline state snapshots (large binary DB + git state for fast iteration)
+tests/temp/
+
+## Read-only Playwright test results (per-run, generated at runtime)
+.testing/
+
 # Runtime artifacts
 fake-cli-marker.txt
 runner.pid
+
+## Reset scripts — dangerous for org-wide use, keep local only
+scripts/minimal-reset.ps1
+scripts/fresh-reset.ps1
+scripts/reset-runner.ps1
+
+## Defense-in-depth against agent workspace-leak bugs:
+## the VDT runner repo should ONLY contain VirtualDevTeam.* projects under src/.
+## Anything else under src/ is almost certainly an agent leak (see GridGuardians.Api
+## incident 2026-05-11 where target-project files landed at src/GridGuardians.Api/).
+## If the leak is intentional (e.g. you're committing a new VDT sub-project), edit
+## this rule and add an explicit !src/YourProject/ allowlist entry.
+/src/*
+!/src/VirtualDevTeam.*/
+
+## Playwright MCP snapshots (generated during test/evaluation runs)
+.playwright-mcp/
+**/.playwright-mcp/
+
+runner.out
+runner.err
+reset.err
+reset.log
+
+# Working/local recommendations doc — not for commit
+docs/ImproveEngPrompts.md
+
+
+# Temp bootstrap workspace (used for ad-hoc tests, e.g. mcp-validation, render-test).
+# Entire directory is operator-local — was tracked by mistake in the initial AgentSquad
+# import 2026-05-01, cleaned up 2026-05-11 per the workspace-leak audit.
+temp_bootstrap/
+
+
+# FixRecommendation plans + state — operator-local, generated at runtime, not shared
+FixRecommendations/
+
+# ReadMe authoring artifacts — entire directory is operator-local until the workflow stabilises.
+# The capture-screenshots.mjs/.ps1 scripts + generated images live here; nothing here ships to others.
+# Re-share specific files (e.g. capture script) by removing or scoping this rule when ready.
+ReadMe/
+
+# === Don't-Affect-Others plan (2026-05-11) ===
+# Per-developer preview-build config (contains absolute clone path).
+# Copy preview-settings.template.json → preview-settings.json on first run.
+preview-settings.json
+
+# Runtime-mutated SME agent definitions registry.
+# Copy sme-definitions.template.json → sme-definitions.json on first run, or let the runner create it on demand.
+sme-definitions.json
+
+# Node.js --report-on-fatalerror crash dumps (contains absolute paths + PIDs + command-line args).
+# Naming pattern: report.<YYYYMMDD>.<HHMMSS>.<PID>.<seq>.json
+report.[0-9]*.json
+
+# MSAL / IdentityService token caches — credential artifacts, never commit
+.IdentityService/
+
+# Agent-generated documents accidentally dropped into the Runner working directory.
+# (Long-term, these should be routed to .agents/ or a runner-output/ dir that's already gitignored.)
+src/VirtualDevTeam.Runner/*-evaluation.md
+src/VirtualDevTeam.Runner/*-research.md
+src/VirtualDevTeam.Runner/*-report.md
+
+# === Target project artifacts ===
+# Agent-built target projects that leaked into the VDT repo root.
+# These are output from pipeline runs, not VDT source code.
+Compliance2/
+Compliance2.Tests/
+
+# Agent-generated tracking/documentation artifacts
+AgentDocs/
+
+# Temporary debug/audit scripts (one-off, not production tooling)
+scripts-tmp/
+
+# Python bytecode cache
+__pycache__/
+**/__pycache__/
+*.pyc
+
+# Root-level temp screenshots (use Screenshots/ for README-referenced images)
+/*.png
+
+# PowerShell null-redirect artifact
+$null

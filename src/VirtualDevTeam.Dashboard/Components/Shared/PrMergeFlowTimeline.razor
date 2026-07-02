@@ -1,0 +1,229 @@
+@*
+    PrMergeFlowTimeline — self-contained horizontal step strip for a single PR.
+
+    Fetches via IPrMergeFlowSource (in-process on Runner; proxied via HTTP on standalone
+    Dashboard.Host). Uses the same injection pattern as PullRequestDetail.razor.
+
+    Usage: <PrMergeFlowTimeline PrNumber="@pr.Number" />
+
+    Adapts to the real PrMergeFlowSnapshot shape:
+      - Steps have Title, Icon (server-supplied emoji), State (PrMergeFlowStepState enum)
+      - Timestamps: StartedAt / CompletedAt / FailedAt (no single OccurredAt)
+      - Summary carries CompletedCount, TotalApplicableCount, StuckSeconds
+*@
+@using VirtualDevTeam.Core.Pipeline
+@inject IPrMergeFlowSource FlowSource
+@inject ILogger<PrMergeFlowTimeline> Logger
+
+<div class="pr-merge-flow-timeline">
+    @if (_snapshot is null && !_loaded)
+    {
+        <div class="pmf-loading">⏳ Loading merge-flow timeline…</div>
+    }
+    else if (_snapshot is null)
+    {
+        <div class="pmf-error">No timeline data available</div>
+    }
+    else
+    {
+        <div class="pmf-header">
+            <span class="pmf-progress">@_snapshot.Summary.CompletedCount / @_snapshot.Summary.TotalApplicableCount steps</span>
+            @if (_snapshot.Summary.StuckSeconds > 60)
+            {
+                <span class="pmf-stuck-badge" title="Stuck for @FormatAge(_snapshot.Summary.StuckSeconds)">⏱ @FormatAge(_snapshot.Summary.StuckSeconds)</span>
+            }
+            <span class="pmf-computed-at" title="Snapshot computed at @_snapshot.ComputedAt.ToString("u")">as of <LocalTimeText Value="_snapshot.ComputedAt" IncludeSeconds="true" /></span>
+        </div>
+        <ol class="pmf-steps">
+            @foreach (var step in _snapshot.Steps.Where(s => s.State != PrMergeFlowStepState.NotApplicable))
+            {
+                var stateClass = step.State.ToString().ToLowerInvariant();
+                var ts = RelevantTimestamp(step);
+                var tooltip = step.Tooltip ?? step.Detail ?? step.WhatsNeeded ?? step.WhatsBlocking;
+                <li class="pmf-step pmf-step-@stateClass" title="@tooltip">
+                    <span class="pmf-step-marker">@step.Icon</span>
+                    <span class="pmf-step-name">@step.Title</span>
+                    @if (ts.HasValue)
+                    {
+                        <span class="pmf-step-time">@ts.Value.ToString("HH:mm")</span>
+                    }
+                </li>
+            }
+        </ol>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public int PrNumber { get; set; }
+
+    private PrMergeFlowSnapshot? _snapshot;
+    private bool _loaded;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _loaded = false;
+        _snapshot = null;
+        try
+        {
+            _snapshot = await FlowSource.GetSnapshotAsync(PrNumber, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex, "Failed to fetch merge-flow for PR #{Pr}", PrNumber);
+        }
+        finally
+        {
+            _loaded = true;
+        }
+    }
+
+    private static DateTime? RelevantTimestamp(PrMergeFlowStep step) => step.State switch
+    {
+        PrMergeFlowStepState.Done => step.CompletedAt,
+        PrMergeFlowStepState.InProgress => step.StartedAt,
+        PrMergeFlowStepState.Failed => step.FailedAt,
+        PrMergeFlowStepState.Blocked => step.StartedAt,
+        _ => null
+    };
+
+    private static string FormatAge(int seconds)
+    {
+        if (seconds >= 3600) return $"{seconds / 3600}h {(seconds % 3600) / 60}m";
+        if (seconds >= 60) return $"{seconds / 60}m";
+        return $"{seconds}s";
+    }
+}
+
+<style>
+    .pr-merge-flow-timeline {
+        padding: 10px 12px;
+        background: var(--card-bg-secondary, #1a1f29);
+        border-radius: 6px;
+        font-size: 13px;
+        margin-top: 8px;
+    }
+
+    .pmf-header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 8px;
+        font-size: 11px;
+    }
+
+    .pmf-progress {
+        font-weight: 600;
+        color: var(--text-primary, #e0e6f0);
+    }
+
+    .pmf-stuck-badge {
+        background: rgba(251, 191, 36, 0.15);
+        color: #fbbf24;
+        border: 1px solid rgba(251, 191, 36, 0.3);
+        border-radius: 3px;
+        padding: 1px 6px;
+        font-size: 10px;
+        font-weight: 600;
+    }
+
+    .pmf-computed-at {
+        margin-left: auto;
+        opacity: 0.4;
+        font-size: 10px;
+    }
+
+    .pmf-steps {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+    }
+
+    .pmf-step {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 3px 8px;
+        background: var(--card-bg, #131820);
+        border-radius: 4px;
+        border: 1px solid transparent;
+        cursor: default;
+    }
+
+    .pmf-step-marker {
+        font-size: 13px;
+        line-height: 1;
+    }
+
+    .pmf-step-name {
+        font-size: 11px;
+        color: var(--text-secondary, #9ca3af);
+    }
+
+    .pmf-step-time {
+        font-size: 10px;
+        opacity: 0.5;
+        margin-left: 2px;
+    }
+
+    /* State variants */
+    .pmf-step-done {
+        border-color: rgba(74, 222, 128, 0.2);
+    }
+
+    .pmf-step-done .pmf-step-name {
+        color: #4ade80;
+    }
+
+    .pmf-step-inprogress {
+        border-color: rgba(96, 165, 250, 0.35);
+        background: rgba(96, 165, 250, 0.07);
+    }
+
+    .pmf-step-inprogress .pmf-step-marker {
+        animation: pmf-pulse 1.5s ease-in-out infinite;
+    }
+
+    .pmf-step-inprogress .pmf-step-name {
+        color: #60a5fa;
+        font-weight: 600;
+    }
+
+    .pmf-step-failed {
+        border-color: rgba(248, 113, 113, 0.3);
+    }
+
+    .pmf-step-failed .pmf-step-name {
+        color: #f87171;
+    }
+
+    .pmf-step-blocked {
+        border-color: rgba(251, 191, 36, 0.25);
+    }
+
+    .pmf-step-blocked .pmf-step-name {
+        color: #fbbf24;
+    }
+
+    .pmf-step-skipped {
+        opacity: 0.4;
+    }
+
+    .pmf-step-pending .pmf-step-name {
+        color: #6b7280;
+    }
+
+    .pmf-loading,
+    .pmf-error {
+        padding: 6px;
+        opacity: 0.6;
+        font-size: 12px;
+    }
+
+    @@keyframes pmf-pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.35; }
+    }
+</style>

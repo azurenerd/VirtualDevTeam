@@ -1,19 +1,15 @@
 ---
-version: "1.0"
-description: "User prompt for revising Architecture.md with current content and feedback"
+version: "3.0"
+description: "User prompt for CLI edit-based revision of Architecture.md"
 variables:
-  - current_content
   - feedback
 tags:
   - architect
   - revision
 ---
-## Current Architecture.md:
-
-{{current_content}}
-
 ## Reviewer Feedback:
 
 {{feedback}}
 
-Revise the Architecture.md to address the feedback. Return the COMPLETE revised document.
+Edit the file `Architecture.md` in your working directory to address ONLY the feedback above.
+Make minimal, surgical changes. Do not rewrite the whole file.

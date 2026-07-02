@@ -1,0 +1,2288 @@
+@page "/timeline"
+@rendermode InteractiveServer
+@using VirtualDevTeam.Core.DevPlatform.Models
+@using VirtualDevTeam.Core.GitHub
+@using VirtualDevTeam.Core.Strategies
+@using VirtualDevTeam.Core.HealthMonitor
+@using VirtualDevTeam.Dashboard.Services
+@implements IAsyncDisposable
+@inject IDashboardDataService DataService
+@inject FlowTimelineTracker FlowTracker
+@inject IStrategiesDataService StrategiesService
+@inject CandidateStateStore CandidateStore
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+@inject IPlatformLinkService LinkService
+@inject Microsoft.Extensions.Options.IOptionsMonitor<VirtualDevTeam.Core.Configuration.VirtualDevTeamConfig> AppConfig
+@inject VirtualDevTeam.Core.DevPlatform.Capabilities.IReviewService ReviewService
+@inject VirtualDevTeam.Core.Configuration.IRunBranchProvider BranchProvider
+@inject VirtualDevTeam.Core.Agents.Steps.IAgentTaskTracker TaskTracker
+
+<PageTitle>Virtual Dev Team — Project Timeline</PageTitle>
+
+@if (_loading)
+{
+    <div class="ntl-loading">
+        <div class="ntl-loading-ring"></div>
+        <span>Syncing timeline…</span>
+    </div>
+}
+else if (_phases.Count == 0)
+{
+    @if (_isRateLimited)
+    {
+        <div class="empty-state">
+            <div class="empty-icon">⏳</div>
+            <div class="empty-text">API rate-limited</div>
+            <div class="empty-sub">Waiting for rate limit to reset. Timeline will load automatically when data becomes available.</div>
+        </div>
+    }
+    else
+    {
+        <div class="empty-state">
+            <div class="empty-icon">🗺️</div>
+            <div class="empty-text">No work items yet</div>
+            <div class="empty-sub">Issues will appear here as agents create them</div>
+        </div>
+    }
+}
+else
+{
+    <!-- Top bar: title + stats + filter -->
+    <div class="ntl-topbar" data-testid="page-timeline">
+        <div class="ntl-topbar-left">
+            <h1 class="ntl-title">Project Timeline</h1>
+            <div class="ntl-stats">
+                <span class="ntl-stat"><span class="ntl-stat-num">@_issues.Count</span> issues</span>
+                <span class="ntl-stat-sep">·</span>
+                <span class="ntl-stat"><span class="ntl-stat-num ntl-stat-done">@_closedCount</span> closed</span>
+                <span class="ntl-stat-sep">·</span>
+                <span class="ntl-stat"><span class="ntl-stat-num ntl-stat-open">@_openCount</span> open</span>
+            </div>
+        </div>
+        <div class="ntl-topbar-right">
+            <div class="ntl-theme-toggle">
+                <button class="ntl-theme-btn @(_designTheme == "default" ? "active" : "")" @onclick='() => SetTheme("default")' title="Default neon theme">Default</button>
+                <button class="ntl-theme-btn @(_designTheme == "cards" ? "active" : "")" @onclick='() => SetTheme("cards")' title="Card grid theme">Cards</button>
+                <button class="ntl-theme-btn @(_designTheme == "metro" ? "active" : "")" @onclick='() => SetTheme("metro")' title="Metro minimal theme">Metro</button>
+                <button class="ntl-theme-btn @(_designTheme == "blueprint" ? "active" : "")" @onclick='() => SetTheme("blueprint")' title="Blueprint flow theme">Blueprint</button>
+            </div>
+            <span class="ntl-topbar-divider">|</span>
+            <div class="ntl-view-toggle" data-testid="timeline-view-toggle">
+                <button class="ntl-view-btn @(_devViewMode == "engineering" ? "active" : "")" @onclick='() => SetDevView("engineering")' title="Show engineering tasks with linked PRs" data-testid="timeline-view-engineering">🔧 Engineering</button>
+                <button class="ntl-view-btn @(_devViewMode == "time" ? "active" : "")" @onclick='() => SetDevView("time")' title="Show timing breakdown by phase and PR" data-testid="timeline-view-time">⏱️ Time View</button>
+            </div>
+            <span class="ntl-topbar-divider">|</span>
+            <div class="ntl-filter-pills" data-testid="timeline-status-filter">
+                <button class="ntl-pill @(_statusFilter == "all" ? "active" : "")" @onclick='() => SetFilter("all")' data-testid="timeline-status-all">All</button>
+                <button class="ntl-pill @(_statusFilter == "open" ? "active" : "")" @onclick='() => SetFilter("open")' data-testid="timeline-status-open">Open</button>
+                <button class="ntl-pill @(_statusFilter == "closed" ? "active" : "")" @onclick='() => SetFilter("closed")' data-testid="timeline-status-closed">Closed</button>
+            </div>
+            <button class="ntl-refresh-btn @(_refreshing ? "spinning" : "")" @onclick="ForceRefreshAsync" title="Force refresh" disabled="@_refreshing" data-testid="timeline-refresh"><svg class="ntl-refresh-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v2h-2"/></svg></button>
+            <span class="ntl-topbar-divider">|</span>
+            <div class="ntl-zoom-controls">
+                <button class="ntl-zoom-btn" @onclick="ScrollToStart" title="Jump to beginning">⏮</button>
+                <button class="ntl-zoom-btn" @onclick="ZoomOut" title="Zoom out">−</button>
+                <span class="ntl-zoom-label">@(_zoomPercent)%</span>
+                <button class="ntl-zoom-btn" @onclick="ZoomIn" title="Zoom in">+</button>
+                <button class="ntl-zoom-btn" @onclick="ZoomFit" title="Fit all on screen">⊞</button>
+                <button class="ntl-zoom-btn" @onclick="ScrollToEnd" title="Jump to end">⏭</button>
+            </div>
+            @if (_totalProjectTime > TimeSpan.Zero)
+            {
+                <span class="ntl-topbar-divider">|</span>
+                <span class="ntl-time-total">Total: @FormatTimeDuration(_totalProjectTime)</span>
+            }
+        </div>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(_storySuccessMessage))
+    {
+        <div class="config-pat-result config-pat-success new-story-success-banner" data-testid="new-story-success">
+            <span>✓ @_storySuccessMessage</span>
+        </div>
+    }
+
+    <!-- Overall progress -->
+    <div class="ntl-progress-wrap">
+        <div class="ntl-progress-bar">
+            <div class="ntl-progress-fill" style="width: @(_issues.Count > 0 ? _completedCount * 100 / _issues.Count : 0)%"></div>
+        </div>
+        <span class="ntl-progress-label">@(_issues.Count > 0 ? _completedCount * 100 / _issues.Count : 0)%</span>
+    </div>
+
+    <!-- Horizontal timeline with full-height phase columns -->
+    <div class="ntl-viewport" id="ntl-viewport">
+        <button class="ntl-scroll-arrow ntl-scroll-arrow-left ntl-arrow-hidden" id="ntl-arrow-left" type="button" aria-label="Scroll timeline left">◀</button>
+        <div class="ntl-scroll-area" id="ntl-scroll-area">
+            <div class="ntl-timeline theme-@_designTheme" style="zoom: @(_zoomPercent)%;">
+                @{ int nodeIdx = 0; }
+                @foreach (var phase in GetFilteredPhases())
+                {
+                    var phaseKey = phase.Name;
+                    var phaseClass = GetPhaseClass(phase.Name);
+                    var phaseItems = phase.Items;
+                    var phaseDone = phaseItems.Count(g =>
+                        g.Issue.State == "closed" &&
+                        !g.LinkedPRs.Any(p => !p.IsMerged && p.State != "closed"));
+
+                    @* In Time View, skip columns that have no PR content to render *@
+                    if (_devViewMode == "time")
+                    {
+                        var tvHasPRs = phaseItems.SelectMany(g => g.LinkedPRs).Any();
+                        var tvHasSyntheticPRs = phaseItems.Any(g => g.IsPullRequest);
+                        if (!tvHasPRs && !tvHasSyntheticPRs) { continue; }
+                    }
+
+                    <div @key="phaseKey" class="ntl-phase-column @phaseClass @(phase.IsWavePhase ? "wave-column" : "")">
+                        <!-- Phase label — top-left -->
+                        <div class="ntl-phase-label">
+                            @if (phase.IsWavePhase)
+                            {
+                                <span class="ntl-phase-name ntl-wave-name">@phase.Name</span>
+                                @if (_devViewMode != "time")
+                                {
+                                    var waveDur = GetPhaseDuration(phase);
+                                    <span class="ntl-wave-badge">@phase.Items.Count tasks</span>
+                                    @if (waveDur > TimeSpan.Zero)
+                                    {
+                                        <span class="ntl-phase-counter ntl-time-badge-small @GetTimeDurationClass(waveDur)" title="Wave duration">@FormatTimeDuration(waveDur)</span>
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                <span class="ntl-phase-name">@phase.Name</span>
+                            }
+                            @if (_devViewMode == "time")
+                            {
+                                @* Issue 1 fix: Only ONE time badge per phase header — skip wave badge above, show only the phase counter here *@
+                                var phaseDur = GetPhaseDuration(phase);
+                                var phaseInProgress = phase.Items.Any(g => g.LinkedPRs.Any(p => !p.IsMerged && p.State != "closed"));
+                                <span class="ntl-phase-counter ntl-time-badge @GetTimeDurationClass(phaseDur)">
+                                    @FormatTimeDuration(phaseDur)
+                                    @if (phaseInProgress) { <span class="pulse-dot"></span> }
+                                </span>
+                            }
+                            else
+                            {
+                                var defaultPhaseDur = GetPhaseDuration(phase);
+                                <span class="ntl-phase-counter">@phaseDone/@phaseItems.Count</span>
+                                @if (defaultPhaseDur > TimeSpan.Zero)
+                                {
+                                    <span class="ntl-phase-counter ntl-time-badge-small @GetTimeDurationClass(defaultPhaseDur)" title="Phase duration">@FormatTimeDuration(defaultPhaseDur)</span>
+                                }
+                            }
+                            @if (CanCreateStoryInPhase(phase) && phaseDone < phaseItems.Count && TryGetWaveIdForPhase(phase.Name, out var waveId))
+                            {
+                                <button type="button"
+                                        class="ntl-wave-add-btn"
+                                        title="Create a new story in @waveId"
+                                        @onclick="() => OpenNewStoryWizard(waveId)">
+                                    ＋
+                                </button>
+                            }
+                        </div>
+
+                        <!-- Glowing spine line through center -->
+                        <div class="ntl-spine-segment"></div>
+
+                        <!-- Nodes in this phase -->
+                        <div class="ntl-phase-nodes">
+                            @if (_devViewMode == "time")
+                            {
+                                var allPRsInPhase = phaseItems.SelectMany(g => g.LinkedPRs).Distinct().OrderBy(p => p.CreatedAt).ToList();
+                                @* For doc phases that are synthetic PRs, show with lifecycle activities *@
+                                if (allPRsInPhase.Count == 0 && phaseItems.Any(g => g.IsPullRequest))
+                                {
+                                    foreach (var group in phaseItems.Where(g => g.IsPullRequest))
+                                    {
+                                        var docPr = group.Issue;
+                                        var docDuration = GetItemDuration(docPr);
+                                        @* Derive lifecycle activities from matching PR timestamps *@
+                                        var matchingPr = _pullRequests.FirstOrDefault(p => p.Number == docPr.Number);
+                                        var docActivities = matchingPr != null ? GetPrTimeActivities(matchingPr) : new List<TimeActivity>();
+                                        nodeIdx++;
+                                        <div @key="@($"time-doc-{docPr.Number}")" class="ntl-node-cluster" style="--node-delay: @(nodeIdx * 0.06)s">
+                                            <div class="ntl-connector"></div>
+                                            <div class="ntl-cluster-body">
+                                                <div class="ntl-node @(docPr.State == "closed" ? "ntl-node-closed" : "ntl-node-open")"
+                                                     @onclick="() => SelectNode(docPr.Number)" title="@docPr.Title">
+                                                    <div class="ntl-node-indicator @(docPr.State == "closed" ? "ind-merged" : "ind-open")"></div>
+                                                    <div class="ntl-node-body">
+                                                        <span class="ntl-node-num ntl-type-pr">PR #@docPr.Number</span>
+                                                        <span class="ntl-node-title">@TruncateTitle(docPr.Title, 28)</span>
+                                                    </div>
+                                                    <span class="ntl-time-badge-inline @GetTimeDurationClass(docDuration)">@FormatTimeDuration(docDuration)</span>
+                                                </div>
+                                                @if (docActivities.Count > 0)
+                                                {
+                                                    <div class="ntl-children">
+                                                        @foreach (var act in docActivities)
+                                                        {
+                                                            <div class="ntl-child-node ntl-time-activity @(act.IsInProgress ? "ntl-child-active" : "ntl-child-closed")"
+                                                                 @onclick="() => SelectTimeActivity(act)" @onclick:stopPropagation="true"
+                                                                 role="button" style="cursor: pointer;">
+                                                                <span class="ntl-time-icon">@act.Icon</span>
+                                                                <span class="ntl-child-label">@TruncateTitle(act.Label, 40)</span>
+                                                                <span class="ntl-time-badge-sm @GetTimeDurationClass(act.Duration)">
+                                                                    @FormatTimeDuration(act.Duration)
+                                                                    @if (act.IsInProgress) { <span class="pulse-dot"></span> }
+                                                                </span>
+                                                            </div>
+                                                        }
+                                                    </div>
+                                                }
+                                            </div>
+                                        </div>
+                                    }
+                                }
+                                foreach (var pr in allPRsInPhase)
+                                {
+                                    var prMerged = pr.IsMerged;
+                                    var prClosed = pr.State == "closed";
+                                    var prDuration = GetPrDuration(pr);
+                                    var prSpans = GetSpansForPr(pr.Number);
+                                    var prSelected = _selectedPr == pr.Number;
+                                    var prIndClass = prMerged ? "ind-merged" : prClosed ? "ind-closed-pr" : "ind-open";
+                                    nodeIdx++;
+                                    <div @key="@($"time-pr-{pr.Number}")" class="ntl-node-cluster" style="--node-delay: @(nodeIdx * 0.06)s">
+                                        <div class="ntl-connector"></div>
+                                        <div class="ntl-cluster-body">
+                                            <div class="ntl-node @(prMerged ? "ntl-node-closed" : "ntl-node-open") @(prSelected ? "ntl-node-selected" : "")"
+                                                 @onclick="() => SelectPr(pr.Number)" title="@pr.Title">
+                                                <div class="ntl-node-indicator @prIndClass"></div>
+                                                <div class="ntl-node-body">
+                                                    <span class="ntl-node-num ntl-type-pr">PR #@pr.Number</span>
+                                                    <span class="ntl-node-title">@TruncateTitle(pr.Title, 28)</span>
+                                                </div>
+                                                <span class="ntl-time-badge-inline @GetTimeDurationClass(prDuration)">@FormatTimeDuration(prDuration)</span>
+                                            </div>
+                                            @{
+                                                var activities = GetPrTimeActivities(pr);
+                                                if (activities.Count > 0)
+                                                {
+                                                    <div class="ntl-children">
+                                                        @foreach (var act in activities)
+                                                        {
+                                                            <div class="ntl-child-node ntl-time-activity @(act.IsInProgress ? "ntl-child-active" : "ntl-child-closed")"
+                                                                 @onclick="() => SelectTimeActivity(act)" @onclick:stopPropagation="true"
+                                                                 role="button" style="cursor: pointer;">
+                                                                <span class="ntl-time-icon">@act.Icon</span>
+                                                                <span class="ntl-child-label">@TruncateTitle(act.Label, 40)</span>
+                                                                <span class="ntl-time-badge-sm @GetTimeDurationClass(act.Duration)">
+                                                                    @FormatTimeDuration(act.Duration)
+                                                                    @if (act.IsInProgress) { <span class="pulse-dot"></span> }
+                                                                </span>
+                                                            </div>
+                                                        }
+                                                    </div>
+                                                }
+                                            }
+                                        </div>
+                                    </div>
+                                }
+                            }
+                            else
+                            {
+                            @foreach (var group in phaseItems)
+                            {
+                                var issue = group.Issue;
+                                var hasOpenPr = group.LinkedPRs.Any(p => !p.IsMerged && p.State != "closed");
+                                var isImplementationComplete = issue.State == "closed" && hasOpenPr;
+                                var isClosed = issue.State == "closed" && !isImplementationComplete;
+                                var isSelected = _selectedIssue == issue.Number;
+                                var isAwaitingReview = issue.Labels.Any(l => l.Equals("awaiting-human-review", StringComparison.OrdinalIgnoreCase));
+                                nodeIdx++;
+
+                                <div @key="@($"issue-{issue.Number}")" class="ntl-node-cluster" style="--node-delay: @(nodeIdx * 0.06)s">
+                                    <div class="ntl-connector"></div>
+                                    <div class="ntl-cluster-body">
+                                        <div class="ntl-node @(isClosed ? "ntl-node-closed" : "ntl-node-open") @(isSelected ? "ntl-node-selected" : "") @(isAwaitingReview ? "ntl-node-awaiting" : "")"
+                                             @onclick="() => SelectNode(issue.Number)"
+                                             title="@(group.DependsOn.Count > 0 ? $"Blocked by {string.Join(", ", group.DependsOn.Select(d => $"#{d}"))} — {issue.Title}" : issue.Title)">
+                                            <div class="ntl-node-indicator @(isImplementationComplete ? "ind-impl-complete" : isClosed ? "ind-closed" : "ind-open")"></div>
+                                            <div class="ntl-node-body">
+                                                <span class="ntl-node-num ntl-type-@(group.IsPullRequest ? "pr" : "issue")">@(group.IsPullRequest ? "PR" : "Issue") #@issue.Number</span>
+                                                <span class="ntl-node-title">@TruncateTitle(issue.Title, 34)</span>
+                                            </div>
+                                        </div>
+
+                                        @* Child issue nodes *@
+                                        @if (group.ChildIssues.Count > 0)
+                                        {
+                                            <div class="ntl-children">
+                                                @foreach (var child in group.ChildIssues)
+                                                {
+                                                    var childClosed = child.State == "closed";
+                                                    <div @key="@($"child-{child.Number}")" class="ntl-child-node @(childClosed ? "ntl-child-closed" : "ntl-child-open")"
+                                                         @onclick="() => SelectNode(child.Number)" @onclick:stopPropagation="true"
+                                                         title="@child.Title">
+                                                        <div class="ntl-child-indicator @(childClosed ? "ind-closed" : "ind-open")"></div>
+                                                        <span class="ntl-child-label">Issue #@child.Number @TruncateTitle(child.Title, 24)</span>
+                                                    </div>
+                                                }
+                                            </div>
+                                        }
+
+                                        @* Linked PR nodes (shown as children in engineering view) *@
+                                        @if (_devViewMode != "time" && group.LinkedPRs.Count > 0)
+                                        {
+                                            <div class="ntl-children">
+                                                @foreach (var pr in group.LinkedPRs)
+                                                {
+                                                    var prMerged = pr.IsMerged;
+                                                    var prClosed = pr.State == "closed";
+                                                    var prInProgress = pr.Labels.Any(l => l.Equals("in-progress", StringComparison.OrdinalIgnoreCase));
+                                                    // Rework heuristic: PR is open + has awaiting-human-review label,
+                                                    // OR has both in-progress AND ready-for-review labels (engineer is iterating).
+                                                    var prRework = !prMerged && !prClosed && (
+                                                        pr.Labels.Any(l => l.Equals("awaiting-human-review", StringComparison.OrdinalIgnoreCase))
+                                                        || (prInProgress && pr.Labels.Any(l => l.Equals("ready-for-review", StringComparison.OrdinalIgnoreCase)))
+                                                    );
+                                                    var prActive = !prMerged && !prClosed && !prRework && prInProgress;
+                                                    var prSelected = _selectedPr == pr.Number;
+                                                    // Color mapping (per user spec):
+                                                    //   merged    → magenta (ind-merged)
+                                                    //   closed-not-merged → red (ind-closed-pr)
+                                                    //   rework    → amber breathing (ind-rework)
+                                                    //   active    → green breathing (ind-active)
+                                                    //   open(no labels yet) → cyan breathing (ind-open)
+                                                    var prClass = prMerged ? "ntl-child-merged" : prClosed ? "ntl-child-closed" : prRework ? "ntl-child-rework" : prActive ? "ntl-child-active" : "ntl-child-open";
+                                                    var indClass = prMerged ? "ind-merged" : prClosed ? "ind-closed-pr" : prRework ? "ind-rework" : prActive ? "ind-active" : "ind-open";
+                                                    <div @key="@($"pr-{pr.Number}")" class="ntl-child-node ntl-child-pr @prClass @(prSelected ? "ntl-child-selected" : "")"
+                                                         @onclick="() => SelectPr(pr.Number)" @onclick:stopPropagation="true"
+                                                         title="@pr.Title" role="button">
+                                                        <div class="ntl-child-indicator @indClass"></div>
+                                                        <span class="ntl-child-label">PR #@pr.Number @TruncateTitle(pr.Title, 24)</span>
+                                                        @{
+                                                            var defaultPrDur = GetPrDuration(pr);
+                                                        }
+                                                        @if (defaultPrDur > TimeSpan.Zero)
+                                                        {
+                                                            <span class="ntl-time-badge-sm @GetTimeDurationClass(defaultPrDur)" title="PR duration">@FormatTimeDuration(defaultPrDur)</span>
+                                                        }
+                                                        @if (_prWinnerScreenshots.TryGetValue(pr.Number, out var thumbUrl))
+                                                        {
+                                                            <img class="ntl-pr-thumb" src="@thumbUrl" alt="Preview" loading="lazy"
+                                                                 onerror="this.style.display='none';" />
+                                                        }
+                                                    </div>
+                                                }
+                                            </div>
+                                        }
+                                    </div>
+                                </div>
+                            }
+                            }
+                        </div>
+                    </div>
+
+                    @* Phase connector arrow between columns *@
+                    <div class="ntl-wave-connector">
+                        <div class="ntl-wave-arrow">→</div>
+                    </div>
+                }
+
+                @* Upcoming phase placeholders — show what's coming next (hidden in Time View) *@
+                @if (_devViewMode != "time")
+                {
+                    @foreach (var upcoming in GetUpcomingPhases())
+                    {
+                        <div @key="@($"upcoming-{upcoming.Name}")" class="ntl-phase-column ntl-phase-upcoming @GetPhaseClass(upcoming.Name)">
+                            <div class="ntl-phase-label">
+                                <span class="ntl-phase-name">@upcoming.Name</span>
+                                <span class="ntl-phase-counter ntl-upcoming-badge">Upcoming</span>
+                            </div>
+                            <div class="ntl-spine-segment ntl-spine-upcoming"></div>
+                            <div class="ntl-phase-nodes ntl-upcoming-content">
+                                <div class="ntl-upcoming-pulse">
+                                    <div class="ntl-upcoming-ring"></div>
+                                    <span class="ntl-upcoming-text">Awaiting agents…</span>
+                                </div>
+                            </div>
+                        </div>
+                    }
+                }
+            </div>
+        </div>
+
+        <!-- Edge fade overlays -->
+        <div class="ntl-edge-fade ntl-edge-left"></div>
+        <div class="ntl-edge-fade ntl-edge-right"></div>
+        <button class="ntl-scroll-arrow ntl-scroll-arrow-right ntl-arrow-hidden" id="ntl-arrow-right" type="button" aria-label="Scroll timeline right">▶</button>
+    </div>
+
+    <!-- Detail panel for selected issue -->
+    @if (_selectedIssue.HasValue && _selectedGroup is { } sg)
+    {
+        <div class="ntl-detail-panel">
+            <div class="ntl-detail-header">
+                <a class="ntl-detail-num ntl-type-@(sg.IsPullRequest ? "pr" : "issue")" href="@(sg.IsPullRequest ? LinkService.BuildPullRequestUrl(sg.Issue.Number, sg.Issue.Url) : LinkService.BuildIssueUrl(sg.Issue.Number, sg.Issue.Url))" target="@LinkService.TargetForUrl(sg.IsPullRequest ? LinkService.BuildPullRequestUrl(sg.Issue.Number, sg.Issue.Url) : LinkService.BuildIssueUrl(sg.Issue.Number, sg.Issue.Url))" title="@(LinkService.InternalNavigationDefault ? "View in dashboard" : $"Open on {LinkService.PlatformDisplayName}")">
+                    @(sg.IsPullRequest ? "PR" : "Issue") #@sg.Issue.Number @(LinkService.InternalNavigationDefault ? "" : "↗")
+                </a>
+                @{
+                    var detailHasOpenPr = sg.LinkedPRs.Any(p => !p.IsMerged && p.State != "closed");
+                    var detailImplComplete = sg.Issue.State == "closed" && detailHasOpenPr;
+                    var detailClosed = sg.Issue.State == "closed" && !detailImplComplete;
+                }
+                <span class="ntl-detail-state @(detailImplComplete ? "state-impl-complete" : detailClosed ? "state-closed" : "state-open")">
+                    @(detailImplComplete ? "◐ Awaiting Merge" : detailClosed ? "✓ Closed" : "● Open")
+                </span>
+                <button class="ntl-detail-close" @onclick="() => SelectNode(null)">✕</button>
+            </div>
+            <h3 class="ntl-detail-title">@sg.Issue.Title</h3>
+            <div class="ntl-detail-meta">
+                @if (!string.IsNullOrEmpty(sg.Issue.AssignedAgent))
+                {
+                    <span class="ntl-detail-agent">👤 @sg.Issue.AssignedAgent</span>
+                }
+                <span class="ntl-detail-date">📅 <LocalTimeText Value="sg.Issue.CreatedAt" /></span>
+            </div>
+            @if (sg.Issue.Labels.Count > 0)
+            {
+                <div class="ntl-detail-labels">
+                    @foreach (var label in sg.Issue.Labels)
+                    {
+                        <span class="ntl-label">@label</span>
+                    }
+                </div>
+            }
+            @if (!string.IsNullOrEmpty(sg.Wave))
+            {
+                <div class="ntl-detail-wave">
+                    <span class="ntl-detail-section-title">Wave &amp; Dependencies</span>
+                    <div class="ntl-detail-wave-info">
+                        <span class="ntl-wave-pill">📦 @sg.Wave</span>
+                        @if (sg.DependsOn.Count > 0)
+                        {
+                            <span class="ntl-dep-pill">🔗 Blocked by @(string.Join(", ", sg.DependsOn.Select(d => $"#{d}")))</span>
+                        }
+                        else
+                        {
+                            <span class="ntl-dep-pill ntl-dep-none">No blockers</span>
+                        }
+                    </div>
+                </div>
+            }
+            @if (sg.ChildIssues.Count > 0)
+            {
+                <div class="ntl-detail-prs">
+                    <span class="ntl-detail-section-title">Child Issues</span>
+                    @foreach (var child in sg.ChildIssues)
+                    {
+                        <div class="ntl-detail-pr @(child.State == "closed" ? "merged" : "open")"
+                             @onclick="() => SelectNode(child.Number)">
+                            <span class="ntl-detail-pr-indicator @(child.State == "closed" ? "ind-closed" : "ind-open")"></span>
+                            <a class="ntl-detail-pr-num" href="@LinkService.BuildIssueUrl(child.Number, child.Url)" target="@LinkService.TargetForUrl(LinkService.BuildIssueUrl(child.Number, child.Url))" rel="@(LinkService.IsInternal(LinkService.BuildIssueUrl(child.Number, child.Url)) ? null : "noopener")" @onclick:stopPropagation="true">Issue #@child.Number</a>
+                            <span class="ntl-detail-pr-title">@TruncateTitle(child.Title, 60)</span>
+                        </div>
+                    }
+                </div>
+            }
+            @if (sg.LinkedPRs.Count > 0)
+            {
+                <div class="ntl-detail-prs" style="margin-top: 8px;">
+                    <span class="ntl-detail-section-title">Linked Pull Requests</span>
+                    @foreach (var pr in sg.LinkedPRs)
+                    {
+                        var detPrActive = !pr.IsMerged && pr.State != "closed" && pr.Labels.Any(l => l.Equals("in-progress", StringComparison.OrdinalIgnoreCase));
+                        <div class="ntl-detail-pr @(pr.IsMerged ? "merged" : pr.State == "closed" ? "closed" : detPrActive ? "active" : "open")"
+                             @onclick="() => SelectPr(pr.Number)" role="button" title="Open PR details">
+                            <span class="ntl-detail-pr-indicator @(pr.IsMerged ? "ind-merged" : pr.State == "closed" ? "ind-closed-pr" : detPrActive ? "ind-active-pr" : "ind-open-pr")"></span>
+                            <a class="ntl-detail-pr-num" href="@LinkService.BuildPullRequestUrl(pr.Number, pr.Url)" target="@LinkService.TargetForUrl(LinkService.BuildPullRequestUrl(pr.Number, pr.Url))" rel="@(LinkService.IsInternal(LinkService.BuildPullRequestUrl(pr.Number, pr.Url)) ? null : "noopener")" @onclick:stopPropagation="true">PR #@pr.Number</a>
+                            <span class="ntl-detail-pr-title">@TruncateTitle(pr.Title, 60)</span>
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    }
+
+    @* Detail panel for selected PR (click a PR child node to open) *@
+    @if (_selectedPr.HasValue && _selectedPrObj is { } spr)
+    {
+        var screenshotUrl = BuildReadyForReviewScreenshotUrl(spr);
+        <div class="ntl-detail-panel ntl-detail-pr-panel" id="ntl-detail-panel">
+            <button class="ntl-detail-scroll-arrow ntl-detail-scroll-up ntl-arrow-hidden" id="ntl-detail-scroll-up" type="button" aria-label="Scroll up for more">▲</button>
+            <div class="ntl-detail-header">
+                <a class="ntl-detail-num ntl-type-pr" href="@LinkService.BuildPullRequestUrl(spr.Number, spr.Url)" target="@LinkService.TargetForUrl(LinkService.BuildPullRequestUrl(spr.Number, spr.Url))" title="@(LinkService.InternalNavigationDefault ? "View in dashboard" : $"Open on {LinkService.PlatformDisplayName}")">
+                    PR #@spr.Number @(LinkService.InternalNavigationDefault ? "" : "↗")
+                </a>
+                <span class="ntl-detail-state @(spr.IsMerged ? "state-merged" : spr.State == "closed" ? "state-closed" : "state-open")">
+                    @(spr.IsMerged ? "✓ Merged" : spr.State == "closed" ? "✕ Closed" : "● Open")
+                </span>
+                <button class="ntl-detail-close" @onclick="() => SelectPr(null)">✕</button>
+            </div>
+            <h3 class="ntl-detail-title">@spr.Title</h3>
+            <div class="ntl-detail-meta">
+                <span class="ntl-detail-agent">🌿 @spr.HeadBranch → @spr.BaseBranch</span>
+                <span class="ntl-detail-date">📅 <LocalTimeText Value="spr.CreatedAt" /></span>
+                @if (spr.MergedAt.HasValue)
+                {
+                    <span class="ntl-detail-date">✓ merged <LocalTimeText Value="spr.MergedAt.Value" /></span>
+                }
+            </div>
+            @if (spr.Labels.Count > 0)
+            {
+                <div class="ntl-detail-labels">
+                    @foreach (var label in spr.Labels)
+                    {
+                        <span class="ntl-label">@label</span>
+                    }
+                </div>
+            }
+            @* PR Lifecycle Timeline — shows merge progress stages *@
+            <div style="margin: 8px 0;">
+                <VirtualDevTeam.Dashboard.Components.Shared.PrLifecycleTimeline Stages="@_selectedPrLifecycle" />
+            </div>
+            @{ var candidates = GetScreenshotCandidates(spr); }
+            @if (candidates.Count > 0)
+            {
+            <div class="ntl-detail-prs ntl-detail-gallery-row" style="margin-top: 8px;">
+                <span class="ntl-detail-section-title">Ready-for-Review Previews</span>
+                <div class="ntl-screenshot-gallery">
+                    @foreach (var cand in candidates)
+                    {
+                        var tileClass = cand.IsWinner ? "ntl-screenshot-tile ntl-screenshot-winner" : "ntl-screenshot-tile";
+                        @if (!string.IsNullOrEmpty(cand.ImageUrl))
+                        {
+                            var previewTitle = $"PR #{spr.Number} — {cand.MethodLabel}";
+                            <div class="@tileClass" role="button" tabindex="0"
+                               title="@(cand.IsWinner ? $"Winning candidate ({cand.MethodLabel})" : cand.MethodLabel)"
+                               @onclick="() => OpenTimelinePreview(cand.ImageUrl, previewTitle)"
+                               @onclick:stopPropagation="true">
+                            <div class="ntl-screenshot-image-wrap">
+                                <img src="@cand.ImageUrl"
+                                     alt="PR #@spr.Number @cand.MethodLabel preview"
+                                     loading="lazy"
+                                     onerror="this.style.display='none'; this.parentElement.classList.add('is-pending');" />
+                                <div class="ntl-screenshot-pending">
+                                    @if (cand.IsWinner)
+                                    {
+                                        <div class="ntl-screenshot-spinner"></div>
+                                        <span class="ntl-screenshot-pending-text">Capturing…</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="ntl-screenshot-pending-text">No preview</span>
+                                    }
+                                </div>
+                            </div>
+                            <div class="ntl-screenshot-tile-footer">
+                                @if (cand.IsWinner)
+                                {
+                                    <span class="ntl-screenshot-badge">🏆</span>
+                                }
+                                <span class="ntl-screenshot-method">@cand.MethodLabel</span>
+                            </div>
+                        </div>
+                        }
+                        else
+                        {
+                            <div class="@tileClass ntl-screenshot-no-image"
+                                 title="No preview available">
+                                <div class="ntl-screenshot-image-wrap">
+                                    <div class="ntl-screenshot-pending">
+                                        <span class="ntl-screenshot-pending-text">No preview</span>
+                                    </div>
+                                </div>
+                                <div class="ntl-screenshot-tile-footer">
+                                    <span class="ntl-screenshot-method">@cand.MethodLabel</span>
+                                </div>
+                            </div>
+                        }
+                    }
+                </div>
+            </div>
+            }
+            @{ var parentIssueNumber = PullRequestWorkflow.ParseLinkedIssueNumber(spr.Body); }
+            @if (parentIssueNumber.HasValue && _groupLookup.ContainsKey(parentIssueNumber.Value))
+            {
+                <div class="ntl-detail-prs" style="margin-top: 8px;">
+                    <span class="ntl-detail-section-title">Linked Issue</span>
+                    <div class="ntl-detail-pr open" @onclick="() => SelectNode(parentIssueNumber.Value)" role="button">
+                        <span class="ntl-detail-pr-indicator ind-open"></span>
+                        <span class="ntl-detail-pr-num">Issue #@parentIssueNumber.Value</span>
+                        <span class="ntl-detail-pr-title">View parent issue details</span>
+                    </div>
+                </div>
+            }
+            <button class="ntl-detail-scroll-arrow ntl-arrow-hidden" id="ntl-detail-scroll-down" type="button" aria-label="Scroll down for more">▼</button>
+        </div>
+    }
+
+    @* Detail panel for selected time activity (Issue 5) *@
+    @if (_selectedTimeActivity is { } sta)
+    {
+        <div class="ntl-detail-panel">
+            <div class="ntl-detail-header">
+                <span class="ntl-detail-num">@sta.Icon Activity</span>
+                <span class="ntl-detail-state @(sta.IsInProgress ? "state-open" : "state-closed")">
+                    @(sta.IsInProgress ? "● In Progress" : "✓ Complete")
+                </span>
+                <button class="ntl-detail-close" @onclick="() => { _selectedTimeActivity = null; }">✕</button>
+            </div>
+            <h3 class="ntl-detail-title">@sta.Name</h3>
+            <div class="ntl-detail-meta">
+                <span class="ntl-detail-agent">⏱️ Duration: @FormatTimeDuration(sta.Duration)</span>
+            </div>
+        </div>
+    }
+}
+
+@if (_previewImageUrl is not null)
+{
+    <div class="ntl-lightbox-overlay" @onclick="CloseTimelinePreview">
+        <div class="ntl-lightbox-content" @onclick:stopPropagation="true">
+            <div class="ntl-lightbox-header">
+                <span class="ntl-lightbox-title">@_previewTitle</span>
+                <button class="ntl-lightbox-close" @onclick="CloseTimelinePreview">✕</button>
+            </div>
+            <img src="@_previewImageUrl" alt="@_previewTitle" class="ntl-lightbox-image" />
+        </div>
+    </div>
+}
+
+@if (_showNewStoryWizard && !string.IsNullOrWhiteSpace(_newStoryWave))
+{
+    <NewStoryWizard Wave="@_newStoryWave" OnCancel="CloseNewStoryWizardAsync" OnCreated="HandleStoryCreatedAsync" />
+}
+
+@code {
+    private List<PlatformWorkItem> _issues = [];
+    private List<PlatformPullRequest> _pullRequests = [];
+    private List<PlatformWorkItem> _rawIssues = [];
+    private List<PlatformPullRequest> _rawPullRequests = [];
+    private List<NeonPhase> _phases = [];
+    private HashSet<int> _syntheticPrNumbers = new(); // tracks which issue numbers are actually PRs
+    private string _dataFingerprint = ""; // hash to detect actual data changes
+    private bool _loading = true;
+    private bool _initialLoadComplete;
+    private bool _refreshing;
+    private bool _isRateLimited;
+    private bool _showNewStoryWizard;
+    private int _closedCount;
+    /// <summary>
+    /// Issues that are truly complete: closed AND no open/unmerged PRs pending.
+    /// Used for progress bar to avoid showing 100% when a re-created PR is still in review.
+    /// </summary>
+    private int _completedCount;
+    private int _openCount;
+    private EnabledStrategiesInfo? _enabledInfo;
+    private string? _previewImageUrl;
+    private string? _previewTitle;
+    private string? _newStoryWave;
+    private string? _storySuccessMessage;
+
+    private string _statusFilter = "all";
+    private string _devViewMode = "engineering"; // "engineering" = engineering-task issues with PR children, "time" = timing breakdown
+    private TimeSpan _totalProjectTime;
+    private string _designTheme = "default"; // "default", "blueprint", "metro", "cards"
+    private int _zoomPercent = 100;
+    private int? _selectedIssue;
+    private IssueGroup? _selectedGroup;
+    private int? _selectedPr;
+    private PlatformPullRequest? _selectedPrObj;
+    private SelectedTimeActivityInfo? _selectedTimeActivity;
+
+    private Dictionary<int, IssueGroup> _groupLookup = new();
+    /// <summary>Precomputed winning screenshot URL per PR number — avoids per-card CandidateStore scans.</summary>
+    private Dictionary<int, string> _prWinnerScreenshots = new();
+
+    private CancellationTokenSource _refreshCts = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        // OnChange fires when DashboardDataService cache refreshes — but the poll
+        // already picks up changes every 30s, so we only use OnChange for the
+        // initial load race. Subsequent updates come from the poll loop only,
+        // avoiding redundant BuildTimeline + StateHasChanged calls that cause
+        // jarring visual resets every few seconds.
+        DataService.OnChange += OnDataChanged;
+        try { _enabledInfo = await StrategiesService.GetEnabledAsync(); } catch { /* standalone fallback */ }
+
+        // First load: show overlay only if we have no prior data. On subsequent
+        // navigations back to this page, _initialLoadComplete is false (new component
+        // instance) but DashboardDataService cache returns instantly so the await
+        // completes in <1ms — no visible loading state.
+        await LoadDataAsync(showOverlay: true);
+        _ = PollForUpdatesAsync(_refreshCts.Token);
+        _ = Task.Run(async () => { await Task.Delay(1500); await InvokeAsync(InitScrollArrowsAsync); });
+    }
+
+    /// <summary>
+    /// Background poll — refreshes timeline every 30s. Uses cached data from
+    /// DashboardDataService so it only hits the platform API when the cache expires.
+    /// Fingerprint check prevents unnecessary re-renders when data hasn't changed.
+    /// </summary>
+    private async Task PollForUpdatesAsync(CancellationToken ct)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(30));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(ct))
+            {
+                await LoadDataAsync();
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private async Task LoadDataAsync(bool showOverlay = false)
+    {
+        // Delay overlay by 200ms — if cache hits, data arrives instantly and no flash.
+        // Only show loading state if the fetch actually takes time (cache miss / API call).
+        CancellationTokenSource? overlayCts = null;
+        if (showOverlay)
+        {
+            overlayCts = new CancellationTokenSource();
+            var token = overlayCts.Token;
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await Task.Delay(200, token);
+                    await InvokeAsync(() => { _loading = true; StateHasChanged(); });
+                }
+                catch (OperationCanceledException) { }
+            });
+        }
+        _isRateLimited = DataService.IsRateLimited;
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            var issuesTask = DataService.GetWorkItemsAsync();
+            var prsTask = DataService.GetPullRequestsAsync();
+            try { await Task.WhenAll(issuesTask, prsTask).WaitAsync(cts.Token); }
+            catch (OperationCanceledException) { }
+
+            var newIssues = issuesTask.IsCompletedSuccessfully && issuesTask.Result != null ? issuesTask.Result.ToList() : null;
+            var newPRs = prsTask.IsCompletedSuccessfully && prsTask.Result != null ? prsTask.Result.ToList() : null;
+            _isRateLimited = DataService.IsRateLimited;
+
+            // Guard: never replace existing data with empty/partial results from a timeout.
+            // If we already have data and the new fetch returned nothing (timeout/error),
+            // keep the existing data to prevent timeline flickering.
+            var effectiveIssues = newIssues ?? _rawIssues;
+            var effectivePRs = newPRs ?? _rawPullRequests;
+
+            // Compute fingerprint: issue/PR numbers + states + labels count + PR merged status
+            var fp = ComputeFingerprint(effectiveIssues, effectivePRs);
+            if (fp == _dataFingerprint && !showOverlay)
+                return; // nothing changed — skip rebuild and re-render
+
+            // Mutate state + trigger render atomically on the UI thread
+            // to prevent race conditions with the Blazor render tree diff builder
+            await InvokeAsync(() =>
+            {
+                overlayCts?.Cancel();
+                _rawIssues = effectiveIssues;
+                _rawPullRequests = effectivePRs;
+                _dataFingerprint = fp;
+                BuildTimeline();
+
+                if (_phases.Count == 0)
+                    _ = RetryAfterDelay(TimeSpan.FromSeconds(_isRateLimited ? 30 : 15));
+
+                _loading = false;
+                _initialLoadComplete = true;
+                StateHasChanged();
+            });
+        }
+        catch
+        {
+            // Transient error — keep existing data if we have any, only show
+            // empty state on the very first load (no prior data).
+            if (_initialLoadComplete) return;
+
+            await InvokeAsync(() =>
+            {
+                overlayCts?.Cancel();
+                BuildTimeline();
+                _ = RetryAfterDelay(TimeSpan.FromSeconds(15));
+                _loading = false;
+                _initialLoadComplete = true;
+                StateHasChanged();
+            });
+        }
+    }
+
+    /// <summary>
+    /// Cheap fingerprint of issue/PR data to detect real changes without rebuilding the whole timeline.
+    /// </summary>
+    private static string ComputeFingerprint(List<PlatformWorkItem> issues, List<PlatformPullRequest> prs)
+    {
+        var hash = new System.HashCode();
+        hash.Add(issues.Count);
+        hash.Add(prs.Count);
+        foreach (var i in issues)
+        {
+            hash.Add(i.Number);
+            hash.Add(i.State);
+            hash.Add(i.Labels.Count);
+            hash.Add(i.UpdatedAt?.Ticks ?? 0);
+        }
+        foreach (var p in prs)
+        {
+            hash.Add(p.Number);
+            hash.Add(p.State);
+            hash.Add(p.IsMerged);
+            hash.Add(p.UpdatedAt?.Ticks ?? 0);
+        }
+        return hash.ToHashCode().ToString();
+    }
+
+    private async Task RetryAfterDelay(TimeSpan delay)
+    {
+        await Task.Delay(delay);
+        if (_phases.Count == 0)
+        {
+            await LoadDataAsync(showOverlay: !_initialLoadComplete);
+        }
+    }
+
+    private void BuildTimeline()
+    {
+        try
+        {
+            BuildTimelineCore();
+            ComputeTotalProjectTime();
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"BuildTimeline error: {ex}");
+            _phases = [];
+            _groupLookup = new();
+        }
+    }
+
+    private void BuildTimelineCore()
+    {
+        // Work from raw copies so this method can be re-called (e.g., on view toggle)
+        _issues = _rawIssues.ToList();
+        _pullRequests = _rawPullRequests.ToList();
+        _syntheticPrNumbers.Clear();
+
+        // --- Step 1: Detect the latest run's start from the newest Research PR ---
+        // Each run creates Research → PM Spec → Architecture PRs. The newest Research PR
+        // marks the start of the latest run cycle.
+        var latestResearchPr = _pullRequests
+            .Where(p => p.Title.StartsWith("Researcher:", StringComparison.OrdinalIgnoreCase)
+                     && p.Labels.Contains("AI-Generated", StringComparer.OrdinalIgnoreCase))
+            .OrderByDescending(p => p.CreatedAt)
+            .FirstOrDefault();
+        var runCutoff = latestResearchPr?.CreatedAt.AddMinutes(-1) ?? DateTime.MinValue;
+
+        // Filter issues and PRs to only the latest run
+        _issues = _issues.Where(i => i.CreatedAt >= runCutoff).ToList();
+        _pullRequests = _pullRequests.Where(p => p.CreatedAt >= runCutoff).ToList();
+
+        // Run scope filter: exclude PRs from previous runs (they survive minimal reset
+        // because GitHub keeps merged/closed PR history). Only show PRs whose branch
+        // contains the current run scope prefix, OR PRs without an agent/ branch prefix
+        // (doc PRs, external PRs). Also filter by AI-Generated label to exclude unrelated
+        // PRs in shared repos with active development.
+        var currentRunScope = BranchProvider?.RunScope;
+
+        // Run scope filter for ISSUES: engineering-task issues from the current run are
+        // always created AFTER the Research PR (runCutoff). Using engineer PR timestamps
+        // as the anchor is wrong — engineer PRs open 5-30+ min after eng-task issues
+        // are created, so a PR-based anchor filters out the very issues Development
+        // wave columns need. Use runCutoff instead (anchored on newest Research PR).
+        _issues = _issues.Where(i =>
+        {
+            if (!i.Labels.Any(l => l.Equals("engineering-task", StringComparison.OrdinalIgnoreCase)))
+                return true;
+            return i.CreatedAt >= runCutoff;
+        }).ToList();
+        // Build a set of current-run issue numbers for cross-run PR adoption check
+        var currentRunIssueNumbers = new HashSet<int>(_issues.Select(i => i.Number));
+
+        if (currentRunScope is not null)
+        {
+            _pullRequests = _pullRequests.Where(p =>
+            {
+                // No branch info → keep (synthetic/doc PRs)
+                if (string.IsNullOrEmpty(p.HeadBranch)) return true;
+                // Agent branches: must match current run scope
+                if (p.HeadBranch.StartsWith("agent/", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (p.HeadBranch.Contains($"/{currentRunScope}/", StringComparison.OrdinalIgnoreCase))
+                        return true;
+                    // Cross-run PRs adopted by the current run: the SE reuses a PR from a
+                    // prior run scope instead of creating a new one. Include it if its body
+                    // links to a current-run issue (Closes #N).
+                    var linked = PullRequestWorkflow.ParseLinkedIssueNumber(p.Body);
+                    return linked.HasValue && currentRunIssueNumbers.Contains(linked.Value);
+                }
+                // Non-agent branches: only keep known VDT doc PRs by title prefix
+                // to prevent external developer PRs from leaking into the timeline
+                var t = p.Title;
+                return t.StartsWith("Researcher:", StringComparison.OrdinalIgnoreCase)
+                    || t.StartsWith("ProgramManager:", StringComparison.OrdinalIgnoreCase)
+                    || t.StartsWith("Architect:", StringComparison.OrdinalIgnoreCase)
+                    || p.Labels.Any(l => string.Equals(l, "AI-Generated", StringComparison.OrdinalIgnoreCase));
+            }).ToList();
+        }
+
+        // Label filter: only show issues with VDT labels (AI-Generated, engineering-task,
+        // or enhancement — needed for ADO which doesn't auto-apply AI-Generated)
+        _issues = _issues.Where(i =>
+            i.Labels.Any(l => string.Equals(l, "AI-Generated", StringComparison.OrdinalIgnoreCase)
+                           || string.Equals(l, "engineering-task", StringComparison.OrdinalIgnoreCase)
+                           || string.Equals(l, "enhancement", StringComparison.OrdinalIgnoreCase))
+        ).ToList();
+
+        // Deduplicate by title (safety net — keep newest)
+        _issues = _issues
+            .GroupBy(i => i.Title.Trim(), StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.OrderByDescending(i => i.Number).First())
+            .ToList();
+        _pullRequests = _pullRequests
+            .GroupBy(p => p.Title.Trim(), StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.OrderByDescending(p => p.Number).First())
+            .ToList();
+
+        // --- Step 2: Add doc PRs as synthetic timeline items ---
+        // Research, PM Spec, and Architecture phases are PRs, not issues.
+        // Create synthetic work item entries so they appear as timeline nodes.
+        // But skip if a real issue from the same agent already exists (avoids duplicates).
+        var existingNumbers = _issues.Select(i => i.Number).ToHashSet();
+        foreach (var pr in _pullRequests)
+        {
+            if (existingNumbers.Contains(pr.Number)) continue;
+            var t = pr.Title;
+            // Require AI-Generated label to prevent non-VDT PRs with matching titles
+            // (e.g., "Researcher: Initial Study" from a human) from becoming timeline nodes
+            var hasVdtLabel = pr.Labels.Contains("AI-Generated", StringComparer.OrdinalIgnoreCase);
+            bool isDocPr = hasVdtLabel
+                && (t.StartsWith("Researcher:", StringComparison.OrdinalIgnoreCase)
+                || t.StartsWith("ProgramManager:", StringComparison.OrdinalIgnoreCase)
+                || t.StartsWith("Architect:", StringComparison.OrdinalIgnoreCase));
+            bool isFinalIntegration = hasVdtLabel
+                && PullRequestWorkflow.Labels.IsFinalIntegrationPr(pr.Labels, t, pr.HeadBranch);
+            if (isDocPr || isFinalIntegration)
+            {
+                // Extract agent prefix (e.g., "Researcher:") and skip if a real issue
+                // from the same agent already exists — the real issue is sufficient.
+                var colonIdx = t.IndexOf(':');
+                if (colonIdx > 0)
+                {
+                    var prefix = t[..(colonIdx + 1)];
+                    if (_issues.Any(i => i.Title.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
+                        continue;
+                }
+
+                _syntheticPrNumbers.Add(pr.Number);
+                _issues.Add(new PlatformWorkItem
+                {
+                    Number = pr.Number,
+                    Title = pr.Title,
+                    Body = pr.Body,
+                    State = pr.IsMerged ? "closed" : pr.State,
+                    CreatedAt = pr.CreatedAt,
+                    UpdatedAt = pr.UpdatedAt,
+                    Labels = pr.Labels,
+                    Url = pr.Url,
+                    AssignedAgent = pr.AssignedAgent
+                });
+            }
+        }
+
+        // --- Step 2a: Anchor Research/PMSpec/Architect phases when preserved across a mini-reset ---
+        // After a mini-reset the current run has no new Researcher/PM/Architect PRs (the docs
+        // were kept on disk), so Steps 1/2 leave those phases empty and the timeline starts
+        // abruptly at Development. Reach back into the full raw PR list and graft the most
+        // recent PR of each doc-phase prefix as a synthetic item if the phase is otherwise
+        // empty — giving the user visible "Research ✓ / PM Spec ✓ / Architecture ✓" columns.
+        string[] docPrefixes = { "Researcher:", "ProgramManager:", "Architect:" };
+        foreach (var prefix in docPrefixes)
+        {
+            bool alreadyPresent = _issues.Any(i => i.Title.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
+            if (alreadyPresent) continue;
+
+            var anchorPr = _rawPullRequests
+                .Where(p => p.Title.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(p => p.CreatedAt)
+                .FirstOrDefault();
+            if (anchorPr is null) continue;
+
+            _syntheticPrNumbers.Add(anchorPr.Number);
+            _issues.Add(new PlatformWorkItem
+            {
+                Number = anchorPr.Number,
+                Title = anchorPr.Title,
+                Body = anchorPr.Body,
+                State = anchorPr.IsMerged ? "closed" : anchorPr.State,
+                CreatedAt = anchorPr.CreatedAt,
+                UpdatedAt = anchorPr.UpdatedAt,
+                Labels = anchorPr.Labels,
+                Url = anchorPr.Url,
+                AssignedAgent = anchorPr.AssignedAgent
+            });
+            if (!_pullRequests.Any(p => p.Number == anchorPr.Number))
+                _pullRequests.Add(anchorPr);
+        }
+
+        // --- Step 2b: Remove older engineering-task duplicates ---
+        // When multiple runs create eng tasks for the same parent, keep only the latest burst.
+        // Detect the latest burst: eng tasks created within 24 hours of the newest eng task.
+        // (Previously 30 min — too aggressive; tasks can be created in waves over several hours.)
+        // The run-cutoff filter at Step 1 already scopes to the current run, so this is a
+        // safety net for multi-run repos where the same parent issue gets re-planned.
+        var engTasks = _issues.Where(i => i.Labels.Any(l => l.Equals("engineering-task", StringComparison.OrdinalIgnoreCase))).ToList();
+        if (engTasks.Count > 0)
+        {
+            var newestEngTime = engTasks.Max(e => e.CreatedAt);
+            var burstCutoff = newestEngTime.AddHours(-24);
+            var latestBurstNumbers = engTasks.Where(e => e.CreatedAt >= burstCutoff).Select(e => e.Number).ToHashSet();
+            // Remove older eng tasks that aren't in the latest burst
+            _issues = _issues.Where(i =>
+                !i.Labels.Any(l => l.Equals("engineering-task", StringComparison.OrdinalIgnoreCase))
+                || latestBurstNumbers.Contains(i.Number)
+            ).ToList();
+        }
+
+        // --- Step 3: Build issue→PR links (for detail panel) ---
+        var prsByIssue = new Dictionary<int, List<PlatformPullRequest>>();
+        foreach (var pr in _pullRequests)
+        {
+            var linked = PullRequestWorkflow.ParseLinkedIssueNumber(pr.Body);
+            if (linked.HasValue)
+            {
+                if (!prsByIssue.ContainsKey(linked.Value)) prsByIssue[linked.Value] = [];
+                prsByIssue[linked.Value].Add(pr);
+            }
+        }
+
+        // --- Step 4: Build parent→child issue relationships ---
+        // Enhancement (PM) issues are parents; engineering-task issues are children.
+        var childIssueNumbers = new HashSet<int>();
+        var childrenByParent = new Dictionary<int, List<PlatformWorkItem>>();
+        // Also build engineering-task → linked PRs for engineering view
+        var engTaskPRs = new Dictionary<int, List<PlatformPullRequest>>();
+        foreach (var issue in _issues)
+        {
+            foreach (var parentIssue in _issues)
+            {
+                if (parentIssue.Number == issue.Number) continue;
+                var parentLabels = parentIssue.Labels.Select(l => l.ToLowerInvariant()).ToList();
+                var childLabels = issue.Labels.Select(l => l.ToLowerInvariant()).ToList();
+                if (parentLabels.Contains("enhancement") && childLabels.Contains("engineering-task"))
+                {
+                    if (issue.Body?.Contains($"#{parentIssue.Number}") == true)
+                    {
+                        if (!childrenByParent.ContainsKey(parentIssue.Number))
+                            childrenByParent[parentIssue.Number] = [];
+                        childrenByParent[parentIssue.Number].Add(issue);
+                        childIssueNumbers.Add(issue.Number);
+                    }
+                }
+            }
+
+            // For engineering view: map PRs to their engineering-task issues
+            if (issue.Labels.Any(l => l.Equals("engineering-task", StringComparison.OrdinalIgnoreCase)))
+            {
+                engTaskPRs[issue.Number] = prsByIssue.GetValueOrDefault(issue.Number, []).OrderBy(p => p.CreatedAt).ToList();
+            }
+        }
+
+        // --- Step 5: Build groups sorted by issue number (ascending) ---
+        // Engineering-task issues are top-level with linked PRs as children
+        _groupLookup.Clear();
+        var groups = new List<IssueGroup>();
+
+        {
+            // Engineering view: engineering-task issues become top-level in Development.
+            // Non-engineering items (doc phases, enhancements) stay as-is.
+            // Also treat issues with wave metadata in body as engineering tasks (foundation task may lack the label).
+            foreach (var issue in _issues.OrderBy(i => i.Number))
+            {
+                var isEngTask = issue.Labels.Any(l => l.Equals("engineering-task", StringComparison.OrdinalIgnoreCase));
+                var waveFromBody = ParseWaveFromBody(issue.Body);
+                var hasWaveMetadata = waveFromBody.Length > 0;
+
+                if (isEngTask || hasWaveMetadata)
+                {
+                    var g = new IssueGroup
+                    {
+                        Issue = issue,
+                        LinkedPRs = engTaskPRs.GetValueOrDefault(issue.Number, []),
+                        ChildIssues = [],
+                        IsPullRequest = _syntheticPrNumbers.Contains(issue.Number),
+                        Wave = waveFromBody,
+                        DependsOn = ParseDependsOnFromBody(issue.Body)
+                    };
+                    groups.Add(g);
+                    _groupLookup[issue.Number] = g;
+                }
+                else if (!childIssueNumbers.Contains(issue.Number))
+                {
+                    var g = new IssueGroup
+                    {
+                        Issue = issue,
+                        // Exclude self-referencing PRs for synthetic PR issues (doc phases)
+                        LinkedPRs = prsByIssue.GetValueOrDefault(issue.Number, [])
+                            .Where(p => !_syntheticPrNumbers.Contains(issue.Number) || p.Number != issue.Number)
+                            .OrderBy(p => p.CreatedAt).ToList(),
+                        ChildIssues = [],
+                        IsPullRequest = _syntheticPrNumbers.Contains(issue.Number)
+                    };
+                    groups.Add(g);
+                    _groupLookup[issue.Number] = g;
+                }
+            }
+        }
+        // Always ensure child issues are in lookup for detail panel navigation
+        foreach (var issue in _issues.Where(i => childIssueNumbers.Contains(i.Number)))
+        {
+            if (!_groupLookup.ContainsKey(issue.Number))
+            {
+                _groupLookup[issue.Number] = new IssueGroup
+                {
+                    Issue = issue,
+                    LinkedPRs = prsByIssue.GetValueOrDefault(issue.Number, [])
+                        .Where(p => !_syntheticPrNumbers.Contains(issue.Number) || p.Number != issue.Number)
+                        .OrderBy(p => p.CreatedAt).ToList(),
+                    ChildIssues = [],
+                    IsPullRequest = _syntheticPrNumbers.Contains(issue.Number)
+                };
+            }
+        }
+
+        // --- Step 6: Group into phases ---
+        // In PM view: "Development" shows enhancement issues (PM user stories) with eng-task children
+        // In Engineering view: Development is split into wave sub-phases (W0, W1, W2, ...)
+        var staticPhases = new[]
+        {
+            ("Research",      "🔍", "research"),
+            ("PM Spec",       "📝", "pmspec"),
+            ("Architecture",  "🏗️", "architecture"),
+        };
+        var tailPhases = new[]
+        {
+            ("Finalization",   "✅", "finalization")
+        };
+
+        _phases = new();
+
+        // Add static pre-development phases
+        foreach (var (name, icon, css) in staticPhases)
+        {
+            var items = groups.Where(g => ClassifyPhase(g) == name).ToList();
+            if (items.Count > 0)
+                _phases.Add(new NeonPhase { Name = name, Icon = icon, CssClass = css, Items = items });
+        }
+
+        if (_devViewMode == "engineering" || _devViewMode == "time")
+        {
+            // Split Development into wave sub-phases
+            var devItems = groups.Where(g => ClassifyPhase(g).StartsWith("Development")).ToList();
+            var waveGroups = devItems
+                .GroupBy(g => (g.Wave is { Length: > 0 } ? g.Wave : "W1").ToUpperInvariant(), StringComparer.OrdinalIgnoreCase)
+                .OrderBy(wg => wg.Key, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            foreach (var wg in waveGroups)
+            {
+                var waveName = $"Development {wg.Key}";
+                var waveIcon = wg.Key == "W0" ? "🏗️" : "⚡";
+                _phases.Add(new NeonPhase
+                {
+                    Name = waveName,
+                    Icon = waveIcon,
+                    CssClass = "development",
+                    Items = wg.OrderBy(g => g.Issue.Number).ToList(),
+                    IsWavePhase = true
+                });
+            }
+        }
+
+        // Add tail phases
+        foreach (var (name, icon, css) in tailPhases)
+        {
+            var items = groups.Where(g => ClassifyPhase(g) == name).ToList();
+            if (items.Count > 0)
+                _phases.Add(new NeonPhase { Name = name, Icon = icon, CssClass = css, Items = items });
+        }
+
+        // Safety net: guarantee no duplicate phase columns by name (defensive against
+        // concurrent rebuild races or classification bugs that could emit the same
+        // phase twice). Keep first-wins ordering so static/wave/tail sequence is preserved.
+        if (_phases.Count > 1)
+        {
+            _phases = _phases
+                .GroupBy(p => p.Name, StringComparer.OrdinalIgnoreCase)
+                .Select(g => g.First())
+                .ToList();
+        }
+
+        _closedCount = _issues.Count(i => i.State == "closed");
+        _openCount = _issues.Count(i => i.State != "closed");
+        // Truly completed = closed AND no open/unmerged PRs still pending review/merge
+        _completedCount = _phases.SelectMany(p => p.Items)
+            .Count(g => g.Issue.State == "closed" &&
+                        !g.LinkedPRs.Any(p => !p.IsMerged && p.State != "closed"));
+
+        if (_selectedIssue.HasValue)
+        {
+            if (_groupLookup.TryGetValue(_selectedIssue.Value, out var refreshedGroup))
+                _selectedGroup = refreshedGroup;
+            else
+            {
+                _selectedIssue = null;
+                _selectedGroup = null;
+            }
+        }
+
+        if (_selectedPr.HasValue)
+        {
+            var refreshedPr = _rawPullRequests.FirstOrDefault(p => p.Number == _selectedPr.Value);
+            if (refreshedPr is not null) _selectedPrObj = refreshedPr;
+            else { _selectedPr = null; _selectedPrObj = null; }
+        }
+
+        // Precompute winning screenshot URL per PR for card thumbnails
+        PrecomputeWinnerScreenshots();
+    }
+
+    private string ClassifyPhase(IssueGroup group)
+    {
+        var issue = group.Issue;
+        var title = issue.Title.ToLowerInvariant();
+        var labels = issue.Labels.Select(l => l.ToLowerInvariant()).ToList();
+
+        // Doc phases — always classify by title prefix regardless of state
+        if (title.StartsWith("researcher:"))
+            return "Research";
+        if (title.StartsWith("programmanager:") || title.Contains("pm spec") || title.Contains("specification"))
+            return "PM Spec";
+        if (title.StartsWith("architect:"))
+            return "Architecture";
+
+        // Finalization: T-FINAL tasks, final review/validation, TestEngineer final checks
+        if (title.Contains("[t-final]") || title.Contains("final integration")
+            || title.Contains("final review") || title.Contains("final check") || title.Contains("final validation")
+            || (title.StartsWith("testengineer:") && (title.Contains("final") || title.Contains("integration"))))
+            return "Finalization";
+
+        if (labels.Contains("engineering-task") || group.Wave is { Length: > 0 })
+        {
+            var wave = group.Wave is { Length: > 0 } ? group.Wave : "W1";
+            return $"Development {wave}";
+        }
+        if (labels.Contains("enhancement"))
+            return "hidden";
+
+        // Fallback by title keywords
+        if (title.Contains("planning") || title.Contains("engineering plan") || title.Contains("principalengineer"))
+            return "Development";
+
+        return "Development";
+    }
+
+    private List<NeonPhase> GetFilteredPhases()
+    {
+        var snapshot = _phases.ToList(); // snapshot to avoid concurrent modification during render
+        if (_statusFilter == "all") return snapshot;
+
+        var result = new List<NeonPhase>();
+        foreach (var phase in snapshot)
+        {
+            var filtered = phase.Items.Where(g =>
+            {
+                if (_statusFilter == "open" && g.Issue.State == "closed") return false;
+                if (_statusFilter == "closed" && g.Issue.State != "closed") return false;
+                return true;
+            }).ToList();
+
+            // In Time View, skip phases that have no PRs to show timing for.
+            // Synthetic PR items (IsPullRequest) only count if the underlying issue is closed (work done).
+            if (_devViewMode == "time" && filtered.Count > 0)
+            {
+                var hasRealPRs = filtered.Any(g => g.LinkedPRs.Count > 0);
+                var hasCompletedSyntheticPr = filtered.Any(g => g.IsPullRequest && g.Issue.State == "closed");
+                if (!hasRealPRs && !hasCompletedSyntheticPr)
+                    continue;
+            }
+
+            if (filtered.Count > 0)
+                result.Add(new NeonPhase { Name = phase.Name, Icon = phase.Icon, CssClass = phase.CssClass, Items = filtered, IsWavePhase = phase.IsWavePhase });
+        }
+        return result;
+    }
+
+    private void SetFilter(string f) { _statusFilter = f; StateHasChanged(); }
+
+    /// <summary>
+    /// Returns placeholder phases for pipeline stages that haven't started yet.
+    /// </summary>
+    private List<(string Name, string Icon)> GetUpcomingPhases()
+    {
+        var allExpected = new[] { ("Research", "🔍"), ("PM Spec", "📝"), ("Architecture", "🏗️"), ("Development", "⚡"), ("Finalization", "✅") };
+
+        var existingNames = _phases.Select(p => p.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        // A Development W0/W1 etc. counts as "Development" existing
+        if (existingNames.Any(n => n.StartsWith("Development", StringComparison.OrdinalIgnoreCase)))
+            existingNames.Add("Development");
+
+        var upcoming = new List<(string Name, string Icon)>();
+        bool foundLastExisting = false;
+        foreach (var (name, icon) in allExpected)
+        {
+            if (existingNames.Contains(name))
+            {
+                foundLastExisting = true;
+                continue;
+            }
+            if (foundLastExisting)
+                upcoming.Add((name, icon));
+        }
+        return upcoming;
+    }
+    private void SetTheme(string t) { _designTheme = t; StateHasChanged(); }
+
+    private void ZoomIn() { _zoomPercent = Math.Min(200, _zoomPercent + 15); StateHasChanged(); }
+    private void ZoomOut() { _zoomPercent = Math.Max(20, _zoomPercent - 15); StateHasChanged(); }
+    private async Task ZoomFit()
+    {
+        // Calculate zoom to fit: viewport width / content width at 100% zoom
+        var pct = await JS.InvokeAsync<int>("eval", @"
+            (function() {
+                var sa = document.getElementById('ntl-scroll-area');
+                var tl = sa?.querySelector('.ntl-timeline');
+                if (!sa || !tl) return 50;
+                // Temporarily reset zoom to measure natural width
+                var oldZoom = tl.style.zoom;
+                tl.style.zoom = '100%';
+                var contentW = tl.scrollWidth;
+                tl.style.zoom = oldZoom;
+                var viewportW = sa.clientWidth;
+                var pct = Math.max(20, Math.min(200, Math.floor(viewportW / contentW * 100)));
+                return pct;
+            })()");
+        _zoomPercent = pct;
+        // Scroll to start so content is visible
+        await JS.InvokeVoidAsync("eval", "document.getElementById('ntl-scroll-area')?.scrollTo({left:0,behavior:'instant'})");
+        StateHasChanged();
+    }
+    private async Task ScrollToStart() { await JS.InvokeVoidAsync("eval", "document.getElementById('ntl-scroll-area')?.scrollTo({left:0,behavior:'smooth'})"); }
+    private async Task ScrollToEnd() { await JS.InvokeVoidAsync("eval", "var el=document.getElementById('ntl-scroll-area'); if(el) el.scrollTo({left:el.scrollWidth,behavior:'smooth'})"); }
+
+    private async Task InitScrollArrowsAsync()
+    {
+        await JS.InvokeVoidAsync("eval",
+            "(function() {" +
+            "var sa = document.getElementById('ntl-scroll-area');" +
+            "var left = document.getElementById('ntl-arrow-left');" +
+            "var right = document.getElementById('ntl-arrow-right');" +
+            "if (!sa || !left || !right) return;" +
+            "function setVisible(el, visible) {" +
+            "  if (!el) return;" +
+            "  var isVisible = el.classList.contains('ntl-arrow-visible');" +
+            "  if (visible) {" +
+            "    if (isVisible) return;" +
+            "    el.classList.remove('ntl-arrow-hidden');" +
+            "    void el.offsetWidth;" +
+            "    el.classList.add('ntl-arrow-visible');" +
+            "    return;" +
+            "  }" +
+            "  if (!isVisible && el.classList.contains('ntl-arrow-hidden')) return;" +
+            "  el.classList.remove('ntl-arrow-visible');" +
+            "  el.classList.add('ntl-arrow-hidden');" +
+            "}" +
+            "function update() {" +
+            "  setVisible(left, sa.scrollLeft > 10);" +
+            "  setVisible(right, sa.scrollLeft + sa.clientWidth < sa.scrollWidth - 10);" +
+            "}" +
+            "sa.addEventListener('scroll', update, { passive: true });" +
+            "new ResizeObserver(update).observe(sa);" +
+            "left.onclick = function() { sa.scrollBy({ left: -sa.clientWidth * 0.7, behavior: 'smooth' }); };" +
+            "right.onclick = function() { sa.scrollBy({ left: sa.clientWidth * 0.7, behavior: 'smooth' }); };" +
+            "requestAnimationFrame(update);" +
+            "setTimeout(update, 100);" +
+            "})();");
+    }
+
+    private async Task ForceRefreshAsync()
+    {
+        _refreshing = true;
+        StateHasChanged();
+        try
+        {
+            // Only reload timeline data — do NOT call ResetCaches() which clears
+            // the agent registry and kills the dashboard's view of running agents.
+            await LoadDataAsync(showOverlay: true);
+        }
+        finally
+        {
+            _refreshing = false;
+            StateHasChanged();
+        }
+    }
+
+    private bool CanCreateStoryInPhase(NeonPhase phase)
+        => phase.IsWavePhase && _devViewMode == "engineering" && _statusFilter != "closed";
+
+    private void OpenNewStoryWizard(string wave)
+    {
+        _storySuccessMessage = null;
+        _newStoryWave = NormalizeWave(wave);
+        _showNewStoryWizard = !string.IsNullOrWhiteSpace(_newStoryWave);
+    }
+
+    private Task CloseNewStoryWizardAsync()
+    {
+        _showNewStoryWizard = false;
+        _newStoryWave = null;
+        return Task.CompletedTask;
+    }
+
+    private async Task HandleStoryCreatedAsync(string message)
+    {
+        _showNewStoryWizard = false;
+        _newStoryWave = null;
+        _storySuccessMessage = null;
+
+        await DataService.InvalidatePlatformCachesAsync();
+        await ForceRefreshAsync();
+
+        _storySuccessMessage = message;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private static bool TryGetWaveIdForPhase(string phaseName, out string wave)
+    {
+        var match = System.Text.RegularExpressions.Regex.Match(phaseName, @"(W\d+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (match.Success)
+        {
+            wave = match.Groups[1].Value.ToUpperInvariant();
+            return true;
+        }
+
+        wave = string.Empty;
+        return false;
+    }
+
+    private static string NormalizeWave(string? wave)
+    {
+        if (string.IsNullOrWhiteSpace(wave))
+            return string.Empty;
+
+        var trimmed = wave.Trim();
+        if (TryGetWaveIdForPhase(trimmed, out var parsedWave))
+            return parsedWave;
+
+        var normalized = trimmed.ToUpperInvariant();
+        return normalized.StartsWith('W') ? normalized : $"W{normalized}";
+    }
+
+    private void SetDevView(string mode)
+    {
+        if (_devViewMode == mode) return;
+        _devViewMode = mode;
+        _selectedIssue = null;
+        _selectedGroup = null;
+        _selectedPr = null;
+        _selectedPrObj = null;
+        BuildTimeline();
+        StateHasChanged();
+    }
+
+    private void SelectNode(int? issueNumber)
+    {
+        _selectedPr = null;
+        _selectedPrObj = null;
+        if (_selectedIssue == issueNumber) { _selectedIssue = null; _selectedGroup = null; }
+        else if (issueNumber.HasValue && _groupLookup.TryGetValue(issueNumber.Value, out var g))
+        { _selectedIssue = issueNumber; _selectedGroup = g; }
+        else { _selectedIssue = null; _selectedGroup = null; }
+        StateHasChanged();
+    }
+
+    private IReadOnlyList<VirtualDevTeam.Core.Lifecycle.PrLifecycleStage>? _selectedPrLifecycle;
+
+    private async Task SelectPr(int? prNumber)
+    {
+        if (!prNumber.HasValue || _selectedPr == prNumber)
+        {
+            _selectedPr = null;
+            _selectedPrObj = null;
+            _selectedPrLifecycle = null;
+            StateHasChanged();
+            return;
+        }
+        var pr = _rawPullRequests.FirstOrDefault(p => p.Number == prNumber.Value)
+                 ?? _pullRequests.FirstOrDefault(p => p.Number == prNumber.Value);
+        if (pr is null)
+        {
+            _selectedPr = null;
+            _selectedPrObj = null;
+            _selectedPrLifecycle = null;
+        }
+        else
+        {
+            _selectedIssue = null;
+            _selectedGroup = null;
+            _selectedPr = prNumber;
+            _selectedPrObj = pr;
+            _selectedPrLifecycle = null; // Clear stale lifecycle while loading
+            StateHasChanged();
+
+            // Compute lifecycle stages from labels + comments + config
+            var requestedPr = prNumber.Value;
+            try
+            {
+                var config = AppConfig?.CurrentValue ?? new VirtualDevTeam.Core.Configuration.VirtualDevTeamConfig();
+
+                // Lazy-load comments for peer review detection and timestamp extraction
+                IReadOnlyList<VirtualDevTeam.Core.DevPlatform.Models.PlatformComment>? comments = null;
+                try { comments = await ReviewService.GetCommentsAsync(pr.Number); }
+                catch { /* degrade gracefully — lifecycle still works from labels alone */ }
+
+                // Guard: user may have clicked another PR while comments were loading
+                if (_selectedPr != requestedPr) return;
+
+                var lifecycle = VirtualDevTeam.Core.Lifecycle.PrLifecycleCalculator.Compute(
+                    pr, config, comments, hasPeerReviewAgents: true);
+                _selectedPrLifecycle = lifecycle.Stages;
+            }
+            catch
+            {
+                if (_selectedPr == requestedPr)
+                    _selectedPrLifecycle = null;
+            }
+        }
+        StateHasChanged();
+
+        // Init detail panel scroll arrows (shows ▲/▼ when panel has more content above/below)
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(100);
+            await InvokeAsync(() => JS.InvokeVoidAsync("eval",
+                "(function() {" +
+                "var p = document.getElementById('ntl-detail-panel');" +
+                "var btnDown = document.getElementById('ntl-detail-scroll-down');" +
+                "var btnUp = document.getElementById('ntl-detail-scroll-up');" +
+                "if (!p) return;" +
+                "function setVisible(el, visible) {" +
+                "  if (!el) return;" +
+                "  var isVisible = el.classList.contains('ntl-arrow-visible');" +
+                "  if (visible) {" +
+                "    if (isVisible) return;" +
+                "    el.classList.remove('ntl-arrow-hidden');" +
+                "    void el.offsetWidth;" +
+                "    el.classList.add('ntl-arrow-visible');" +
+                "    return;" +
+                "  }" +
+                "  if (!isVisible && el.classList.contains('ntl-arrow-hidden')) return;" +
+                "  el.classList.remove('ntl-arrow-visible');" +
+                "  el.classList.add('ntl-arrow-hidden');" +
+                "}" +
+                "function update() {" +
+                "  setVisible(btnDown, p.scrollTop + p.clientHeight < p.scrollHeight - 20);" +
+                "  setVisible(btnUp, p.scrollTop > 20);" +
+                "}" +
+                "p.addEventListener('scroll', update, { passive: true });" +
+                "new ResizeObserver(update).observe(p);" +
+                "if (btnDown) btnDown.onclick = function() { p.scrollBy({ top: p.clientHeight * 0.6, behavior: 'smooth' }); };" +
+                "if (btnUp) btnUp.onclick = function() { p.scrollBy({ top: -(p.clientHeight * 0.6), behavior: 'smooth' }); };" +
+                "requestAnimationFrame(update);" +
+                "setTimeout(update, 100);" +
+                "})();"));
+        });
+    }
+
+    // Builds a stable URL for the canonical ready-for-review screenshot captured at the PR's head SHA.
+    // GitHub: raw.githubusercontent.com, ADO: not supported (relies on in-memory CandidateStore).
+    private static string? BuildReadyForReviewScreenshotUrl(PlatformPullRequest pr)
+    {
+        if (string.IsNullOrEmpty(pr.Url) || string.IsNullOrEmpty(pr.HeadSha)) return null;
+        // GitHub: pr.Url = https://github.com/{owner}/{repo}/pull/{N}
+        var match = System.Text.RegularExpressions.Regex.Match(
+            pr.Url,
+            @"github\.com/([^/]+)/([^/]+)/pull/\d+",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (!match.Success) return null; // ADO URLs won't match — return null (CandidateStore is primary)
+        var owner = match.Groups[1].Value;
+        var repo = match.Groups[2].Value;
+        return $"https://raw.githubusercontent.com/{owner}/{repo}/{pr.HeadSha}/.screenshots/pr-{pr.Number}-ready-for-review.png";
+    }
+
+    /// <summary>
+    /// Precomputes the winning screenshot URL for each PR (used by card thumbnails).
+    /// Scans CandidateStateStore once and maps by linked issue → PR, avoiding per-card lookups.
+    /// </summary>
+    private void PrecomputeWinnerScreenshots()
+    {
+        _prWinnerScreenshots.Clear();
+        foreach (var pr in _rawPullRequests)
+        {
+            if (string.IsNullOrEmpty(pr.Url) || string.IsNullOrEmpty(pr.HeadSha)) continue;
+
+            // Resolve winner key from PR body
+            var bodyMatch = System.Text.RegularExpressions.Regex.Match(
+                pr.Body ?? string.Empty,
+                @"<!--\s*winner-(?:strategy|method):\s*([a-z0-9\-]+)\s*-->",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            var winnerKey = bodyMatch.Success ? bodyMatch.Groups[1].Value.ToLowerInvariant() : "baseline";
+
+            // Check in-memory CandidateStateStore first
+            if (CandidateStore is not null && bodyMatch.Success)
+            {
+                var linkedIssue = PullRequestWorkflow.ParseLinkedIssueNumber(pr.Body ?? "");
+                var linkedIssueStr = linkedIssue?.ToString();
+                string? found = null;
+
+                foreach (var task in CandidateStore.GetRecentTasks(20))
+                {
+                    if (task?.Candidates is null) continue;
+                    if (linkedIssueStr is not null && task.TaskId != linkedIssueStr) continue;
+                    if (task.Candidates.TryGetValue(winnerKey, out var snap) &&
+                        !string.IsNullOrEmpty(snap?.ScreenshotBase64))
+                    {
+                        found = $"data:image/png;base64,{snap.ScreenshotBase64}";
+                        break;
+                    }
+                }
+                if (found is null)
+                {
+                    foreach (var task in CandidateStore.GetActiveTasks())
+                    {
+                        if (task?.Candidates is null) continue;
+                        if (linkedIssueStr is not null && task.TaskId != linkedIssueStr) continue;
+                        if (task.Candidates.TryGetValue(winnerKey, out var snap) &&
+                            !string.IsNullOrEmpty(snap?.ScreenshotBase64))
+                        {
+                            found = $"data:image/png;base64,{snap.ScreenshotBase64}";
+                            break;
+                        }
+                    }
+                }
+                if (found is not null)
+                {
+                    _prWinnerScreenshots[pr.Number] = found;
+                    continue;
+                }
+            }
+
+            // Fallback: GitHub raw URL for ready-for-review screenshot
+            var url = BuildReadyForReviewScreenshotUrl(pr);
+            if (url is not null)
+                _prWinnerScreenshots[pr.Number] = url;
+        }
+    }
+
+    private record ScreenshotCandidate(string MethodKey, string MethodLabel, string ImageUrl, bool IsWinner);
+
+    // Returns one tile per code-generation strategy. Checks CandidateStateStore for in-memory
+    // screenshot data first (base64 from evaluation), then falls back to platform raw file URLs.
+    // ADO doesn't support unauthenticated raw file URLs, so only in-memory screenshots work for ADO.
+    private List<ScreenshotCandidate> GetScreenshotCandidates(PlatformPullRequest pr)
+    {
+        var results = new List<ScreenshotCandidate>();
+        if (string.IsNullOrEmpty(pr.Url) || string.IsNullOrEmpty(pr.HeadSha))
+            return results;
+
+        // Only show screenshots for PRs that used the strategy framework
+        // (indicated by a <!-- winner-strategy: {key} --> comment in the body).
+        // Non-code PRs (Research, PMSpec, Architecture) never have this marker
+        // and should NOT show the previews section at all.
+        var bodyMatch = System.Text.RegularExpressions.Regex.Match(
+            pr.Body ?? string.Empty,
+            @"<!--\s*winner-(?:strategy|method):\s*([a-z0-9\-]+)\s*-->",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (!bodyMatch.Success)
+            return results; // No framework marker → no previews section
+
+        var winnerKey = bodyMatch.Groups[1].Value.ToLowerInvariant();
+
+        // GitHub raw file URL fallback (ADO uses CandidateStore only — no public raw file URLs)
+        string? owner = null, repo = null;
+        var m = System.Text.RegularExpressions.Regex.Match(
+            pr.Url,
+            @"github\.com/([^/]+)/([^/]+)/pull/\d+",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (m.Success)
+        {
+            owner = m.Groups[1].Value;
+            repo = m.Groups[2].Value;
+        }
+
+        // Try to find in-memory screenshot data from the CandidateStateStore.
+        // Search ALL tasks (not just by linked issue) — TaskId is "T1"/"T-FINAL"
+        // which doesn't match the linked issue number. We match by PR number
+        // in the branch name or just use the most recent task with screenshots.
+        var storeScreenshots = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (CandidateStore is not null)
+        {
+            foreach (var task in CandidateStore.GetRecentTasks(20))
+            {
+                if (task?.Candidates is null) continue;
+                foreach (var (stratId, snap) in task.Candidates)
+                {
+                    if (!string.IsNullOrEmpty(snap?.ScreenshotBase64) && !storeScreenshots.ContainsKey(stratId))
+                    {
+                        storeScreenshots[stratId] = $"data:image/png;base64,{snap.ScreenshotBase64}";
+                    }
+                }
+            }
+            foreach (var task in CandidateStore.GetActiveTasks())
+            {
+                if (task?.Candidates is null) continue;
+                foreach (var (stratId, snap) in task.Candidates)
+                {
+                    if (!string.IsNullOrEmpty(snap?.ScreenshotBase64) && !storeScreenshots.ContainsKey(stratId))
+                    {
+                        storeScreenshots[stratId] = $"data:image/png;base64,{snap.ScreenshotBase64}";
+                    }
+                }
+            }
+        }
+
+        (string Key, string Label)[] strategies =
+        {
+            ("baseline", "Baseline"),
+            ("mcp-enhanced", "MCP-Enhanced"),
+            ("copilot-cli", "GitHub Copilot CLI"),
+            ("squad", "Squad"),
+        };
+
+        // Filter to only enabled strategies (normalize IDs for comparison)
+        var enabled = _enabledInfo?.EnabledStrategies;
+        var normalizedEnabled = enabled is { Count: > 0 }
+            ? enabled.Select(StrategyIdNormalizer.Normalize).ToHashSet(StringComparer.OrdinalIgnoreCase)
+            : null;
+        var filtered = normalizedEnabled is not null
+            ? strategies.Where(s => normalizedEnabled.Contains(s.Key)).ToArray()
+            : strategies;
+
+        foreach (var (key, label) in filtered)
+        {
+            // Prefer in-memory screenshot from evaluation; fall back to raw URL (GitHub only).
+            if (storeScreenshots.TryGetValue(key, out var dataUrl))
+            {
+                results.Add(new ScreenshotCandidate(key, label, dataUrl, IsWinner: key == winnerKey));
+            }
+            else if (owner is not null && repo is not null)
+            {
+                var path = $".screenshots/pr-{pr.Number}-{key}.png";
+                var url = $"https://raw.githubusercontent.com/{owner}/{repo}/{pr.HeadSha}/{path}";
+                results.Add(new ScreenshotCandidate(key, label, url, IsWinner: key == winnerKey));
+            }
+        }
+        return results;
+    }
+
+    private string GetPhaseClass(string name) => name switch
+    {
+        "Research" => "phase-research",
+        "PM Spec" => "phase-pmspec",
+        "Architecture" => "phase-architecture",
+        "Development" => "phase-development",
+        "Eng Planning" => "phase-development",
+        "Testing" => "phase-finalization",
+        "Finalization" => "phase-finalization",
+        _ when name.StartsWith("Development W") => "phase-development",
+        _ => "phase-development"
+    };
+
+    private string TruncateTitle(string title, int max)
+    {
+        if (title.Length <= max) return title;
+        return title[..(max - 1)] + "…";
+    }
+
+    private void OpenGitHub(string url)
+    {
+        if (!string.IsNullOrEmpty(url))
+            Navigation.NavigateTo(url, forceLoad: true);
+    }
+
+    private async void OnDataChanged()
+    {
+        // After initial load, the 30s poll handles updates. OnDataChanged only
+        // fires for the initial race where data arrives before the first poll tick.
+        if (_initialLoadComplete) return;
+        await LoadDataAsync();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        DataService.OnChange -= OnDataChanged;
+        await _refreshCts.CancelAsync();
+        _refreshCts.Dispose();
+    }
+
+    private record IssueGroup
+    {
+        public required PlatformWorkItem Issue { get; init; }
+        public required List<PlatformPullRequest> LinkedPRs { get; init; }
+        public required List<PlatformWorkItem> ChildIssues { get; init; }
+        /// <summary>True when the top-level item is actually a PR rendered as a synthetic issue.</summary>
+        public bool IsPullRequest { get; init; }
+        /// <summary>Wave assignment for engineering tasks (e.g., "W0", "W1"). Empty for non-engineering items.</summary>
+        public string Wave { get; init; } = "";
+        /// <summary>Issue numbers this task depends on (blocked by).</summary>
+        public List<int> DependsOn { get; init; } = [];
+    }
+
+    private record NeonPhase
+    {
+        public required string Name { get; init; }
+        public required string Icon { get; init; }
+        public required string CssClass { get; init; }
+        public required List<IssueGroup> Items { get; init; }
+        /// <summary>True when this phase is a development wave sub-phase.</summary>
+        public bool IsWavePhase { get; init; }
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex WaveRegex = new(
+        @"\*\*Wave:\*\*\s*(W\d+)", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private static readonly System.Text.RegularExpressions.Regex DependsOnRegex = new(
+        @"\*\*Depends On:\*\*\s*((?:#\d+(?:,\s*)?)+)", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private static string ParseWaveFromBody(string? body)
+    {
+        if (string.IsNullOrWhiteSpace(body)) return "";
+        var match = WaveRegex.Match(body);
+        return match.Success ? match.Groups[1].Value : "";
+    }
+
+    private static List<int> ParseDependsOnFromBody(string? body)
+    {
+        if (string.IsNullOrWhiteSpace(body)) return [];
+        var match = DependsOnRegex.Match(body);
+        if (!match.Success) return [];
+        return System.Text.RegularExpressions.Regex.Matches(match.Groups[1].Value, @"#(\d+)")
+            .Select(m => int.Parse(m.Groups[1].Value))
+            .ToList();
+    }
+
+    private void OpenTimelinePreview(string imageUrl, string title)
+    {
+        _previewImageUrl = imageUrl;
+        _previewTitle = title;
+    }
+
+    private void CloseTimelinePreview()
+    {
+        _previewImageUrl = null;
+        _previewTitle = null;
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // TIME VIEW HELPERS
+    // ═══════════════════════════════════════════════════════════════
+
+    private record TimeActivity(string Icon, string Label, TimeSpan Duration, bool IsInProgress);
+
+    private record SelectedTimeActivityInfo(string Icon, string Name, TimeSpan Duration, bool IsInProgress);
+
+    private void SelectTimeActivity(TimeActivity act)
+    {
+        if (_selectedTimeActivity?.Name == act.Label)
+        {
+            _selectedTimeActivity = null;
+        }
+        else
+        {
+            _selectedTimeActivity = new SelectedTimeActivityInfo(
+                act.Icon, act.Label, act.Duration, act.IsInProgress);
+        }
+        _selectedIssue = null;
+        _selectedGroup = null;
+        _selectedPr = null;
+        _selectedPrObj = null;
+        StateHasChanged();
+    }
+
+    private void ComputeTotalProjectTime()
+    {
+        // Use earliest CURRENT-RUN PR as the project start.
+        // Exclude synthetic anchor PRs (grafted from prior runs in Step 2a) —
+        // they have old CreatedAt timestamps that inflate the total.
+        var currentRunScope = BranchProvider?.RunScope;
+        var scopedPrs = currentRunScope is not null
+            ? _pullRequests.Where(p =>
+                !string.IsNullOrEmpty(p.HeadBranch) &&
+                PullRequestWorkflow.IsCurrentRunScopePr(p.HeadBranch, p.Body, currentRunScope)).ToList()
+            : _pullRequests;
+
+        if (scopedPrs.Count > 0)
+        {
+            var earliest = scopedPrs.Min(p => p.CreatedAt);
+            _totalProjectTime = DateTime.UtcNow - earliest;
+        }
+        else if (_pullRequests.Count > 0)
+        {
+            // Fallback: use issues from the current run as anchor
+            var currentIssues = _issues.Where(i =>
+                i.Labels.Any(l => l.Equals("engineering-task", StringComparison.OrdinalIgnoreCase))).ToList();
+            if (currentIssues.Count > 0)
+            {
+                var earliest = currentIssues.Min(i => i.CreatedAt);
+                _totalProjectTime = DateTime.UtcNow - earliest;
+            }
+            else
+            {
+                // Last resort: FlowTimelineTracker
+                var timeline = FlowTracker.GetTimeline();
+                if (timeline.Count > 0)
+                    _totalProjectTime = DateTimeOffset.UtcNow - timeline.Min(s => s.StartedAtUtc);
+            }
+        }
+    }
+
+    private TimeSpan GetPhaseDuration(NeonPhase phase)
+    {
+        // Sum PR durations for phases with linked PRs
+        var allPRs = phase.Items.SelectMany(g => g.LinkedPRs).Distinct().ToList();
+        if (allPRs.Count > 0)
+            return TimeSpan.FromTicks(allPRs.Sum(p => GetPrDuration(p).Ticks));
+
+        // For doc phases (synthetic PRs), use item duration
+        if (phase.Items.Any(g => g.IsPullRequest))
+            return TimeSpan.FromTicks(phase.Items.Where(g => g.IsPullRequest).Sum(g => GetItemDuration(g.Issue).Ticks));
+
+        // For dev phases with no PRs yet, use issue creation to now
+        if (phase.Items.Count > 0)
+        {
+            var earliest = phase.Items.Min(g => g.Issue.CreatedAt);
+            return DateTime.UtcNow - earliest;
+        }
+
+        // Fallback: use FlowTimelineTracker spans
+        var spans = GetSpansForPhase(phase.Name);
+        if (spans.Count > 0)
+            return TimeSpan.FromTicks(spans.Sum(s => (s.Duration ?? (DateTimeOffset.UtcNow - s.StartedAtUtc)).Ticks));
+
+        return TimeSpan.Zero;
+    }
+
+    private TimeSpan GetPrDuration(PlatformPullRequest pr)
+    {
+        var end = pr.MergedAt ?? (pr.State == "closed" ? pr.UpdatedAt ?? DateTime.UtcNow : DateTime.UtcNow);
+        return end - pr.CreatedAt;
+    }
+
+    private TimeSpan GetItemDuration(PlatformWorkItem item)
+    {
+        var end = item.State == "closed" ? (item.UpdatedAt ?? DateTime.UtcNow) : DateTime.UtcNow;
+        return end - item.CreatedAt;
+    }
+
+    private IReadOnlyList<FlowSpanView> GetSpansForPhase(string phaseName)
+    {
+        var phaseMap = FlowTracker.GetTimelineByPhase();
+        var trackerPhase = phaseName switch
+        {
+            "Research" => "Research",
+            "PM Spec" => "PMSpec",
+            "Architecture" => "Architecture",
+            "Finalization" => "Completion",
+            _ when phaseName.StartsWith("Development") => "Engineering",
+            _ => phaseName
+        };
+        if (phaseMap.TryGetValue(trackerPhase, out var spans))
+            return spans;
+        return Array.Empty<FlowSpanView>();
+    }
+
+    private IReadOnlyList<FlowSpanView> GetSpansForPr(int prNumber)
+    {
+        var timeline = FlowTracker.GetTimeline();
+        return timeline.Where(s => s.EntityType == "PR" && s.EntityId == prNumber.ToString()).ToList();
+    }
+
+    private List<TimeActivity> GetPrTimeActivities(PlatformPullRequest pr)
+    {
+        var activities = new List<TimeActivity>();
+        var labels = pr.Labels.Select(l => l.ToLowerInvariant()).ToList();
+        var now = DateTime.UtcNow;
+        var totalDuration = GetPrDuration(pr);
+
+        // Try to build activities from real step data (IAgentTaskTracker)
+        var stepActivities = GetStepBasedActivities(pr);
+
+        if (pr.IsMerged && pr.MergedAt.HasValue)
+        {
+            // Merged PR: use step data for implementation sub-stages, then review stages
+            if (stepActivities.Count > 0)
+            {
+                activities.AddRange(stepActivities);
+            }
+            else
+            {
+                // Fallback: single implementation block
+                var implDuration = TimeSpan.FromTicks((long)(totalDuration.Ticks * 0.70));
+                activities.Add(new TimeActivity("⚙️", "Implementation", implDuration, false));
+            }
+
+            // Review stages from labels — compute duration from total minus implementation
+            var implTotal = activities.Where(a => a.Label != "Merged").Aggregate(TimeSpan.Zero, (sum, a) => sum + a.Duration);
+            var remaining = totalDuration - implTotal;
+            if (remaining < TimeSpan.Zero) remaining = TimeSpan.FromSeconds(5);
+
+            var reviewLabels = new List<(string icon, string label)>();
+            if (labels.Contains("architect-approved"))
+                reviewLabels.Add(("🏗️", "Architect Review"));
+            if (labels.Contains("tests-added"))
+                reviewLabels.Add(("🧪", "Test Engineer"));
+            if (labels.Contains("pm-approved"))
+                reviewLabels.Add(("📋", "PM Review"));
+
+            var mergeDuration = TimeSpan.FromTicks(Math.Max(remaining.Ticks / 10, TimeSpan.FromSeconds(1).Ticks));
+            var reviewDuration = remaining - mergeDuration;
+            if (reviewDuration < TimeSpan.Zero) reviewDuration = TimeSpan.FromSeconds(1);
+
+            if (reviewLabels.Count > 0)
+            {
+                var perReview = TimeSpan.FromTicks(reviewDuration.Ticks / reviewLabels.Count);
+                foreach (var (icon, label) in reviewLabels)
+                    activities.Add(new TimeActivity(icon, label, perReview, false));
+            }
+            else
+            {
+                activities.Add(new TimeActivity("🔍", "Review", reviewDuration, false));
+            }
+
+            activities.Add(new TimeActivity("✅", "Merged", mergeDuration, false));
+        }
+        else if (!pr.IsMerged && pr.State != "closed")
+        {
+            // Open PR: show step-level sub-activities if available
+            if (stepActivities.Count > 0)
+            {
+                activities.AddRange(stepActivities);
+
+                // Show gap between tracked step time and total elapsed as "Waiting / Setup"
+                var trackedTotal = stepActivities.Aggregate(TimeSpan.Zero, (sum, a) => sum + a.Duration);
+                var gap = totalDuration - trackedTotal;
+                if (gap.TotalMinutes >= 2)
+                {
+                    // Determine if we're currently in review or still implementing
+                    bool isInReview = labels.Contains("ready-for-review") || labels.Contains("awaiting-human-review");
+                    activities.Add(new TimeActivity(
+                        isInReview ? "⏳" : "🔧",
+                        isInReview ? "Awaiting Review" : "Setup / Build / Eval",
+                        gap,
+                        !isInReview));
+                }
+            }
+            else
+            {
+                // Estimate implementation time — subtract review time from total
+                var implEnd = pr.CreatedAt;
+                var hasReviewLabels = false;
+
+                // Check for completed review stages via labels
+                var reviewEntries = new List<(string icon, string label, DateTime? completedAt)>();
+                if (labels.Contains("architect-approved"))
+                    reviewEntries.Add(("🏗️", "Architect Review", null));
+                if (labels.Contains("tests-added"))
+                    reviewEntries.Add(("🧪", "Test Engineer", null));
+                if (labels.Contains("pm-approved"))
+                    reviewEntries.Add(("📋", "PM Review", null));
+
+                if (reviewEntries.Count > 0)
+                {
+                    hasReviewLabels = true;
+                    // Implementation was ~70% of elapsed, reviews share remaining 30%
+                    var implDuration = TimeSpan.FromTicks((long)(totalDuration.Ticks * 0.70));
+                    var reviewDuration = totalDuration - implDuration;
+                    activities.Add(new TimeActivity("⚙️", "Implementation", implDuration, false));
+
+                    var perReview = TimeSpan.FromTicks(reviewDuration.Ticks / reviewEntries.Count);
+                    foreach (var (icon, label, _) in reviewEntries)
+                        activities.Add(new TimeActivity(icon, label, perReview, false));
+
+                    // If labels show ready-for-merge but not yet merged, show merge in progress
+                    if (labels.Contains("pm-approved") || labels.Contains("ready-for-review"))
+                        activities.Add(new TimeActivity("🔄", "Merging", TimeSpan.FromSeconds(1), true));
+                }
+
+                if (!hasReviewLabels)
+                {
+                    // No review labels yet — show as in-progress implementation
+                    bool isInReview = labels.Contains("ready-for-review") || labels.Contains("awaiting-human-review");
+                    activities.Add(new TimeActivity(
+                        isInReview ? "🔍" : "⚙️",
+                        isInReview ? "In Review" : "Implementation",
+                        now - pr.CreatedAt,
+                        true));
+                }
+            }
+        }
+
+        return activities;
+    }
+
+    /// <summary>
+    /// Extracts implementation sub-activities from IAgentTaskTracker step data for a PR.
+    /// Groups steps into: Strategy Evaluation, Code Generation, Build/Test, Self-Assessment, Rework.
+    /// </summary>
+    private List<TimeActivity> GetStepBasedActivities(PlatformPullRequest pr)
+    {
+        var activities = new List<TimeActivity>();
+        var prNum = pr.Number;
+
+        try
+        {
+            // Collect steps from all agents that reference this PR
+            var allAgentSteps = new List<VirtualDevTeam.Core.Agents.Steps.AgentTaskStep>();
+
+            // Get all known agent IDs from snapshots
+            var agentIds = DataService.GetAllAgentSnapshots().Select(s => s.Id).Distinct().ToHashSet();
+
+            foreach (var agentId in agentIds)
+            {
+                var steps = TaskTracker.GetSteps(agentId);
+                allAgentSteps.AddRange(steps);
+            }
+
+            // Match steps by PR-related task IDs (case-insensitive)
+            var prTaskIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                $"pr-{prNum}",
+                $"PR-{prNum}"
+            };
+
+            // Also try to find linked issue number from PR body ("Closes #N") for strategy steps
+            if (!string.IsNullOrEmpty(pr.Body))
+            {
+                var closeMatch = System.Text.RegularExpressions.Regex.Match(
+                    pr.Body, @"(?:Closes|Fixes|Resolves)\s+#(\d+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (closeMatch.Success)
+                {
+                    var issueNum = closeMatch.Groups[1].Value;
+                    prTaskIds.Add($"T{issueNum}");
+                    prTaskIds.Add(issueNum);
+                    // Specialist agents use "specialist-{issueNumber}" as their strategy taskId
+                    prTaskIds.Add($"specialist-{issueNum}");
+                }
+            }
+
+            // Also extract issue number from PR title pattern "{AgentName}: [T-{N}] ..."
+            if (!string.IsNullOrEmpty(pr.Title))
+            {
+                var titleMatch = System.Text.RegularExpressions.Regex.Match(
+                    pr.Title, @"\[T-?(\d+)\]", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (titleMatch.Success)
+                {
+                    var taskNum = titleMatch.Groups[1].Value;
+                    prTaskIds.Add($"T{taskNum}");
+                    prTaskIds.Add($"T-{taskNum}");
+                    prTaskIds.Add(taskNum);
+                    prTaskIds.Add($"specialist-{taskNum}");
+                }
+            }
+
+            var prSteps = allAgentSteps
+                .Where(s => prTaskIds.Contains(s.TaskId) && !s.IsContainer && s.StartedAt.HasValue)
+                .OrderBy(s => s.StartedAt)
+                .ToList();
+
+            if (prSteps.Count == 0) return activities;
+
+            // Categorize steps into meaningful timeline activities
+            var strategySteps = prSteps.Where(s =>
+                s.Name.Contains("strategy", StringComparison.OrdinalIgnoreCase) ||
+                s.Name.Contains("Multi-strategy", StringComparison.OrdinalIgnoreCase) ||
+                s.Name.Contains("copilot-cli", StringComparison.OrdinalIgnoreCase) ||
+                s.Name.Contains("Copilot CLI", StringComparison.OrdinalIgnoreCase) ||
+                s.Name.Contains("squad", StringComparison.OrdinalIgnoreCase) ||
+                s.Name.Contains("Evaluating gates", StringComparison.OrdinalIgnoreCase) ||
+                s.Name.Contains("🧪", StringComparison.Ordinal) ||
+                s.Name.Contains("⚖️", StringComparison.Ordinal)).ToList();
+
+            var selfAssessSteps = prSteps.Where(s =>
+                s.Name.Contains("Self-assess", StringComparison.OrdinalIgnoreCase) ||
+                s.Name.Contains("self assess", StringComparison.OrdinalIgnoreCase)).ToList();
+
+            var reworkSteps = prSteps.Where(s =>
+                s.Name.Contains("review feedback", StringComparison.OrdinalIgnoreCase) ||
+                s.Name.Contains("rework", StringComparison.OrdinalIgnoreCase)).ToList();
+
+            var implSteps = prSteps.Where(s =>
+                s.Name.Contains("Execute step", StringComparison.OrdinalIgnoreCase) ||
+                s.Name.Contains("Generate implementation", StringComparison.OrdinalIgnoreCase) ||
+                s.Name.Contains("Create PR", StringComparison.OrdinalIgnoreCase) ||
+                s.Name.Contains("Claim issue", StringComparison.OrdinalIgnoreCase) ||
+                s.Name.Contains("Mark ready", StringComparison.OrdinalIgnoreCase)).ToList();
+
+            // Build activities in chronological order, merging steps of same category
+            var categories = new List<(string icon, string label, List<VirtualDevTeam.Core.Agents.Steps.AgentTaskStep> steps)>
+            {
+                ("🎯", "Strategy Evaluation", strategySteps),
+                ("⚙️", "Code Generation", implSteps),
+                ("🔍", "Self-Assessment", selfAssessSteps),
+                ("🔄", "Rework", reworkSteps),
+            };
+
+            foreach (var (icon, label, steps) in categories)
+            {
+                if (steps.Count == 0) continue;
+                // Sum individual step durations (not span from earliest-to-latest which inflates
+                // when there are gaps between steps of the same category)
+                var duration = TimeSpan.Zero;
+                bool isActive = false;
+                foreach (var step in steps)
+                {
+                    var stepDuration = step.Elapsed ?? (step.CompletedAt.HasValue
+                        ? step.CompletedAt.Value - step.StartedAt!.Value
+                        : DateTime.UtcNow - step.StartedAt!.Value);
+                    duration += stepDuration;
+                    if (step.Status == VirtualDevTeam.Core.Agents.Steps.AgentTaskStepStatus.InProgress)
+                        isActive = true;
+                }
+                if (duration.TotalSeconds >= 5) // Only show activities > 5s
+                    activities.Add(new TimeActivity(icon, label, duration, isActive));
+            }
+
+            // If there are uncategorized steps with >2min duration, show them
+            var categorizedIds = strategySteps.Concat(selfAssessSteps).Concat(reworkSteps).Concat(implSteps)
+                .Select(s => s.Id).ToHashSet();
+            var uncategorized = prSteps.Where(s => !categorizedIds.Contains(s.Id) && (s.Elapsed?.TotalMinutes ?? 0) > 2).ToList();
+            foreach (var step in uncategorized)
+            {
+                activities.Add(new TimeActivity("📋", step.Name, step.Elapsed ?? TimeSpan.Zero,
+                    step.Status == VirtualDevTeam.Core.Agents.Steps.AgentTaskStepStatus.InProgress));
+            }
+        }
+        catch
+        {
+            // Graceful degradation — return empty list, caller falls back to proportional split
+        }
+
+        return activities;
+    }
+
+    private static string FormatTimeDuration(TimeSpan ts)
+    {
+        if (ts.TotalSeconds < 1) return "<1s";
+        if (ts.TotalSeconds < 60) return $"{(int)ts.TotalSeconds}s";
+        if (ts.TotalMinutes < 60) return $"{(int)ts.TotalMinutes}m {ts.Seconds}s";
+        return $"{(int)ts.TotalHours}h {ts.Minutes}m";
+    }
+
+    private static string GetTimeDurationClass(TimeSpan ts)
+    {
+        if (ts.TotalMinutes < 1) return "dur-fast";
+        if (ts.TotalMinutes < 10) return "dur-normal";
+        return "dur-slow";
+    }
+
+    private static string GetCategoryIcon(MilestoneCategory category) => category switch
+    {
+        MilestoneCategory.LLM => "🤖",
+        MilestoneCategory.HumanGate => "👤",
+        MilestoneCategory.Handoff => "🔄",
+        MilestoneCategory.FastForward => "⏩",
+        MilestoneCategory.Platform => "📋",
+        MilestoneCategory.Wait => "⏳",
+        _ => "⚙️",
+    };
+}

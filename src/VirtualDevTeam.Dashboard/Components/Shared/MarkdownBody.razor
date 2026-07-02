@@ -1,0 +1,222 @@
+@*
+    Renders agent/user-authored content from PR / Issue / comment bodies.
+
+    Two content types supported (auto-detected):
+      - Markdown (GitHub default): Markdig pipeline with DisableHtml — markdown image syntax
+        renders to img tag; raw HTML in input is escaped; output is safe by construction.
+      - HTML (Azure DevOps default): ADO returns work-item descriptions and PR bodies/comments
+        as HTML, not Markdown. We sanitize with HtmlSanitizer so script/iframe/on-* handlers
+        are stripped, but img/a/p/ul etc. survive.
+
+    Detection: cheap looks-like-HTML sniff on the input. Override by passing
+    ContentType="markdown" or "html" explicitly.
+
+    Post-render rewriting:
+      - <img> srcs that point at GitHub/ADO route through the dashboard's auth-injecting proxy
+        so private-repo assets render in the browser.
+      - <a href> to PRs / Issues / files on the configured dev platform are rewritten to the
+        equivalent internal /repository/... route when InternalNavigationDefault is on, so
+        clicking a `#42` mention in a PR body keeps the operator inside the dashboard.
+*@
+@using Markdig
+@using Ganss.Xss
+@inject VirtualDevTeam.Dashboard.Services.IPlatformLinkService LinkService
+
+@if (!string.IsNullOrWhiteSpace(Markdown))
+{
+    <div class="markdown-body">
+        @((MarkupString)Render(Markdown, ResolvedContentType, LinkService))
+    </div>
+}
+else
+{
+    <div class="markdown-body markdown-empty">
+        <em>(no description provided)</em>
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public string? Markdown { get; set; }
+
+    /// <summary>"markdown", "html", or null to auto-detect.</summary>
+    [Parameter] public string? ContentType { get; set; }
+
+    private string ResolvedContentType => ContentType?.ToLowerInvariant() switch
+    {
+        "html" => "html",
+        "markdown" => "markdown",
+        _ => LooksLikeHtml(Markdown) ? "html" : "markdown"
+    };
+
+    // Markdig pipeline — DisableHtml() strips raw HTML in input so a malicious markdown
+    // comment can't smuggle <script>. The ![]() image syntax still renders to <img>.
+    private static readonly Markdig.MarkdownPipeline _markdownPipeline =
+        new Markdig.MarkdownPipelineBuilder().UseAdvancedExtensions().DisableHtml().Build();
+
+    // HtmlSanitizer — strips dangerous tags (script, iframe, object, embed) and on-* event handlers,
+    // keeps safe inline + block elements. Default config + explicit allowlist for img src schemes.
+    private static readonly HtmlSanitizer _htmlSanitizer = CreateSanitizer();
+
+    private static HtmlSanitizer CreateSanitizer()
+    {
+        var s = new HtmlSanitizer();
+        s.AllowedSchemes.Add("https");
+        s.AllowedSchemes.Add("http");
+        s.AllowedSchemes.Add("data");           // for data: URIs in inline images
+        s.AllowedAttributes.Add("alt");
+        s.AllowedAttributes.Add("title");
+        s.AllowedAttributes.Add("aria-label");
+        return s;
+    }
+
+    // Rewrite every rendered <img src="https://github.com/..."> (and other platform hosts) to
+    // route through the dashboard's /api/dashboard/platform/img proxy. The proxy adds the bot's
+    // auth header server-side so private-repo Releases/attachments load in the browser.
+    // Non-platform hosts pass through unchanged.
+    private static readonly System.Text.RegularExpressions.Regex _imgSrcRewrite =
+        new(@"<img\b([^>]*?)\bsrc\s*=\s*[""']([^""']+)[""']", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    internal static string RewritePlatformImageSrcs(string html)
+    {
+        if (string.IsNullOrEmpty(html) || html.IndexOf("<img", StringComparison.OrdinalIgnoreCase) < 0)
+            return html;
+        return _imgSrcRewrite.Replace(html, m =>
+        {
+            var rest = m.Groups[1].Value;
+            var src = m.Groups[2].Value;
+            if (!Uri.TryCreate(src, UriKind.Absolute, out var u)) return m.Value;
+            var host = u.Host.ToLowerInvariant();
+            var isPlatform = host == "github.com" || host.EndsWith(".github.com")
+                || host.EndsWith(".githubusercontent.com")
+                || host == "dev.azure.com" || host.EndsWith(".dev.azure.com")
+                || host.EndsWith(".visualstudio.com");
+            if (!isPlatform) return m.Value;
+            var proxied = "/api/dashboard/platform/img?url=" + Uri.EscapeDataString(src);
+            return "<img" + rest + " src=\"" + proxied + "\"";
+        });
+    }
+
+    // Rewrite every <a href="..."> that points at a known PR / Issue / file on the configured
+    // dev platform to its corresponding internal /repository/... route. Non-platform hosts and
+    // platform URLs we don't have a route for pass through unchanged. Gated by
+    // IPlatformLinkService.InternalNavigationDefault so operators who prefer the platform UI
+    // can flip it off via Dashboard:InternalNavigationDefault.
+    private static readonly System.Text.RegularExpressions.Regex _anchorHrefRewrite =
+        new(@"<a\b([^>]*?)\bhref\s*=\s*[""']([^""']+)[""']", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    // GitHub link shapes:
+    //   https://github.com/{owner}/{repo}/blob/{branch}/{path}       → /repository/files/{path}?branch=...
+    //   https://github.com/{owner}/{repo}/pull/{N}                    → /repository/pull-request/{N}
+    //   https://github.com/{owner}/{repo}/issues/{N}                  → /repository/issue/{N}
+    // ADO link shapes:
+    //   https://dev.azure.com/{org}/{project}/_git/{repo}?path=...    → /repository/files/{path}
+    //   https://dev.azure.com/{org}/{project}/_workitems/edit/{N}     → /repository/issue/{N}
+    //   https://dev.azure.com/{org}/{project}/_git/{repo}/pullrequest/{N} → /repository/pull-request/{N}
+    private static readonly System.Text.RegularExpressions.Regex _ghBlobPattern =
+        new(@"^https?://github\.com/[^/]+/[^/]+/blob/([^/]+)/(.+?)(?:#[^?]*)?(?:\?.*)?$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    private static readonly System.Text.RegularExpressions.Regex _ghPullPattern =
+        new(@"^https?://github\.com/[^/]+/[^/]+/pull/(\d+)(?:[/#?].*)?$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    private static readonly System.Text.RegularExpressions.Regex _ghIssuePattern =
+        new(@"^https?://github\.com/[^/]+/[^/]+/issues/(\d+)(?:[/#?].*)?$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    private static readonly System.Text.RegularExpressions.Regex _adoGitPattern =
+        new(@"^https?://dev\.azure\.com/[^/]+/[^/]+/_git/[^/?#]+(?:\?(?:[^#]*&)?path=([^&#]+))?", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    private static readonly System.Text.RegularExpressions.Regex _adoWorkItemPattern =
+        new(@"^https?://dev\.azure\.com/[^/]+/[^/]+/_workitems/edit/(\d+)(?:[/#?].*)?$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    private static readonly System.Text.RegularExpressions.Regex _adoPullPattern =
+        new(@"^https?://dev\.azure\.com/[^/]+/[^/]+/_git/[^/]+/pullrequest/(\d+)(?:[/#?].*)?$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    internal static string RewritePlatformAnchorHrefs(string html, VirtualDevTeam.Dashboard.Services.IPlatformLinkService? linkSvc)
+    {
+        if (string.IsNullOrEmpty(html) || html.IndexOf("<a", StringComparison.OrdinalIgnoreCase) < 0)
+            return html;
+        if (linkSvc is null || !linkSvc.InternalNavigationDefault)
+            return html;
+
+        return _anchorHrefRewrite.Replace(html, m =>
+        {
+            var rest = m.Groups[1].Value;
+            var href = m.Groups[2].Value;
+            var rewritten = TryRewriteHref(href, linkSvc);
+            return rewritten is null
+                ? m.Value
+                : "<a" + rest + " href=\"" + System.Net.WebUtility.HtmlEncode(rewritten) + "\"";
+        });
+    }
+
+    /// <summary>
+    /// Returns the internal route for a known platform href, or null if the href doesn't
+    /// match any pattern (caller leaves the anchor unchanged). Internal so tests can call it
+    /// directly without spinning up the full Razor render pipeline.
+    /// </summary>
+    internal static string? TryRewriteHref(string href, VirtualDevTeam.Dashboard.Services.IPlatformLinkService linkSvc)
+    {
+        if (string.IsNullOrWhiteSpace(href)) return null;
+
+        // GitHub: pull request — most common in PR bodies as "see #42" auto-linkified by Markdig.
+        var prMatch = _ghPullPattern.Match(href);
+        if (prMatch.Success && int.TryParse(prMatch.Groups[1].Value, out var prN))
+            return linkSvc.BuildPullRequestUrl(prN);
+
+        // GitHub: issue
+        var issueMatch = _ghIssuePattern.Match(href);
+        if (issueMatch.Success && int.TryParse(issueMatch.Groups[1].Value, out var issueN))
+            return linkSvc.BuildIssueUrl(issueN);
+
+        // GitHub: file at branch (handles `#L12` line anchors by stripping them — the
+        // internal /repository/files/ view doesn't yet honour line anchors).
+        var blobMatch = _ghBlobPattern.Match(href);
+        if (blobMatch.Success)
+        {
+            var branch = blobMatch.Groups[1].Value;
+            var path = blobMatch.Groups[2].Value;
+            return linkSvc.BuildFileUrl(path, branch);
+        }
+
+        // Azure DevOps: pull request — must come BEFORE the generic _git pattern (more specific).
+        var adoPullMatch = _adoPullPattern.Match(href);
+        if (adoPullMatch.Success && int.TryParse(adoPullMatch.Groups[1].Value, out var adoPrN))
+            return linkSvc.BuildPullRequestUrl(adoPrN);
+
+        // Azure DevOps: work item
+        var adoWiMatch = _adoWorkItemPattern.Match(href);
+        if (adoWiMatch.Success && int.TryParse(adoWiMatch.Groups[1].Value, out var adoWiN))
+            return linkSvc.BuildIssueUrl(adoWiN);
+
+        // Azure DevOps: git file (path comes from ?path= query string)
+        var adoGitMatch = _adoGitPattern.Match(href);
+        if (adoGitMatch.Success && adoGitMatch.Groups[1].Success)
+        {
+            var path = Uri.UnescapeDataString(adoGitMatch.Groups[1].Value);
+            return linkSvc.BuildFileUrl(path);
+        }
+
+        return null;
+    }
+
+    private static string Render(string content, string contentType, VirtualDevTeam.Dashboard.Services.IPlatformLinkService linkSvc)
+    {
+        var html = contentType switch
+        {
+            "html" => _htmlSanitizer.Sanitize(content),
+            _ => Markdig.Markdown.ToHtml(content, _markdownPipeline)
+        };
+        html = RewritePlatformImageSrcs(html);
+        html = RewritePlatformAnchorHrefs(html, linkSvc);
+        return html;
+    }
+
+    /// <summary>
+    /// Heuristic: look for common HTML tag shapes at the start of trimmed content. ADO content
+    /// almost always opens with `<div>` / `<p>` / `<h1>` etc. and lacks Markdown headers (#).
+    /// Conservative — defaults to Markdown for ambiguous content so GitHub bodies aren't broken.
+    /// </summary>
+    private static bool LooksLikeHtml(string? content)
+    {
+        if (string.IsNullOrWhiteSpace(content)) return false;
+        var t = content.TrimStart();
+        if (t.Length == 0 || t[0] != '<') return false;
+        // Common ADO opening tags. Doesn't have to be exhaustive — any `<` followed by a letter
+        // is enough to suggest HTML; markdown content starting with literal `<` is rare.
+        return System.Text.RegularExpressions.Regex.IsMatch(t, @"^<\s*(div|p|span|h[1-6]|ul|ol|li|table|pre|code|img|br|hr|strong|em|b|i|a|font|blockquote)\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    }
+}

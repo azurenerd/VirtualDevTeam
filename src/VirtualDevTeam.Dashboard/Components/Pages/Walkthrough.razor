@@ -1,0 +1,221 @@
+@page "/walkthrough"
+@page "/walkthrough/{Step:int}"
+@rendermode InteractiveServer
+@using System.Text.Json
+@inject NavigationManager Navigation
+@inject IWebHostEnvironment Env
+@inject IJSRuntime JS
+@implements IDisposable
+
+<PageTitle>Walkthrough — Virtual Dev Team</PageTitle>
+
+<div class="walkthrough-page">
+    @if (_sections == null)
+    {
+        <div class="walkthrough-loading">
+            <div class="walkthrough-spinner"></div>
+            <p>Loading walkthrough...</p>
+        </div>
+    }
+    else if (_sections.Count == 0)
+    {
+        <div class="walkthrough-empty">
+            <p>No walkthrough content found.</p>
+        </div>
+    }
+    else
+    {
+        @* ── Progress bar ── *@
+        <div class="walkthrough-progress-bar">
+            <div class="walkthrough-progress-fill" style="width: @((_currentIndex + 1) * 100.0 / _sections.Count)%"></div>
+        </div>
+
+        @* ── Header: step counter + title + chips + close ── *@
+        <div class="walkthrough-header">
+            <div class="walkthrough-header-left">
+                <div class="walkthrough-step-counter">
+                    <span class="walkthrough-step-current">@(_currentIndex + 1)</span>
+                    <span class="walkthrough-step-separator">/</span>
+                    <span class="walkthrough-step-total">@_sections.Count</span>
+                </div>
+                <h2 class="walkthrough-title">@CurrentSection.Title</h2>
+                @if (CurrentSection.Chips?.Count > 0)
+                {
+                    <div class="walkthrough-chips">
+                        @foreach (var chip in CurrentSection.Chips)
+                        {
+                            <span class="walkthrough-chip">@chip</span>
+                        }
+                    </div>
+                }
+            </div>
+            <button class="walkthrough-close-btn" @onclick="GoToDevelop" title="Exit walkthrough">✕</button>
+        </div>
+
+        @* ── GIF (full width) ── *@
+        <div class="walkthrough-content" @key="_currentIndex">
+            <div class="walkthrough-gif-panel">
+                <div class="walkthrough-gif-frame">
+                    <img src="walkthrough/@(CurrentSection.Gif)"
+                         alt="@CurrentSection.Title"
+                         class="walkthrough-gif-img"
+                         loading="lazy" />
+                </div>
+            </div>
+
+            @* ── Mission Intel card (below GIF) ── *@
+            <div class="walkthrough-description-bar">
+                <span class="walkthrough-intel-label">Feature Brief</span>
+                <p class="walkthrough-summary">@CurrentSection.Summary</p>
+            </div>
+        </div>
+
+        @* ── Navigation ── *@
+        <div class="walkthrough-nav">
+            <button class="walkthrough-nav-btn walkthrough-nav-prev"
+                    @onclick="PrevStep"
+                    disabled="@(_currentIndex == 0)">
+                <span class="walkthrough-nav-arrow">←</span> Previous
+            </button>
+
+            @* Dot rail *@
+            <div class="walkthrough-dots">
+                @for (int i = 0; i < _sections.Count; i++)
+                {
+                    var idx = i;
+                    <button class="walkthrough-dot @(i == _currentIndex ? "active" : "") @(i < _currentIndex ? "visited" : "")"
+                            @onclick="() => GoToStep(idx)"
+                            title="Step @(idx + 1): @_sections[idx].Title">
+                    </button>
+                }
+            </div>
+
+            @if (_currentIndex < _sections.Count - 1)
+            {
+                <button class="walkthrough-nav-btn walkthrough-nav-next" @onclick="NextStep">
+                    Next <span class="walkthrough-nav-arrow">→</span>
+                </button>
+            }
+            else
+            {
+                <button class="walkthrough-nav-btn walkthrough-nav-finish" @onclick="GoToDevelop">
+                    Get Started <span class="walkthrough-nav-arrow">→</span>
+                </button>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public int Step { get; set; }
+
+    private List<WalkthroughSection>? _sections;
+    private int _currentIndex;
+    private DotNetObjectReference<Walkthrough>? _dotNetRef;
+    private bool _disposed;
+
+    private WalkthroughSection CurrentSection => _sections![_currentIndex];
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadContentAsync();
+        _dotNetRef = DotNetObjectReference.Create(this);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && _dotNetRef != null)
+        {
+            await JS.InvokeVoidAsync("walkthroughKeyHandler.init", _dotNetRef);
+        }
+    }
+
+    protected override void OnParametersSet()
+    {
+        if (_sections != null && _sections.Count > 0)
+        {
+            // Clamp step to valid range
+            if (Step < 1) Step = 1;
+            if (Step > _sections.Count) Step = _sections.Count;
+            _currentIndex = Step - 1;
+        }
+    }
+
+    private async Task LoadContentAsync()
+    {
+        try
+        {
+            var fileInfo = Env.WebRootFileProvider.GetFileInfo("walkthrough/walkthrough-content.json");
+            if (!fileInfo.Exists)
+            {
+                _sections = new List<WalkthroughSection>();
+                return;
+            }
+
+            await using var stream = fileInfo.CreateReadStream();
+            var doc = await JsonSerializer.DeserializeAsync<WalkthroughContentRoot>(stream, new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            });
+            _sections = doc?.Sections ?? new List<WalkthroughSection>();
+        }
+        catch
+        {
+            _sections = new List<WalkthroughSection>();
+        }
+    }
+
+    private void NextStep()
+    {
+        if (_sections != null && _currentIndex < _sections.Count - 1)
+        {
+            _currentIndex++;
+            Navigation.NavigateTo($"/walkthrough/{_currentIndex + 1}", replace: true);
+        }
+    }
+
+    private void PrevStep()
+    {
+        if (_currentIndex > 0)
+        {
+            _currentIndex--;
+            Navigation.NavigateTo($"/walkthrough/{_currentIndex + 1}", replace: true);
+        }
+    }
+
+    private void GoToStep(int index)
+    {
+        if (_sections != null && index >= 0 && index < _sections.Count)
+        {
+            _currentIndex = index;
+            Navigation.NavigateTo($"/walkthrough/{_currentIndex + 1}", replace: true);
+        }
+    }
+
+    [JSInvokable]
+    public void OnArrowKey(string direction)
+    {
+        if (direction == "left") PrevStep();
+        else if (direction == "right") NextStep();
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void GoToDevelop() => Navigation.NavigateTo("/develop");
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        _dotNetRef?.Dispose();
+    }
+
+    private record WalkthroughContentRoot(List<WalkthroughSection> Sections);
+
+    private record WalkthroughSection(
+        int Step,
+        string Title,
+        string Gif,
+        string Summary,
+        List<string>? Chips
+    );
+}

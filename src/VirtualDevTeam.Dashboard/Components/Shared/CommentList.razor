@@ -1,0 +1,38 @@
+@*
+    Comment list — renders a list of PlatformComment as cards. Each card has author,
+    relative timestamp, and Markdig-rendered body. Empty state is the operator's signal
+    that there's no conversation yet.
+
+    Usage: <CommentList Items="@_detail.Comments" />
+*@
+
+@using VirtualDevTeam.Core.DevPlatform.Models
+
+@if (Items is { Count: > 0 })
+{
+    <div class="comment-list">
+        @foreach (var c in Items)
+        {
+            <div class="comment-card">
+                <div class="comment-card-header">
+                    <span class="comment-author">@(string.IsNullOrWhiteSpace(c.Author) ? "(unknown)" : c.Author)</span>
+                    <LocalTimeText Value="c.CreatedAt" CssClass="comment-time" title="@c.CreatedAt.ToString("u")" />
+                </div>
+                <div class="comment-card-body">
+                    <MarkdownBody Markdown="@c.Body" />
+                </div>
+            </div>
+        }
+    </div>
+}
+else
+{
+    <div class="comment-list-empty">
+        <em>No comments yet.</em>
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<PlatformComment>? Items { get; set; }
+
+}

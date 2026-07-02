@@ -1,0 +1,1000 @@
+@page "/health"
+@rendermode InteractiveServer
+@using VirtualDevTeam.Core.Agents
+@using VirtualDevTeam.Core.Diagnostics
+@using VirtualDevTeam.Core.HealthMonitor
+@using VirtualDevTeam.Dashboard.Services
+@using VirtualDevTeam.Orchestrator
+@using System.Net.Http.Json
+@implements IDisposable
+@inject IDashboardDataService DataService
+@inject DashboardMode Mode
+@inject IServiceProvider Services
+
+<PageTitle>Virtual Dev Team — Health Monitor</PageTitle>
+
+<div class="dashboard-header" data-testid="page-health">
+    <h1>Health Monitor</h1>
+    <span class="header-badge @OverallStatusClass">● @_assessment.OverallStatus</span>
+</div>
+
+@* ── Top Row: Phase Timeline (left) + Status & Assessment (right) ── *@
+<div class="health-top-row">
+    <div class="health-card phase-card">
+        <h2>Phase Progression</h2>
+        <div class="phase-timeline">
+            @foreach (var phase in _assessment.PhaseTimeline)
+            {
+                <div class="phase-step @(phase.IsCurrent ? "current" : phase.IsCompleted ? "completed" : "pending")">
+                    <div class="phase-dot"></div>
+                    <div class="phase-info">
+                        <span class="phase-name">@phase.Phase</span>
+                        @if (phase.CompletedAt.HasValue)
+                        {
+                            <LocalTimeText Value="phase.CompletedAt.Value" CssClass="phase-time" IncludeSeconds="true" />
+                        }
+                        else if (phase.IsCurrent)
+                        {
+                            <span class="phase-time active">Active</span>
+                        }
+                    </div>
+                </div>
+            }
+        </div>
+
+        @if (_assessment.NextPhaseGates.Count > 0)
+        {
+            <div class="gates-section">
+                <h3>Next Phase Gates</h3>
+                @foreach (var gate in _assessment.NextPhaseGates)
+                {
+                    <div class="gate-row @(gate.IsMet ? "met" : "unmet")">
+                        <span class="gate-icon">@(gate.IsMet ? "✅" : "⬜")</span>
+                        <span class="gate-name">@gate.Name</span>
+                        <span class="gate-desc">@gate.Description</span>
+                    </div>
+                }
+            </div>
+        }
+    </div>
+
+    <div class="health-right-column">
+        <div class="health-card status-card">
+            <h2>Execution Status</h2>
+            <div class="status-grid">
+                <div class="status-item">
+                    <span class="status-label">Phase</span>
+                    <span class="status-value phase-value">@_assessment.Phase</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">Uptime</span>
+                    <span class="status-value">@FormatDuration(_assessment.Uptime)</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">Working</span>
+                    <span class="status-value cyan">@_assessment.WorkingAgents / @_assessment.TotalAgents</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">Compliant</span>
+                    <span class="status-value @(_assessment.NonCompliantAgents > 0 ? "yellow" : "green")">
+                        @_assessment.CompliantAgents / @_assessment.TotalAgents
+                    </span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">Errors</span>
+                    <span class="status-value @(_assessment.ErrorAgents > 0 ? "red" : "green")">
+                        @_assessment.ErrorAgents
+                    </span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">Deadlock</span>
+                    <span class="status-value @(_assessment.HasDeadlock ? "red" : "green")">
+                        @(_assessment.HasDeadlock ? "Yes" : "None")
+                    </span>
+                </div>
+            </div>
+        </div>
+
+        <div class="health-card observations-card">
+            <h2>System Assessment</h2>
+            <div class="observations-list">
+                @foreach (var obs in _assessment.Observations)
+                {
+                    <div class="observation-item">
+                        <span class="obs-bullet">›</span>
+                        <span class="obs-text">@((MarkupString)FormatObservation(obs))</span>
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+@* ── Execution Flowchart ── *@
+<div class="health-card flowchart-card">
+    <h2>Execution Timeline</h2>
+    <div class="flowchart">
+        @{ var milestones = DataService.GetExecutionTimeline(); }
+        @if (milestones.Count == 0)
+        {
+            <div class="flowchart-empty">Pipeline has not started yet.</div>
+        }
+        else
+        {
+            @foreach (var (milestone, index) in milestones.Select((m, i) => (m, i)))
+            {
+                var isLast = index == milestones.Count - 1;
+                <div class="flow-node @milestone.Category @(isLast ? "flow-node-active" : "")">
+                    <div class="flow-connector">
+                        <div class="flow-dot">@milestone.Icon</div>
+                        @if (!isLast)
+                        {
+                            <div class="flow-line"></div>
+                        }
+                    </div>
+                    <div class="flow-content">
+                        <div class="flow-title-row">
+                            <span class="flow-title">@milestone.Title</span>
+                            @if (!string.IsNullOrEmpty(milestone.AgentName))
+                            {
+                                <span class="flow-agent" title="@milestone.AgentName">@AgentSnapshotService.FormatAgentId(milestone.AgentName)</span>
+                            }
+                        </div>
+                        <div class="flow-detail-row">
+                            @if (!string.IsNullOrEmpty(milestone.Detail))
+                            {
+                                <span class="flow-detail">@StripAgentPrefix(milestone.Detail, milestone.AgentName)</span>
+                            }
+                            <LocalTimeText Value="milestone.Timestamp" CssClass="flow-time" IncludeSeconds="true" />
+                        </div>
+                    </div>
+                </div>
+            }
+        }
+    </div>
+</div>
+
+@* ── Agent Compliance Grid ── *@
+<div class="health-card compliance-card">
+    <h2>Agent Compliance</h2>
+    <div class="compliance-grid">
+        <div class="compliance-header">
+            <span class="col-agent">Agent</span>
+            <span class="col-role">Role</span>
+            <span class="col-status">Status</span>
+            <span class="col-compliant">Compliant</span>
+            <span class="col-task">Current Activity</span>
+            <span class="col-scenario">Scenario</span>
+        </div>
+        @foreach (var agent in _agents.OrderBy(a => a.Role))
+        {
+            <div class="compliance-row @(!agent.DiagnosticCompliant ? "non-compliant-row" : "")">
+                <span class="col-agent">@agent.DisplayName</span>
+                <span class="col-role">@agent.Role</span>
+                <span class="col-status">
+                    <span class="mini-badge status-@(agent.Status.ToString().ToLowerInvariant())">
+                        @agent.Status
+                    </span>
+                </span>
+                <span class="col-compliant">
+                    @(agent.DiagnosticCompliant ? "✅" : "⚠️")
+                </span>
+                <span class="col-task" title="@agent.DiagnosticJustification">
+                    @(agent.DiagnosticSummary ?? agent.StatusReason ?? "—")
+                </span>
+                <span class="col-scenario">@(agent.DiagnosticScenarioRef ?? "—")</span>
+            </div>
+        }
+    </div>
+</div>
+
+@* ── Diagnostic Feed ── *@
+<div class="health-card feed-card">
+    <div class="feed-header">
+        <h2>Diagnostic Feed</h2>
+        <div class="feed-controls">
+            <select class="feed-pill" @bind="_filterAgent">
+                <option value="">🤖 All Agents</option>
+                @foreach (var agent in _agents.OrderBy(a => a.DisplayName))
+                {
+                    <option value="@agent.Id">@agent.DisplayName</option>
+                }
+            </select>
+            <select class="feed-pill" @bind="_filterCompliance">
+                <option value="">📋 All Status</option>
+                <option value="compliant">✅ Compliant</option>
+                <option value="non-compliant">⚠️ Non-Compliant</option>
+            </select>
+            <span class="feed-count">@GetFilteredFeed().Count entries</span>
+        </div>
+    </div>
+
+    <div class="feed-list">
+        @{ var feedItems = GetFilteredFeed(); }
+        @if (feedItems.Count == 0)
+        {
+            <div class="feed-empty">No diagnostic entries yet. Agents will report justifications as they work.</div>
+        }
+        else
+        {
+            @foreach (var entry in feedItems)
+            {
+                <div class="feed-entry @(!entry.IsCompliant ? "feed-entry-warn" : "")">
+                    <div class="feed-entry-row">
+                        <LocalTimeText Value="entry.Timestamp" CssClass="feed-timestamp" IncludeSeconds="true" />
+                        <span class="feed-compliance">@(entry.IsCompliant ? "✅" : "⚠️")</span>
+                        <span class="feed-agent-name">@entry.AgentDisplayName</span>
+                        @if (!string.IsNullOrEmpty(entry.ScenarioRef))
+                        {
+                            <span class="feed-scenario-ref">@entry.ScenarioRef</span>
+                        }
+                        <span class="feed-summary-inline">@entry.Summary</span>
+                    </div>
+                    @if (!entry.IsCompliant && !string.IsNullOrEmpty(entry.ComplianceIssue))
+                    {
+                        <div class="feed-compliance-issue">⚠️ @entry.ComplianceIssue</div>
+                    }
+                    <details class="feed-details">
+                        <summary>Justification</summary>
+                        <div class="feed-justification">@entry.Justification</div>
+                    </details>
+                </div>
+            }
+        }
+    </div>
+</div>
+
+@* ── Flow Monitor — autonomous flow watchdog ── *@
+<div class="health-card flow-monitor-card" data-testid="flow-monitor-card">
+    <div class="flow-monitor-header">
+        <h2>🔧 Flow Monitor</h2>
+        <span class="flow-monitor-pulse @FlowPulseClass" title="Last tick: @(_flowLastTick?.ToLocalTime().ToString("h:mm:ss tt") ?? "never")">
+            @FlowPulseText
+        </span>
+        <span class="flow-monitor-meta">
+            @(_flowEnabled ? "ON" : "OFF") · poll @_flowPollSeconds.ToString()s · cap @_flowMaxActionsPerHour/hr
+        </span>
+        @* T1.7: Warm restart — stops the runner gracefully and re-launches via restart-runner.ps1.
+           Workflow state, agent identities, and signals are checkpointed to SQLite, so the new
+           runner resumes from where the old one stopped. Two-click confirm to avoid mis-clicks. *@
+        @if (!_restartPending && !_restartInProgress)
+        {
+            <button class="warm-restart-btn" @onclick="OnRestartClicked" title="Stop runner gracefully and re-launch (workflow state preserved)">
+                🔄 Restart Runner
+            </button>
+        }
+        else if (_restartPending && !_restartInProgress)
+        {
+            <button class="warm-restart-btn confirm" @onclick="OnRestartConfirmed" title="Click again to confirm — runner will stop and auto-restart">
+                ⚠️ Click to confirm restart
+            </button>
+            <button class="warm-restart-btn cancel" @onclick="OnRestartCancelled">Cancel</button>
+        }
+        else
+        {
+            <span class="warm-restart-pending">⏳ Runner restarting — page will reload when it's back up...</span>
+        }
+        @* Stats strip: severity counts + success rate + most-frequent detector — gives an at-a-glance health pulse *@
+        <span class="flow-monitor-stats">
+            @{
+                var critCount = _flowFindings.Count(f => f.Severity == VirtualDevTeam.Core.HealthMonitor.FlowFindingSeverity.Critical);
+                var warnCount = _flowFindings.Count(f => f.Severity == VirtualDevTeam.Core.HealthMonitor.FlowFindingSeverity.Warning);
+                var infoCount = _flowFindings.Count(f => f.Severity == VirtualDevTeam.Core.HealthMonitor.FlowFindingSeverity.Info);
+                var actionTotal = _flowActions.Count;
+                var actionSuccess = _flowActions.Count(a => a.Result == VirtualDevTeam.Core.HealthMonitor.FlowActionResult.Success);
+                var successRate = actionTotal == 0 ? "—" : $"{(actionSuccess * 100.0 / actionTotal):0}%";
+                var topDetector = _flowFindings.GroupBy(f => f.DetectorId).OrderByDescending(g => g.Count()).FirstOrDefault();
+            }
+            <span class="stat-pill stat-crit" title="Critical findings">🚨 @critCount</span>
+            <span class="stat-pill stat-warn" title="Warning findings">⚠️ @warnCount</span>
+            <span class="stat-pill stat-info" title="Info findings">ℹ️ @infoCount</span>
+            <span class="stat-pill stat-success" title="Action success rate">✓ @successRate</span>
+            @if (topDetector is not null)
+            {
+                <span class="stat-pill" title="Most-frequent detector">📊 @topDetector.Key (@topDetector.Count())</span>
+            }
+        </span>
+    </div>
+    @* Filter chips — quickly narrow recent findings by severity / detector / state. Operates on the
+       client-side state only (no API calls) so toggling is instant. *@
+    <div class="flow-monitor-filters">
+        <span class="filter-label">Filter:</span>
+        <button class="filter-chip @(_flowFilterSeverity == "all" ? "active" : "")" @onclick='() => _flowFilterSeverity = "all"'>All severities</button>
+        <button class="filter-chip @(_flowFilterSeverity == "critical" ? "active critical" : "")" @onclick='() => _flowFilterSeverity = "critical"'>🚨 Critical</button>
+        <button class="filter-chip @(_flowFilterSeverity == "warning" ? "active warning" : "")" @onclick='() => _flowFilterSeverity = "warning"'>⚠️ Warning</button>
+        <button class="filter-chip @(_flowFilterSeverity == "info" ? "active info" : "")" @onclick='() => _flowFilterSeverity = "info"'>ℹ️ Info</button>
+        <span class="filter-divider">|</span>
+        <button class="filter-chip @(_flowFilterDetector == "" ? "active" : "")" @onclick='() => _flowFilterDetector = ""'>All detectors</button>
+        @foreach (var d in _flowFindings.Select(f => f.DetectorId).Distinct().OrderBy(x => x))
+        {
+            var detectorId = d;
+            <button class="filter-chip @(_flowFilterDetector == detectorId ? "active" : "")" @onclick="() => _flowFilterDetector = detectorId">@detectorId</button>
+        }
+    </div>
+    @* Per-detector enable/disable controls — operator can silence a misfiring detector without
+       editing config or restarting. Toggles take effect on the next tick (~30s). *@
+    <details class="flow-monitor-controls">
+        <summary>⚙️ Detector / Action toggles</summary>
+        <div class="flow-controls-body">
+            <div class="flow-controls-section">
+                <h4>Detectors</h4>
+                @foreach (var detectorId in _knownDetectorIds)
+                {
+                    var id = detectorId;
+                    var enabled = !_flowDetectorOverrides.TryGetValue(id, out var v) || v;
+                    <label class="flow-toggle">
+                        <input type="checkbox" checked="@enabled" @onchange="() => ToggleDetector(id)" />
+                        <span>@id</span>
+                    </label>
+                }
+            </div>
+            <div class="flow-controls-section">
+                <h4>Actions</h4>
+                @foreach (var actionId in _knownActionIds)
+                {
+                    var id = actionId;
+                    var enabled = !_flowActionOverrides.TryGetValue(id, out var v) || v;
+                    <label class="flow-toggle">
+                        <input type="checkbox" checked="@enabled" @onchange="() => ToggleAction(id)" />
+                        <span>@id</span>
+                    </label>
+                }
+            </div>
+        </div>
+    </details>
+    @if (_flowFindings.Count == 0 && _flowActions.Count == 0)
+    {
+        <div class="flow-monitor-empty">No flow anomalies detected. The pipeline is moving forward as expected.</div>
+    }
+    else
+    {
+        <div class="flow-monitor-body">
+            <div class="flow-monitor-col">
+                <h3>Recent Findings <span class="col-count">(@FilteredFindings().Count)</span></h3>
+                @foreach (var f in FilteredFindings().Take(15))
+                {
+                    var matchedAction = _flowActions.FirstOrDefault(a => a.FindingId == f.Id);
+                    var isExpanded = _expandedFindingId == f.Id;
+                    <div class="flow-finding @($"flow-severity-{f.Severity.ToString().ToLowerInvariant()}") @(isExpanded ? "expanded" : "")"
+                         id="@($"finding-{f.Id}")"
+                         @onclick="() => ToggleExpandFinding(f.Id)" role="button" tabindex="0">
+                        <div class="flow-row-head">
+                            <span class="flow-detector" title="Detector ID">@f.DetectorId</span>
+                            <LocalTimeText OffsetValue="f.DetectedAt" CssClass="flow-time" />
+                            <span class="flow-state flow-state-@(f.State.ToString().ToLowerInvariant())">@f.State</span>
+                            <span class="flow-expand-hint">@(isExpanded ? "▾" : "▸")</span>
+                        </div>
+                        <div class="flow-summary">@RenderAgentMentions(f.Summary)</div>
+                        @if (matchedAction is not null)
+                        {
+                            <div class="flow-finding-action @($"flow-result-{matchedAction.Result.ToString().ToLowerInvariant()}")"
+                                 title="Action taken in response: @matchedAction.ActionType → @matchedAction.Result">
+                                <span class="flow-action-tag">↳ @matchedAction.ActionType</span>
+                                <span class="flow-result">@matchedAction.Result</span>
+                            </div>
+                        }
+                        else if (f.State == VirtualDevTeam.Core.HealthMonitor.FlowFindingState.Open)
+                        {
+                            <div class="flow-finding-action flow-no-action" title="No action handler for this finding — logged for human review">
+                                <span class="flow-action-tag">↳ no action — logged for review</span>
+                            </div>
+                        }
+                        @if (isExpanded)
+                        {
+                            <div class="flow-finding-detail">
+                                <div class="flow-detail-section">
+                                    <strong>Rationale:</strong>
+                                    <div>@RenderAgentMentions(f.Rationale)</div>
+                                </div>
+                                @if (!string.IsNullOrEmpty(f.TargetAgentId))
+                                {
+                                    <div class="flow-detail-section">
+                                        <strong>Target agent:</strong>
+                                        <span>@ResolveAgentName(f.TargetAgentId)</span>
+                                        <span class="flow-detail-muted">(@f.TargetAgentId)</span>
+                                    </div>
+                                }
+                                @{
+                                    var related = _flowFindings
+                                        .Where(x => x.Id != f.Id
+                                                    && x.DetectorId == f.DetectorId
+                                                    && x.TargetAgentId == f.TargetAgentId)
+                                        .Take(5)
+                                        .ToList();
+                                }
+                                @if (related.Count > 0)
+                                {
+                                    <div class="flow-detail-section">
+                                        <strong>Related findings (same detector + target):</strong>
+                                        <ul class="flow-related-list">
+                                            @foreach (var r in related)
+                                            {
+                                                <li><LocalTimeText OffsetValue="r.DetectedAt" /> — @r.State</li>
+                                            }
+                                        </ul>
+                                    </div>
+                                }
+                                @if (matchedAction is not null && !string.IsNullOrEmpty(matchedAction.Detail))
+                                {
+                                    <div class="flow-detail-section">
+                                        <strong>Action detail:</strong>
+                                        <div class="flow-detail-muted">@matchedAction.Detail</div>
+                                    </div>
+                                }
+                                @{
+                                    // T1.5: When a Critical finding has produced one or more
+                                    // FixRecommendations (newest first), surface the latest one
+                                    // here as a deep link to the Approvals page.
+                                    var recsForFinding = GetRecommendationsForFinding(f.Id);
+                                    var latestRec = recsForFinding.FirstOrDefault();
+                                }
+                                @if (latestRec is not null)
+                                {
+                                    var confClass = latestRec.Confidence >= 0.75 ? "fixrec-conf-high"
+                                        : latestRec.Confidence >= 0.5 ? "fixrec-conf-med"
+                                        : "fixrec-conf-low";
+                                    // T1.6: tier badge — duplicates the Approvals page treatment so operators
+                                    // can see at a glance whether this finding's recommendation will reload
+                                    // live, need a restart, or be staged for next boot.
+                                    var (tierEmoji, tierLabel, tierClass) = latestRec.FixTier switch
+                                    {
+                                        FixTier.Live            => ("🟢", "Live",     "fixrec-tier-live"),
+                                        FixTier.DeferredRestart => ("🟡", "Deferred", "fixrec-tier-deferred"),
+                                        FixTier.Blocked         => ("🔴", "Blocked",  "fixrec-tier-blocked"),
+                                        _                       => ("⚪", "Unknown",  "fixrec-tier-unknown"),
+                                    };
+                                    var tierTooltip = latestRec.FixTier switch
+                                    {
+                                        FixTier.Live            => "Applies in-place via config/prompt watcher — no restart needed.",
+                                        FixTier.DeferredRestart => "Code change written; click Restart Runner to activate.",
+                                        FixTier.Blocked         => "Cannot apply while runner is up — staged for next boot.",
+                                        _                       => "Tier not classified yet.",
+                                    };
+                                    <div class="flow-detail-section flow-fixrec-link">
+                                        <strong>🔧 Fix Recommendation:</strong>
+                                        <span class="fixrec-tier-badge @tierClass" title="@tierTooltip">@tierEmoji @tierLabel</span>
+                                        <span class="flow-fixrec-conf @confClass">@($"{latestRec.Confidence:0%}")</span>
+                                        <span class="flow-fixrec-state">state: @latestRec.State</span>
+                                        @if (recsForFinding.Count > 1)
+                                        {
+                                            <span class="flow-fixrec-rework-pill">@(recsForFinding.Count) revisions</span>
+                                        }
+                                        <a class="flow-fixrec-link-btn" href="@($"/flow-monitor/recommendations#rec-{latestRec.Id}")" @onclick:stopPropagation="true">
+                                            View Recommendation →
+                                        </a>
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+            <div class="flow-monitor-col">
+                <h3>Recent Actions <span class="col-count">(@_flowActions.Count)</span></h3>
+                @foreach (var a in _flowActions.Take(10))
+                {
+                    <div class="flow-action @($"flow-result-{a.Result.ToString().ToLowerInvariant()}")">
+                        <div class="flow-row-head">
+                            <span class="flow-action-type" title="Action type">@a.ActionType</span>
+                            <LocalTimeText OffsetValue="a.InitiatedAt" CssClass="flow-time" />
+                            <span class="flow-result">@a.Result</span>
+                        </div>
+                        <div class="flow-summary">→ @ResolveAgentName(a.Target)</div>
+                        @if (!string.IsNullOrEmpty(a.Detail))
+                        {
+                            <div class="flow-detail">@a.Detail</div>
+                        }
+                    </div>
+                }
+            </div>
+        </div>
+    }
+</div>
+
+<style>
+    .flow-monitor-card { margin-top: 1rem; padding: 1rem; }
+    .flow-monitor-header { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+    .flow-monitor-header h2 { margin: 0; font-size: 1.1rem; }
+    .flow-monitor-pulse { padding: 2px 8px; border-radius: 4px; font-size: 0.8em; font-weight: 600; }
+    .flow-pulse-fresh { background: rgba(34,197,94,0.18); color: #86efac; border: 1px solid rgba(34,197,94,0.35); }
+    .flow-pulse-stale { background: rgba(245,158,11,0.18); color: #fcd34d; border: 1px solid rgba(245,158,11,0.35); }
+    .flow-pulse-dead { background: rgba(239,68,68,0.18); color: #fca5a5; border: 1px solid rgba(239,68,68,0.35); }
+    .flow-monitor-meta { font-size: 0.85em; opacity: 0.7; font-family: monospace; }
+    /* T1.7 — Warm restart button. Pushes itself to the right of the header so it's always visible. */
+    .warm-restart-btn { margin-left: auto; padding: 4px 10px; border: 1px solid rgba(245,158,11,0.4); background: rgba(245,158,11,0.08); color: #fcd34d; border-radius: 4px; font-size: 0.85em; cursor: pointer; transition: all 0.15s; }
+    .warm-restart-btn:hover { background: rgba(245,158,11,0.18); border-color: rgba(245,158,11,0.6); }
+    .warm-restart-btn.confirm { background: rgba(239,68,68,0.18); border-color: rgba(239,68,68,0.6); color: #fca5a5; animation: pulse-warn 1s ease-in-out infinite; }
+    .warm-restart-btn.cancel { margin-left: 0.25rem; background: transparent; border-color: rgba(148,163,184,0.4); color: #94a3b8; }
+    .warm-restart-btn.cancel:hover { background: rgba(148,163,184,0.1); }
+    .warm-restart-pending { margin-left: auto; padding: 4px 10px; background: rgba(245,158,11,0.18); color: #fcd34d; border: 1px solid rgba(245,158,11,0.4); border-radius: 4px; font-size: 0.85em; font-style: italic; }
+    @@keyframes pulse-warn { 0%, 100% { opacity: 1; } 50% { opacity: 0.65; } }
+    .flow-monitor-empty { padding: 0.75rem; opacity: 0.6; font-style: italic; }
+    .flow-monitor-body { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 0.75rem; }
+    .flow-monitor-col h3 { font-size: 0.95rem; margin: 0 0 0.5rem; opacity: 0.85; }
+    .flow-finding, .flow-action { border-left: 3px solid var(--border, #2d3240); padding: 0.5rem 0.75rem; margin-bottom: 0.5rem; background: rgba(255,255,255,0.02); border-radius: 4px; }
+    .flow-severity-critical { border-left-color: #ef4444; }
+    .flow-severity-warning { border-left-color: #f59e0b; }
+    .flow-severity-info { border-left-color: #38bdf8; }
+    .flow-result-success { border-left-color: #22c55e; }
+    .flow-result-failed { border-left-color: #ef4444; }
+    .flow-result-skipped { border-left-color: #94a3b8; }
+    .flow-result-noop { border-left-color: #38bdf8; }
+    .flow-row-head { display: flex; gap: 0.5rem; align-items: center; font-size: 0.85em; margin-bottom: 0.25rem; }
+    .flow-detector, .flow-action-type { font-weight: 600; font-family: monospace; }
+    .flow-time { opacity: 0.6; }
+    .flow-state, .flow-result { padding: 1px 6px; border-radius: 3px; font-size: 0.75em; opacity: 0.85; }
+    .flow-summary { font-size: 0.9em; }
+    .flow-detail { font-size: 0.8em; opacity: 0.7; font-family: monospace; margin-top: 0.25rem; }
+    .flow-rationale summary { font-size: 0.8em; opacity: 0.6; cursor: pointer; }
+    .flow-rationale[open] summary { opacity: 0.9; }
+    .flow-rationale > div { font-size: 0.85em; opacity: 0.75; padding: 0.4rem 0; }
+    /* Inline action result on finding cards — saves the user from cross-referencing the two columns by timestamp. */
+    .flow-finding-action { margin-top: 0.4rem; padding: 0.25rem 0.5rem; border-radius: 3px; font-size: 0.78em; display: flex; gap: 0.5rem; align-items: center; background: rgba(255,255,255,0.04); }
+    .flow-finding-action .flow-action-tag { font-family: monospace; opacity: 0.85; }
+    .flow-finding-action.flow-result-success { border-left: 2px solid #22c55e; }
+    .flow-finding-action.flow-result-failed { border-left: 2px solid #ef4444; }
+    .flow-finding-action.flow-result-skipped { border-left: 2px solid #94a3b8; opacity: 0.6; }
+    .flow-finding-action.flow-no-action { border-left: 2px solid #475569; opacity: 0.55; font-style: italic; }
+    /* Stats strip — at-a-glance counts in the header */
+    .flow-monitor-stats { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-left: auto; }
+    .stat-pill { padding: 2px 8px; border-radius: 4px; font-size: 0.78em; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1); font-family: monospace; }
+    .stat-pill.stat-crit { background: rgba(239,68,68,0.15); border-color: rgba(239,68,68,0.35); }
+    .stat-pill.stat-warn { background: rgba(245,158,11,0.12); border-color: rgba(245,158,11,0.3); }
+    .stat-pill.stat-info { background: rgba(56,189,248,0.10); border-color: rgba(56,189,248,0.25); }
+    .stat-pill.stat-success { background: rgba(34,197,94,0.10); border-color: rgba(34,197,94,0.25); }
+    /* Filter chips — inline narrowing without a separate menu */
+    .flow-monitor-filters { display: flex; gap: 0.4rem; flex-wrap: wrap; padding: 0.5rem 0; align-items: center; font-size: 0.85em; }
+    .filter-label { opacity: 0.7; font-weight: 600; }
+    .filter-chip { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); color: inherit; padding: 2px 8px; border-radius: 12px; cursor: pointer; font-size: 0.85em; }
+    .filter-chip:hover { background: rgba(255,255,255,0.08); }
+    .filter-chip.active { background: rgba(56,189,248,0.18); border-color: rgba(56,189,248,0.5); color: #7dd3fc; }
+    .filter-chip.active.critical { background: rgba(239,68,68,0.18); border-color: rgba(239,68,68,0.5); color: #fca5a5; }
+    .filter-chip.active.warning { background: rgba(245,158,11,0.18); border-color: rgba(245,158,11,0.5); color: #fcd34d; }
+    .filter-chip.active.info { background: rgba(56,189,248,0.18); border-color: rgba(56,189,248,0.5); color: #7dd3fc; }
+    .filter-divider { opacity: 0.3; }
+    /* Per-detector toggle controls — collapsed by default */
+    .flow-monitor-controls { padding: 0.4rem 0; }
+    .flow-monitor-controls summary { font-size: 0.85em; opacity: 0.7; cursor: pointer; padding: 0.3rem 0; }
+    .flow-monitor-controls[open] summary { opacity: 1; }
+    .flow-controls-body { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; padding: 0.5rem 0; font-size: 0.9em; }
+    .flow-controls-section h4 { font-size: 0.9em; margin: 0 0 0.4rem; opacity: 0.85; }
+    .flow-toggle { display: flex; gap: 0.5rem; align-items: center; padding: 0.2rem 0; cursor: pointer; }
+    .flow-toggle input { cursor: pointer; }
+    /* Click-to-expand finding cards */
+    .flow-finding { cursor: pointer; transition: background 0.15s; }
+    .flow-finding:hover { background: rgba(255,255,255,0.04); }
+    .flow-finding.expanded { background: rgba(255,255,255,0.06); }
+    .flow-expand-hint { margin-left: auto; opacity: 0.5; font-family: monospace; }
+    .flow-finding-detail { margin-top: 0.5rem; padding-top: 0.5rem; border-top: 1px dashed rgba(255,255,255,0.1); font-size: 0.85em; }
+    .flow-detail-section { margin: 0.4rem 0; }
+    .flow-detail-section strong { display: block; opacity: 0.7; font-size: 0.9em; margin-bottom: 0.2rem; }
+    .flow-detail-muted { opacity: 0.6; font-size: 0.9em; font-family: monospace; }
+    .flow-related-list { margin: 0.2rem 0 0 1rem; padding: 0; font-size: 0.9em; opacity: 0.75; }
+    .col-count { font-size: 0.7em; opacity: 0.55; font-weight: 400; margin-left: 0.3rem; }
+    /* T1.5: FixRecommendation deep-link panel inside an expanded finding card. */
+    .flow-fixrec-link {
+        display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+        padding: 0.4rem 0.6rem; margin-top: 0.4rem;
+        background: rgba(245,158,11,0.08); border-radius: 4px;
+        border-left: 2px solid #f59e0b;
+    }
+    .flow-fixrec-conf { font-family: monospace; font-weight: 600; padding: 1px 8px; border-radius: 10px; }
+    .flow-fixrec-conf.fixrec-conf-high { background: rgba(63,185,80,0.18); color: #56d364; }
+    .flow-fixrec-conf.fixrec-conf-med { background: rgba(245,158,11,0.18); color: #fcd34d; }
+    .flow-fixrec-conf.fixrec-conf-low { background: rgba(239,68,68,0.18); color: #fca5a5; }
+    .flow-fixrec-state { font-size: 0.78em; opacity: 0.7; font-family: monospace; }
+    .flow-fixrec-rework-pill { font-size: 0.72em; padding: 1px 6px; background: rgba(210,153,34,0.15); color: #d2991f; border-radius: 8px; }
+    .flow-fixrec-link-btn {
+        margin-left: auto; font-size: 0.78em; padding: 2px 8px;
+        background: rgba(56,189,248,0.12); color: #7dd3fc; border: 1px solid rgba(56,189,248,0.3);
+        border-radius: 4px; text-decoration: none;
+    }
+    .flow-fixrec-link-btn:hover { background: rgba(56,189,248,0.22); }
+</style>
+
+@code {
+    private ExecutionHealthAssessment _assessment = new()
+    {
+        OverallStatus = "Loading",
+        Phase = "—",
+        Uptime = TimeSpan.Zero,
+        TotalAgents = 0,
+        WorkingAgents = 0,
+        CompliantAgents = 0,
+        NonCompliantAgents = 0,
+        ErrorAgents = 0,
+        HasDeadlock = false,
+        Observations = [],
+        NextPhaseGates = [],
+        PhaseTimeline = []
+    };
+
+    private IReadOnlyList<AgentSnapshot> _agents = [];
+    private string _filterAgent = "";
+    private string _filterCompliance = "";
+
+    private HttpClient? _http;
+    private List<DiagnosticHistoryEntry>? _standaloneDiagnostics;
+    private System.Threading.Timer? _pollTimer;
+
+    // FlowMonitor state — populated via API endpoint /api/dashboard/health/flow-monitor
+    // (works in both bundled and standalone dashboard modes since the runner exposes it).
+    private bool _flowEnabled;
+    private int _flowPollSeconds = 30;
+    private int _flowMaxActionsPerHour = 12;
+    private DateTimeOffset? _flowLastTick;
+    private List<FlowFinding> _flowFindings = new();
+    private List<FlowAction> _flowActions = new();
+    // T1.5: FixRecommendation state — newest-first list, indexed by finding for quick lookup
+    // when expanding a Critical finding card. Populated alongside findings/actions via the
+    // same poll cycle to keep things in sync.
+    private List<FixRecommendation> _flowRecommendations = new();
+    private System.Threading.Timer? _flowPollTimer;
+    // Filter + drill-down state — client-side only, no API calls per toggle
+    private string _flowFilterSeverity = "all";
+    private string _flowFilterDetector = "";
+    private string? _expandedFindingId;
+    // Per-detector / per-action enable overrides — applied via /api/dashboard/health/flow-monitor/toggle endpoint
+    private Dictionary<string, bool> _flowDetectorOverrides = new();
+    private Dictionary<string, bool> _flowActionOverrides = new();
+    // Hardcoded list of known IDs so the UI shows toggles even before any findings have arrived.
+    // Add new detectors / actions here when they're registered in DI.
+    private static readonly string[] _knownDetectorIds = new[]
+    {
+        "agent-stuck", "phase-completion-mismatch", "deadlock", "pr-merge-conflict", "unmerged-approved-pr",
+        "idle-agent-phase-stuck", "te-false-completion", "label-transition-timeout", "rework-saturation",
+        "handoff-gap", "phase-advancement-watchdog", "status-reason-stagnant", "orphan-pr", "idle-idle-cycle",
+        "empty-queue", "ai-anomaly"
+    };
+    private static readonly string[] _knownActionIds = new[] { "kick-agent-poll", "post-explicit-ask", "escalate-to-human", "merge-approved-pr" };
+
+    // T1.7: Warm restart state. Two-click confirm pattern; auto-reverts after 4s if not confirmed.
+    private bool _restartPending;
+    private bool _restartInProgress;
+    private System.Threading.Timer? _restartConfirmTimer;
+
+    private string FlowPulseClass
+    {
+        get
+        {
+            if (_flowLastTick is null) return "flow-pulse-dead";
+            var age = DateTimeOffset.UtcNow - _flowLastTick.Value;
+            if (age < TimeSpan.FromMinutes(2)) return "flow-pulse-fresh";
+            if (age < TimeSpan.FromMinutes(5)) return "flow-pulse-stale";
+            return "flow-pulse-dead";
+        }
+    }
+
+    private string FlowPulseText
+    {
+        get
+        {
+            if (_flowLastTick is null) return "● no ticks yet";
+            var age = DateTimeOffset.UtcNow - _flowLastTick.Value;
+            if (age.TotalSeconds < 60) return $"● {age.TotalSeconds:0}s ago";
+            if (age.TotalMinutes < 60) return $"● {age.TotalMinutes:0}m ago";
+            return $"● {age.TotalHours:0.0}h ago";
+        }
+    }
+
+    /// <summary>
+    /// Resolve a raw agent ID (like "softwareengineer-736c807fad8e48a198844686724d035d") to a
+    /// human-readable display name (like "SoftwareEngineer 1") by looking it up against the
+    /// live agent snapshot list. Falls back to the trimmed ID if no match is found.
+    /// </summary>
+    private string ResolveAgentName(string? target)
+    {
+        if (string.IsNullOrEmpty(target)) return "(no target)";
+        if (_agents is not null && _agents.Count > 0)
+        {
+            var match = _agents.FirstOrDefault(a => string.Equals(a.Id, target, StringComparison.OrdinalIgnoreCase));
+            if (match is not null) return match.DisplayName;
+        }
+        return AgentSnapshotService.FormatAgentId(target);
+    }
+
+    /// <summary>
+    /// Strips the agent name prefix from detail text to avoid redundancy with the badge.
+    /// Handles both raw IDs ("softwareengineer-83e4d82f: details") and display names ("Program Manager: details").
+    /// </summary>
+    private static string StripAgentPrefix(string detail, string? agentName)
+    {
+        if (string.IsNullOrEmpty(detail) || string.IsNullOrEmpty(agentName)) return detail;
+
+        // Try stripping "agentName: " or "agentName " prefix
+        if (detail.StartsWith(agentName + ": ", StringComparison.OrdinalIgnoreCase))
+            return detail[(agentName.Length + 2)..];
+        if (detail.StartsWith(agentName + " ", StringComparison.OrdinalIgnoreCase))
+            return detail[(agentName.Length + 1)..];
+
+        return detail;
+    }
+
+    /// <summary>
+    /// Walks a piece of text (like a finding's Summary or Rationale) looking for embedded
+    /// agent IDs and replaces them with their display names where found. Keeps the raw ID
+    /// available as a tooltip for traceability. Operates on plaintext rendering — Blazor
+    /// auto-escapes via the @ binding so this is XSS-safe.
+    /// </summary>
+    private string RenderAgentMentions(string? text)
+    {
+        if (string.IsNullOrEmpty(text)) return "";
+        if (_agents is null || _agents.Count == 0) return text;
+        var output = text;
+        foreach (var a in _agents)
+        {
+            if (string.IsNullOrEmpty(a.Id) || string.IsNullOrEmpty(a.DisplayName)) continue;
+            // Only replace if the ID actually appears AND DisplayName isn't already present
+            if (output.Contains(a.Id, StringComparison.OrdinalIgnoreCase) &&
+                !output.Contains($"{a.DisplayName} (")) // avoid double-decoration
+            {
+                output = output.Replace(a.Id, a.DisplayName, StringComparison.OrdinalIgnoreCase);
+            }
+        }
+        return output;
+    }
+
+    private List<FlowFinding> FilteredFindings()
+    {
+        IEnumerable<FlowFinding> q = _flowFindings;
+        if (!string.IsNullOrEmpty(_flowFilterDetector))
+            q = q.Where(f => string.Equals(f.DetectorId, _flowFilterDetector, StringComparison.OrdinalIgnoreCase));
+        if (_flowFilterSeverity != "all")
+        {
+            q = q.Where(f => string.Equals(f.Severity.ToString(), _flowFilterSeverity,
+                StringComparison.OrdinalIgnoreCase));
+        }
+        return q.ToList();
+    }
+
+    private void ToggleExpandFinding(string id)
+    {
+        // Click same finding again → collapse. Click different → switch expansion target.
+        _expandedFindingId = (_expandedFindingId == id) ? null : id;
+    }
+
+    private async void ToggleDetector(string detectorId)
+    {
+        var current = !_flowDetectorOverrides.TryGetValue(detectorId, out var v) || v;
+        _flowDetectorOverrides[detectorId] = !current;
+        await PostFlowMonitorToggleAsync("detector", detectorId, !current);
+    }
+
+    private async void ToggleAction(string actionId)
+    {
+        var current = !_flowActionOverrides.TryGetValue(actionId, out var v) || v;
+        _flowActionOverrides[actionId] = !current;
+        await PostFlowMonitorToggleAsync("action", actionId, !current);
+    }
+
+    private async Task PostFlowMonitorToggleAsync(string kind, string id, bool enabled)
+    {
+        if (_http is null) return;
+        try
+        {
+            var body = new { kind, id, enabled };
+            var response = await _http.PostAsJsonAsync("/api/dashboard/health/flow-monitor/toggle", body);
+            if (!response.IsSuccessStatusCode)
+            {
+                // Revert local state if the server rejected — keeps the UI honest about real config state
+                if (kind == "detector") _flowDetectorOverrides[id] = !enabled;
+                else _flowActionOverrides[id] = !enabled;
+            }
+            await InvokeAsync(StateHasChanged);
+        }
+        catch
+        {
+            // Network failure — revert
+            if (kind == "detector") _flowDetectorOverrides[id] = !enabled;
+            else _flowActionOverrides[id] = !enabled;
+        }
+    }
+
+    protected override void OnInitialized()
+    {
+        if (Mode.IsStandalone)
+        {
+            var factory = Services.GetService<IHttpClientFactory>();
+            _http = factory?.CreateClient("RunnerApi");
+            _pollTimer = new System.Threading.Timer(async _ => await PollDiagnosticsAsync(), null, 0, 5000);
+        }
+        else
+        {
+            // Bundled mode: still need an HTTP client for the FlowMonitor API endpoint
+            // (we could DI FlowMonitorPersistence directly, but going through the API keeps
+            // both modes on the same code path and lets us reuse the polling timer).
+            var factory = Services.GetService<IHttpClientFactory>();
+            _http = factory?.CreateClient("RunnerApi") ?? new HttpClient { BaseAddress = new Uri("http://localhost:5050") };
+        }
+        // FlowMonitor data refreshes every 5s — frequent enough to watch live activity
+        // without thrashing the SQLite DB or burning CPU on JSON serialization.
+        _flowPollTimer = new System.Threading.Timer(async _ => await PollFlowMonitorAsync(), null, 1000, 5000);
+        RefreshData();
+        DataService.OnChange += OnDataChanged;
+    }
+
+    private async Task PollFlowMonitorAsync()
+    {
+        if (_http is null) return;
+        try
+        {
+            var result = await _http.GetFromJsonAsync<FlowMonitorApiResponse>("/api/dashboard/health/flow-monitor");
+            if (result is null) return;
+            _flowEnabled = result.Enabled;
+            _flowPollSeconds = result.PollIntervalSeconds;
+            _flowMaxActionsPerHour = result.MaxActionsPerHour;
+            // Bug fix: result.LastTickUtc comes off the wire as a DateTime with Kind=Unspecified
+            // (System.Text.Json default behaviour). When used with DateTimeOffset constructor or
+            // .ToLocalTime() it was being interpreted as LOCAL time, not UTC, producing a 7-hour
+            // offset that rendered as "-25173s ago" in the pulse badge.
+            // Force-mark Kind=Utc so subsequent comparisons against UtcNow produce real elapsed time.
+            _flowLastTick = result.LastTickUtc.HasValue
+                ? new DateTimeOffset(DateTime.SpecifyKind(result.LastTickUtc.Value, DateTimeKind.Utc), TimeSpan.Zero)
+                : null;
+            _flowFindings = result.Findings ?? new();
+            _flowActions = result.Actions ?? new();
+
+            // T1.5: Pull fix recommendations alongside the findings / actions snapshot so the
+            // expanded-finding panel can deep-link to the Approvals page for any plan that's
+            // already been generated. Failure here is silent — the rest of the dashboard
+            // keeps working without recommendations.
+            try
+            {
+                var recs = await _http.GetFromJsonAsync<List<FixRecommendation>>(
+                    "/api/dashboard/health/flow-monitor/recommendations");
+                _flowRecommendations = recs ?? new();
+            }
+            catch { /* endpoint not yet wired or transient — keep last snapshot */ }
+
+            await InvokeAsync(StateHasChanged);
+        }
+        catch
+        {
+            // Runner isn't reachable or endpoint not yet available — silent fail.
+        }
+    }
+
+    /// <summary>
+    /// T1.5: All FixRecommendations attached to a particular finding, newest first.
+    /// Used by the expanded-finding panel to surface the latest recommendation + its
+    /// rework history in a compact pill.
+    /// </summary>
+    private List<FixRecommendation> GetRecommendationsForFinding(string findingId)
+    {
+        if (_flowRecommendations.Count == 0 || string.IsNullOrEmpty(findingId)) return new();
+        return _flowRecommendations
+            .Where(r => string.Equals(r.FindingId, findingId, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(r => r.CreatedAt)
+            .ToList();
+    }
+
+    /// <summary>DTO matching the /api/dashboard/health/flow-monitor JSON shape.</summary>
+    private sealed class FlowMonitorApiResponse
+    {
+        public bool Enabled { get; set; }
+        public int PollIntervalSeconds { get; set; }
+        public int MaxActionsPerHour { get; set; }
+        public DateTime? LastTickUtc { get; set; }
+        public List<FlowFinding>? Findings { get; set; }
+        public List<FlowAction>? Actions { get; set; }
+    }
+
+    private async Task PollDiagnosticsAsync()
+    {
+        if (_http is null) return;
+        try
+        {
+            _assessment = await _http.GetFromJsonAsync<ExecutionHealthAssessment>("/api/dashboard/health/assessment") ?? _assessment;
+            _standaloneDiagnostics = await _http.GetFromJsonAsync<List<DiagnosticHistoryEntry>>("/api/dashboard/health/diagnostics?limit=100");
+            var agents = await _http.GetFromJsonAsync<List<AgentSnapshot>>("/api/dashboard/agents");
+            if (agents is not null) _agents = agents;
+            await InvokeAsync(StateHasChanged);
+        }
+        catch { /* runner not reachable */ }
+    }
+
+    private void RefreshData()
+    {
+        _assessment = DataService.GetExecutionHealthAssessment();
+        _agents = DataService.GetAllAgentSnapshots();
+    }
+
+    private async void OnDataChanged()
+    {
+        RefreshData();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private IReadOnlyList<DiagnosticHistoryEntry> GetFilteredFeed()
+    {
+        bool? compliantFilter = _filterCompliance switch
+        {
+            "compliant" => true,
+            "non-compliant" => false,
+            _ => null
+        };
+
+        var agentFilter = string.IsNullOrEmpty(_filterAgent) ? null : _filterAgent;
+
+        if (_standaloneDiagnostics is not null)
+        {
+            IEnumerable<DiagnosticHistoryEntry> query = _standaloneDiagnostics;
+            if (agentFilter is not null) query = query.Where(d => d.AgentId == agentFilter);
+            if (compliantFilter is not null) query = query.Where(d => d.IsCompliant == compliantFilter);
+            return query.OrderByDescending(d => d.Timestamp).Take(100).ToList();
+        }
+
+        return DataService.GetDiagnosticHistory(agentFilter, compliantFilter, 100);
+    }
+
+    private string OverallStatusClass => _assessment.OverallStatus switch
+    {
+        "Healthy" => "badge-healthy",
+        "Caution" => "badge-caution",
+        "Warning" => "badge-warning",
+        "Critical" => "badge-critical",
+        _ => ""
+    };
+
+    private static string FormatObservation(string obs) =>
+        obs.Replace("**", "<strong>").Replace("**", "</strong>");
+
+    private static string FormatDuration(TimeSpan ts) => ts.TotalHours >= 1
+        ? $"{(int)ts.TotalHours}h {ts.Minutes}m {ts.Seconds}s"
+        : ts.TotalMinutes >= 1
+            ? $"{ts.Minutes}m {ts.Seconds}s"
+            : $"{ts.Seconds}s";
+
+    // T1.7 — Warm restart click handlers. Two-click confirm to avoid accidental restarts.
+    private void OnRestartClicked()
+    {
+        _restartPending = true;
+        // Auto-cancel after 4s so the button doesn't sit in confirm state forever
+        _restartConfirmTimer?.Dispose();
+        _restartConfirmTimer = new System.Threading.Timer(_ =>
+        {
+            _restartPending = false;
+            InvokeAsync(StateHasChanged);
+        }, null, 4000, System.Threading.Timeout.Infinite);
+    }
+
+    private void OnRestartCancelled()
+    {
+        _restartPending = false;
+        _restartConfirmTimer?.Dispose();
+        _restartConfirmTimer = null;
+    }
+
+    private async Task OnRestartConfirmed()
+    {
+        _restartPending = false;
+        _restartInProgress = true;
+        _restartConfirmTimer?.Dispose();
+        _restartConfirmTimer = null;
+
+        if (_http is null)
+        {
+            _restartInProgress = false;
+            return;
+        }
+        try
+        {
+            // Fire-and-forget — the runner will stop ~2s after responding, so we don't await long.
+            // The auto-reload-on-disconnect logic in App.razor (commit 35b0829) will reload the
+            // page when the new runner is up and SignalR reconnects.
+            await _http.PostAsync("/api/dashboard/runtime/restart", content: null);
+        }
+        catch
+        {
+            // Ignore — common to throw "connection forcibly closed" mid-flight as the runner shuts down.
+        }
+    }
+
+    public void Dispose()
+    {
+        DataService.OnChange -= OnDataChanged;
+        _pollTimer?.Dispose();
+        _flowPollTimer?.Dispose();
+        _restartConfirmTimer?.Dispose();
+    }
+}

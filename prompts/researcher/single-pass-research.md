@@ -4,6 +4,7 @@ description: "Single-pass research user prompt with full document structure requ
 variables:
   - topic
   - topic_description
+  - existing_project_context
 ---
 Research the following topic for our software project.
 
@@ -11,6 +12,13 @@ Research the following topic for our software project.
 
 **Context:**
 {{topic_description}}
+
+{{#existing_project_context}}
+## Existing Project Context
+This is a feature for an EXISTING project. The following is a summary of the current codebase, architecture, and conventions. Your research MUST account for the real tech stack, patterns, and constraints already in place — do NOT recommend alternatives to what's already established unless there's a compelling reason.
+
+{{existing_project_context}}
+{{/existing_project_context}}
 
 Produce a comprehensive, structured research document with these sections:
 

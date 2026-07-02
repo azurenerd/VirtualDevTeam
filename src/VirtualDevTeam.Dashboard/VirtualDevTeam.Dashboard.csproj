@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <ItemGroup>
+    <ProjectReference Include="..\VirtualDevTeam.Core\VirtualDevTeam.Core.csproj" />
+    <ProjectReference Include="..\VirtualDevTeam.Orchestrator\VirtualDevTeam.Orchestrator.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Markdig" Version="0.*" />
+    <PackageReference Include="HtmlSanitizer" Version="9.*" />
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.*" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UserSecretsId>b0bc835e-6076-417b-8f54-56cce568d9c7</UserSecretsId>
+    <!-- Serve Dashboard static assets at root (not _content/VirtualDevTeam.Dashboard/) when hosted by Runner -->
+    <StaticWebAssetBasePath>/</StaticWebAssetBasePath>
+  </PropertyGroup>
+
+  <!-- Prevent Dashboard's appsettings.json from colliding with Runner's
+       during single-file publish (NETSDK1152). The file is still available
+       for Dashboard.Host's own publish. -->
+  <ItemGroup Condition="'$(PublishSingleFile)' == 'true'">
+    <Content Update="appsettings.json" CopyToPublishDirectory="Never" />
+    <Content Update="appsettings.*.json" CopyToPublishDirectory="Never" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Expose `internal` helpers to the unit-tests project (e.g. MarkdownBody.TryRewriteHref).
+         No other project consumes Dashboard internals — keep this list tight. -->
+    <InternalsVisibleTo Include="VirtualDevTeam.Dashboard.Unit.Tests" />
+  </ItemGroup>
+
+</Project>

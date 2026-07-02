@@ -1,0 +1,1926 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.Text;
+using VirtualDevTeam.Core.Agents;
+using VirtualDevTeam.Core.Agents.Decisions;
+using VirtualDevTeam.Core.Agents.Reasoning;
+using VirtualDevTeam.Core.AI;
+using VirtualDevTeam.Core.Configuration;
+using VirtualDevTeam.Core.DevPlatform.Capabilities;
+using VirtualDevTeam.Core.DevPlatform.Models;
+using VirtualDevTeam.Core.GitHub;
+using VirtualDevTeam.Core.GitHub.Models;
+using VirtualDevTeam.Core.Messaging;
+using VirtualDevTeam.Core.Persistence;
+using Microsoft.Extensions.Logging;
+using Microsoft.SemanticKernel;
+using Microsoft.SemanticKernel.ChatCompletion;
+
+namespace VirtualDevTeam.Agents;
+
+public class ArchitectAgent : AgentBase
+{
+    private readonly AgentPlatformServices _platform;
+    private readonly DecisionGateService? _decisionGate;
+    private readonly IDecisionLog? _decisionLog;
+
+    private readonly Queue<ArchitectureDirective>_taskQueue = new();
+    private readonly HashSet<int> _reviewedPrNumbers = new();
+    private readonly ConcurrentQueue<int> _reviewQueue = new();
+    private readonly HashSet<int> _forceApprovalPrs = new();
+
+    private bool _architectureComplete;
+    private DateTime _lastPrScan = DateTime.MinValue;
+    private static readonly TimeSpan PrScanInterval = TimeSpan.FromSeconds(60);
+
+
+    public ArchitectAgent(
+        AgentIdentity identity,
+        AgentCoreServices core,
+        AgentPlatformServices platform,
+        ILogger<ArchitectAgent> logger,
+        DecisionGateService? decisionGate = null,
+        IDecisionLog? decisionLog = null)
+        : base(identity, core, logger)
+    {
+        _platform = platform ?? throw new ArgumentNullException(nameof(platform));
+        _decisionGate = decisionGate;
+        _decisionLog = decisionLog;
+    }
+
+    private string EffectiveBranch => _platform.BranchProvider?.EffectiveBranch ?? Core!.Config.Project.DefaultBranch;
+
+    protected override async Task OnInitializeAsync(CancellationToken ct)
+    {
+        // Only listen for PMSpecReady — NOT generic TaskAssignments.
+        // The PM sends a dedicated TaskAssignment after PMSpec is created,
+        // but we gate on StatusUpdateMessage to avoid starting before PMSpec exists.
+        Subscribe<StatusUpdateMessage>(HandleStatusUpdateAsync);
+        Subscribe<ReviewRequestMessage>(HandleReviewRequestAsync);
+
+        // NOTE: Idempotency check for existing Architecture.md is performed inside
+        // DesignArchitectureAsync (not here) because EffectiveBranch isn't set yet
+        // during init — the run hasn't started. Checking here reads from the wrong branch.
+
+        Logger.LogInformation("Architect agent initialized, awaiting PMSpec completion");
+    }
+
+    protected override async Task RunAgentLoopAsync(CancellationToken ct)
+    {
+        if (_architectureComplete)
+        {
+            UpdateStatus(AgentStatus.Idle, "Architecture complete, monitoring PRs");
+
+            // Recovery: scan existing open PRs that need architect review.
+            // After a restart, bus messages from the prior run are lost — PRs marked
+            // ready-for-review before the restart won't arrive via ReviewRequestMessage.
+            // Without this, the Architect sits idle while FlowMonitor flags it as stuck.
+            try
+            {
+                var openPRs = await _platform.PrService.ListOpenAsync(ct);
+                var needsReview = openPRs
+                    .Where(pr => pr.Labels.Contains("ready-for-review")
+                        && !pr.Labels.Contains("architect-approved")
+                        && !_reviewedPrNumbers.Contains(pr.Number))
+                    .ToList();
+                if (needsReview.Count > 0)
+                {
+                    Logger.LogInformation("Recovery: found {Count} open PR(s) needing architect review",
+                        needsReview.Count);
+                    foreach (var pr in needsReview)
+                        _reviewQueue.Enqueue(pr.Number);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex, "Recovery scan for open PRs failed (non-fatal)");
+            }
+        }
+        else
+            UpdateStatus(AgentStatus.Idle, "Waiting for PMSpec to be ready");
+
+        while (!ct.IsCancellationRequested)
+        {
+            await WaitIfPausedAsync(ct);
+            ArchitectureDirective? currentDirective = null;
+            try
+            {
+                if (!_architectureComplete && _taskQueue.TryDequeue(out var directive))
+                {
+                    currentDirective = directive;
+                    await DesignArchitectureAsync(directive, ct);
+                    _architectureComplete = true;
+                    currentDirective = null; // Don't re-enqueue on success
+                }
+
+                if (_architectureComplete)
+                {
+                    // Periodic scan: discover PRs that need review but weren't
+                    // delivered via bus message (e.g., marked ready-for-review while
+                    // Architect was still designing, or bus messages lost).
+                    if (DateTime.UtcNow - _lastPrScan > PrScanInterval)
+                    {
+                        _lastPrScan = DateTime.UtcNow;
+                        try
+                        {
+                            var openPRs = await _platform.PrService.ListOpenAsync(ct);
+                            foreach (var pr in openPRs)
+                            {
+                                if (pr.Labels.Contains("ready-for-review")
+                                    && !pr.Labels.Contains("architect-approved")
+                                    && !_reviewedPrNumbers.Contains(pr.Number))
+                                {
+                                    Logger.LogInformation(
+                                        "Periodic scan: enqueuing PR #{Number} for architect review",
+                                        pr.Number);
+                                    _reviewQueue.Enqueue(pr.Number);
+                                }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Logger.LogWarning(ex, "Periodic PR scan failed (non-fatal)");
+                        }
+                    }
+
+                    await ReviewPRsForArchitectureAsync(ct);
+                    UpdateStatus(AgentStatus.Idle, "Architecture complete, monitoring PRs");
+                }
+                else
+                {
+                    UpdateStatus(AgentStatus.Idle, "Waiting for PMSpec to be ready");
+                }
+
+                await RefreshDiagnosticWithMemoryAsync(ct);
+
+                await WaitForWakeOrTimeoutAsync(
+                    TimeSpan.FromSeconds(Core!.Config.Limits.GitHubPollIntervalSeconds), ct);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, "Architect loop error, will retry after delay");
+                RecordError($"Architect error: {ex.Message}", Microsoft.Extensions.Logging.LogLevel.Error, ex);
+                // Don't leave a stale doc-PR link on the dashboard during error recovery.
+                CurrentPrNumber = null;
+                if (currentDirective is not null)
+                {
+                    Logger.LogInformation("Re-enqueueing failed architecture directive");
+                    _taskQueue.Enqueue(currentDirective);
+                }
+                UpdateStatus(AgentStatus.Working, "Recovering from error, will retry");
+                try { await Task.Delay(15000, ct); }
+                catch (OperationCanceledException) { break; }
+            }
+        }
+
+        UpdateStatus(AgentStatus.Offline, "Architect loop exited");
+    }
+
+    #region Message Handlers
+
+    private Task HandleStatusUpdateAsync(StatusUpdateMessage message, CancellationToken ct)
+    {
+        // Only react to PMSpecReady — this means Research is done AND PMSpec exists
+        if (!string.Equals(message.MessageType, "PMSpecReady", StringComparison.OrdinalIgnoreCase))
+            return Task.CompletedTask;
+
+        Logger.LogInformation(
+            "PMSpec ready signal received from {From}, queuing architecture design",
+            message.FromAgentId);
+
+        _taskQueue.Enqueue(new ArchitectureDirective
+        {
+            TaskId = $"architecture-design-{Guid.NewGuid():N}",
+            Title = "Design system architecture",
+            Description = message.Details ?? "PMSpec and Research are ready. Design the architecture."
+        });
+
+        return Task.CompletedTask;
+    }
+
+    private Task HandleReviewRequestAsync(ReviewRequestMessage message, CancellationToken ct)
+    {
+        Logger.LogInformation(
+            "Review request from {Agent} for PR #{PrNumber}: {Title} ({ReviewType})",
+            message.FromAgentId, message.PrNumber, message.PrTitle, message.ReviewType);
+
+        // Clear reviewed flag so reworked PRs get re-reviewed
+        _reviewedPrNumbers.Remove(message.PrNumber);
+
+        // Track FinalApproval requests so Architect auto-approves after max rework cycles
+        if (string.Equals(message.ReviewType, "FinalApproval", StringComparison.OrdinalIgnoreCase))
+            _forceApprovalPrs.Add(message.PrNumber);
+
+        _reviewQueue.Enqueue(message.PrNumber);
+        return Task.CompletedTask;
+    }
+
+    #endregion
+
+    #region Architecture Design
+
+    /// <summary>Revise Architecture.md based on reviewer feedback using CLI edit mode.</summary>
+    private async Task<string?> ReviseArchitectureAsync(
+        ArchitectureDirective directive, string feedback, CancellationToken ct)
+    {
+        try
+        {
+            var currentContent = await Core!.ProjectFiles.GetArchitectureDocAsync(ct);
+            if (string.IsNullOrWhiteSpace(currentContent)) return null;
+
+            // CLI Edit Mode: write file locally, let Copilot CLI edit it surgically
+            var tempDir = Path.Combine(Path.GetTempPath(), $"vdt-arch-revision-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(tempDir);
+            var filePath = Path.Combine(tempDir, "Architecture.md");
+            await File.WriteAllTextAsync(filePath, currentContent, ct);
+
+            try
+            {
+                // todo: pm-rework-too-slow — same fast-path treatment as PM. Architect rework
+                // on reviewer feedback is usually surgical; default to a faster tier and let
+                // operators opt back into the agent's normal tier via ReworkModelTierOverride.
+                var reworkTier = Core!.Config.Agents.Architect.ReworkModelTierOverride;
+                var effectiveTier = string.IsNullOrWhiteSpace(reworkTier) ? Identity.ModelTier : reworkTier;
+                var kernel = Core!.ModelRegistry.GetKernel(effectiveTier, Identity.Id);
+                var chat = kernel.GetRequiredService<IChatCompletionService>();
+                var history = CreateChatHistory();
+
+                // Include project description + wizard Q&A as reference context
+                var projectDescription = Core!.Config.Project.ResolvedDescription ?? Core!.Config.Project.Description ?? "";
+
+                history.AddSystemMessage(
+                    $"""
+                    You are a senior software architect revising Architecture.md based on reviewer feedback.
+
+                    ## Project Context (READ-ONLY reference — do NOT copy this into the document verbatim):
+                    {projectDescription}
+
+                    CRITICAL RULES:
+                    1. Use the file editing tools to make ONLY the changes the feedback requests.
+                    2. Do NOT rewrite or reorganize sections that the feedback does not mention.
+                    3. Do NOT remove existing content unless the feedback explicitly asks for removal.
+                    4. Preserve the tone, structure, and level of detail of the original document.
+                    5. Make surgical, minimal edits — change only what is necessary to address the feedback.
+                    6. The file Architecture.md is in your working directory. Edit it directly.
+                    7. Use the Project Context above to ensure architectural decisions align with business goals and requirements, but do NOT restructure the document around it.
+                    """);
+                history.AddUserMessage(
+                    $"""
+                    ## Reviewer Feedback:
+
+                    {feedback}
+
+                    Edit the file `Architecture.md` in your working directory to address ONLY the feedback above.
+                    Make minimal, surgical changes. Do not rewrite the whole file.
+                    """);
+
+                using var scope = AgentCallContext.PushInvocationContext(new CopilotCliInvocationContext(
+                    AllowFileEdits: true,
+                    OverrideWorkingDirectory: tempDir));
+
+                var sw = Stopwatch.StartNew();
+                await chat.GetChatMessageContentAsync(history, cancellationToken: ct);
+                sw.Stop();
+
+                if (sw.Elapsed.TotalMinutes > 4)
+                {
+                    Logger.LogWarning(
+                        "Architect rework took {Seconds:F0}s on Architecture.md (tier={Tier}) — exceeded fast-path expectation. " +
+                        "Consider model tier or single-pass workflow.",
+                        sw.Elapsed.TotalSeconds, effectiveTier);
+                }
+
+                if (!File.Exists(filePath))
+                {
+                    Logger.LogWarning("CLI edit mode deleted Architecture.md — rejecting revision");
+                    return null;
+                }
+
+                var revised = await File.ReadAllTextAsync(filePath, ct);
+
+                if (revised.TrimEnd() == currentContent.TrimEnd())
+                {
+                    Logger.LogInformation("CLI edit made no changes to Architecture.md");
+                    return null;
+                }
+
+                Logger.LogInformation("CLI edit revision of Architecture.md: {Original} → {Revised} chars",
+                    currentContent.Length, revised.Length);
+                return revised;
+            }
+            finally
+            {
+                try { Directory.Delete(tempDir, recursive: true); }
+                catch { /* best effort cleanup */ }
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to revise Architecture.md");
+            return null;
+        }
+    }
+
+    /// <summary>Reset gate labels on a PR for re-review after revision.</summary>
+    private async Task ResetGateLabelsAsync(int prNumber, CancellationToken ct)
+    {
+        try
+        {
+            await _platform.PrService.RemoveLabelAsync(prNumber, "human-approved", ct);
+            await _platform.PrService.AddLabelAsync(prNumber, "awaiting-human-review", ct);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to reset gate labels on PR #{Number}", prNumber);
+        }
+    }
+
+    private async Task DesignArchitectureAsync(ArchitectureDirective directive, CancellationToken ct)
+    {
+        // Idempotency: check if Architecture.md already has real architectural content
+        var existingArch = await Core!.ProjectFiles.GetArchitectureDocAsync(ct);
+        if (!string.IsNullOrWhiteSpace(existingArch) &&
+            !existingArch.Contains("No architecture document has been created yet") &&
+            existingArch.Contains("## System Components", StringComparison.OrdinalIgnoreCase))
+        {
+            Logger.LogInformation("Architecture.md already exists with content, skipping design");
+            Core!.ReasoningLog!.Log(new AgentReasoningEvent
+            {
+                AgentId = Identity.Id,
+                AgentDisplayName = Identity.DisplayName,
+                EventType = AgentReasoningEventType.Decision,
+                Phase = "Architecture Design",
+                Summary = "Architecture.md already complete — signaling downstream agents",
+                Detail = "Idempotency check found existing architecture with System Components section. Skipping design and signaling ArchitectureComplete."
+            });
+            // Still signal downstream so PE isn't stuck
+            await PublishStatusAsync("ArchitectureComplete", AgentStatus.Idle,
+                details: "Architecture design already complete. Architecture.md is ready for review.", ct: ct);
+            Core.FlowTimeline?.RecordEvent("architecture.doc.committed", "Architecture.md Created",
+                agentId: Identity.Id, phase: "Architecture", category: VirtualDevTeam.Core.HealthMonitor.MilestoneCategory.FastForward, entityType: "Document", entityId: "Architecture.md");
+            return;
+        }
+
+        // Find any related architecture issue to link
+        int? relatedIssue = null;
+        try
+        {
+            var issues = await _platform.WorkItemService.ListOpenAsync(ct);
+            var archIssue = issues.FirstOrDefault(i =>
+                i.Title.Contains("Architecture", StringComparison.OrdinalIgnoreCase) ||
+                i.Title.Contains("architecture", StringComparison.OrdinalIgnoreCase));
+            relatedIssue = archIssue?.Number;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Could not find related issue for architecture");
+        }
+
+        // Quick mode: produce a minimal 1-paragraph architecture for fast testing
+        var archPath = Core!.ProjectFiles.ResolvePath("Architecture.md");
+        if (Core!.Config.Project.QuickDocumentCreation)
+        {
+            Logger.LogInformation("QuickDocumentCreation: producing minimal Architecture.md");
+            UpdateStatus(AgentStatus.Working, "Creating minimal Architecture (quick mode)");
+            var qPr = await _platform.PrWorkflow.OpenDocumentPRAsync(
+                Identity.DisplayName, archPath,
+                $"System Architecture for {directive.Title}",
+                "Quick-mode architecture document.", relatedIssue, ct);
+            CurrentPrNumber = qPr.Number;
+
+            var qKernel = Core!.ModelRegistry.GetKernel(Identity.ModelTier, Identity.Id);
+            var qChat = qKernel.GetRequiredService<IChatCompletionService>();
+            var qHistory = CreateChatHistory();
+
+            var qSys = await Core!.PromptService!.RenderAsync("architect/quick-system",
+                new Dictionary<string, string>(), ct)
+                ?? "You are a software architect. Write a brief architecture document.";
+            qHistory.AddSystemMessage(qSys);
+
+            var qUser = await Core!.PromptService!.RenderAsync("architect/quick-user",
+                new Dictionary<string, string>
+                {
+                    ["project_description"] = Core!.Config.Project.Description,
+                    ["tech_stack"] = Core!.Config.Project.TechStack
+                }, ct)
+                ?? $"Project: {Core!.Config.Project.Description}\nTech Stack: {Core!.Config.Project.TechStack}\n\n" +
+                   "Write a concise architecture document with these sections (1-2 sentences each): " +
+                   "## System Components (list main components), ## Data Model (key entities), " +
+                   "## Project Structure (folder layout — the repo root IS the solution root; " +
+                   "place .sln at root, project files under ProjectName/ subfolder; " +
+                   "NEVER create multiple levels of same-named folders), ## Technology Choices. " +
+                   "Keep the entire document under 300 words. Be specific about file paths and component names.";
+            qHistory.AddUserMessage(qUser);
+            var qResp = await qChat.GetChatMessageContentAsync(qHistory, cancellationToken: ct);
+            var qContent = $"# System Architecture: {directive.Title}\n\n{qResp.Content?.Trim() ?? ""}";
+
+            await _platform.PrWorkflow.CommitAndMergeDocumentPRAsync(
+                qPr, Identity.DisplayName, archPath, qContent,
+                $"Add system architecture for {directive.Title}", ct);
+            // Quick-mode doc PR merged — clear so dashboard stops linking to it.
+            CurrentPrNumber = null;
+            Logger.LogInformation("Quick Architecture.md created and merged");
+            LogActivity("task", $"✅ Quick Architecture.md merged: {directive.Title}");
+
+            if (relatedIssue.HasValue)
+            {
+                try { await _platform.WorkItemService.CloseAsync(relatedIssue.Value, ct); }
+                catch { /* best effort */ }
+            }
+
+            await PublishStatusAsync("ArchitectureComplete", AgentStatus.Working,
+                details: "Architecture design complete (quick mode). PE can begin engineering planning.", ct: ct);
+            UpdateStatus(AgentStatus.Idle, "Quick architecture complete");
+            return;
+        }
+
+        // Create the PR upfront so it's visible immediately
+        UpdateStatus(AgentStatus.Working, "Creating PR for Architecture.md");
+        string? createPrStepId = null;
+        try { createPrStepId = Core!.TaskTracker!.BeginStep(Identity.Id, directive.TaskId, "Create architecture PR", "Opening PR for Architecture.md"); } catch { }
+        var pr = await _platform.PrWorkflow.OpenDocumentPRAsync(
+            Identity.DisplayName,
+            archPath,
+            $"System Architecture for {directive.Title}",
+            "Complete system architecture document covering components, data model, " +
+            "API contracts, infrastructure, security, and scaling strategy.",
+            relatedIssue,
+            ct);
+        // Surface the doc PR on the dashboard (agent-card-show-pr todo).
+        CurrentPrNumber = pr.Number;
+        try { if (createPrStepId is not null) Core!.TaskTracker!.CompleteStep(createPrStepId); } catch { }
+
+        // Resume-aware: check if gate is already pending/approved from a prior run
+        var gateStatus = await Core!.GateCheck.GetGateStatusAsync(
+            GateIds.ArchitectureDesign, pr.Number, ct);
+
+        string? architectureDoc = null;
+
+        if (gateStatus == GateStatus.Approved)
+        {
+            Logger.LogInformation("Architecture gate already approved on PR #{Number}, skipping design", pr.Number);
+            LogActivity("task", $"⏩ Architecture gate already approved on PR #{pr.Number}, resuming");
+        }
+        else if (gateStatus == GateStatus.AwaitingApproval)
+        {
+            Logger.LogInformation("Architecture gate already pending on PR #{Number}, skipping to gate wait", pr.Number);
+            LogActivity("task", $"⏩ Architecture gate already pending on PR #{pr.Number}, resuming wait");
+        }
+        else
+        {
+
+        UpdateStatus(AgentStatus.Working, "Starting architecture design");
+        Logger.LogInformation("Starting architecture design for task {TaskId}: {Title}",
+            directive.TaskId, directive.Title);
+        LogActivity("task", $"🏗️ Starting architecture design: {directive.Title}");
+
+        // 1. Read PM specs and Research.md
+        LogActivity("planning", "📋 Reading PMSpec and Research inputs");
+        string? readCtxStepId = null;
+        try { readCtxStepId = Core!.TaskTracker!.BeginStep(Identity.Id, directive.TaskId, "Read context (PMSpec, Research)", "Reading PM specification and research findings"); } catch { }
+        var pmSpec = await Core!.ProjectFiles.GetPMSpecAsync(ct);
+        var research = await Core!.ProjectFiles.GetResearchDocAsync(ct);
+
+        // 1b. Read visual design reference files directly for architecture decisions
+        LogActivity("planning", "🔍 Scanning design reference files");
+        var designContext = await ReadDesignReferencesAsync(ct);
+        try { if (readCtxStepId is not null) Core!.TaskTracker!.CompleteStep(readCtxStepId); } catch { }
+
+        // 2. Use Semantic Kernel multi-turn conversation to design architecture
+        var kernel = Core!.ModelRegistry.GetKernel(Identity.ModelTier, Identity.Id);
+        var chat = kernel.GetRequiredService<IChatCompletionService>();
+
+        // Enable agentic mode so the Architect can explore the actual project codebase.
+        // This is the most critical agent for agentic access — it must understand existing
+        // module registration, folder structure, and conventions to produce accurate Architecture.md.
+        // DocumentGenerationMode ensures the response is the full document, not a brief summary.
+        // NOTE: Manually disposed before self-assessment to prevent the assessment from
+        // inheriting AgenticAllowAll+DocumentGenerationMode (which causes 30min+ stuck exploration).
+        var projectPath = Core!.Config.Workspace.LocalCheckoutPath;
+        var _agenticScope = !string.IsNullOrEmpty(projectPath) && Directory.Exists(projectPath)
+            ? AgentCallContext.PushInvocationContext(new CopilotCliInvocationContext(
+                AgenticAllowAll: true,
+                DocumentGenerationMode: true,
+                OverrideWorkingDirectory: projectPath))
+            : null;
+
+        var history = CreateChatHistory();
+        var memoryContext = await GetMemoryContextAsync(ct: ct);
+
+        var sysVars = new Dictionary<string, string>
+        {
+            ["tech_stack"] = Core!.Config.Project.TechStack,
+            ["memory_context"] = string.IsNullOrEmpty(memoryContext) ? "" : $"\n\n{memoryContext}",
+            ["design_context"] = "",
+            ["unanswered_decisions"] = DecisionContextBuilder.BuildUnansweredDecisionsContext(
+                Core!.Config.UnansweredDecisionQuestions, _decisionLog)
+        };
+
+        if (!string.IsNullOrWhiteSpace(designContext))
+        {
+            var designPrompt = await Core!.PromptService!.RenderAsync("architect/design-reference",
+                new Dictionary<string, string> { ["design_context"] = designContext }, ct);
+            sysVars["design_context"] = designPrompt ??
+                "\n\n## VISUAL DESIGN REFERENCE\n" +
+                "The repository contains visual design reference files that define the exact UI layout. " +
+                "Your architecture MUST define components that map directly to the visual sections in this design. " +
+                "Include a '## UI Component Architecture' section in your output that maps each visual section " +
+                "from the design to a specific component, its CSS layout strategy, data bindings, and interactions.\n\n" +
+                designContext;
+        }
+
+        var systemPrompt = await Core!.PromptService!.RenderAsync("architect/full-system", sysVars, ct)
+            ?? "You are a senior software architect on a development team. " +
+               "Your job is to design a complete, well-structured system architecture based on " +
+               "the PM specification (business requirements) and research findings. " +
+               "Ensure the architecture supports all business goals, user stories, and " +
+               "non-functional requirements from the PM spec. Be thorough, specific, and practical. " +
+               "Focus on producing actionable architecture that engineers can implement directly.\n\n" +
+               $"IMPORTANT: The project's technology stack has already been decided: **{Core!.Config.Project.TechStack}**. " +
+               "Your architecture MUST use this stack. Design all components, patterns, and " +
+               "infrastructure around this technology. Do NOT recommend or use alternative stacks." +
+               (string.IsNullOrEmpty(memoryContext) ? "" : $"\n\n{memoryContext}") +
+               (string.IsNullOrWhiteSpace(designContext)
+                   ? ""
+                   : "\n\n## VISUAL DESIGN REFERENCE\n" +
+                     "The repository contains visual design reference files that define the exact UI layout. " +
+                     "Your architecture MUST define components that map directly to the visual sections in this design. " +
+                     "Include a '## UI Component Architecture' section in your output that maps each visual section " +
+                     "from the design to a specific component, its CSS layout strategy, data bindings, and interactions.\n\n" +
+                     designContext);
+
+        history.AddSystemMessage(systemPrompt);
+
+        var useSinglePass = Core!.Config.CopilotCli.SinglePassMode;
+        string? designStepId = null;
+        try { designStepId = Core!.TaskTracker!.BeginStep(Identity.Id, directive.TaskId, "Architecture design", "Designing architecture via AI conversation", Identity.ModelTier); } catch { }
+
+        if (useSinglePass)
+        {
+            // Single-pass mode: one comprehensive prompt instead of 5 conversational turns
+            LogActivity("planning", "🤖 Calling AI for architecture (single-pass)");
+            UpdateStatus(AgentStatus.Working, "Designing architecture (single-pass)");
+            AgentCallContext.CurrentCallContext = "Designing system architecture";
+
+            var singlePassVars = new Dictionary<string, string>
+            {
+                ["task_title"] = directive.Title,
+                ["task_description"] = directive.Description,
+                ["tech_stack"] = Core!.Config.Project.TechStack,
+                ["pm_spec"] = pmSpec ?? "",
+                ["research"] = research ?? "",
+                ["unanswered_decisions"] = DecisionContextBuilder.BuildUnansweredDecisionsContext(
+                    Core!.Config.UnansweredDecisionQuestions, _decisionLog)
+            };
+            var singlePassUser = await Core!.PromptService!.RenderAsync("architect/single-pass-user", singlePassVars, ct)
+                ?? $"I need you to design the complete system architecture for our project.\n\n" +
+                   $"**Task:** {directive.Title}\n\n" +
+                   $"**Description:** {directive.Description}\n\n" +
+                   $"**Technology Stack (mandatory):** {Core!.Config.Project.TechStack}\n\n" +
+                   $"## PM Specification (Business Requirements)\n{pmSpec}\n\n" +
+                   $"## Research Findings\n{research}\n\n" +
+                   "Produce a complete, structured Architecture.md document with ALL of these sections:\n\n" +
+                   "# Architecture\n\n" +
+                   "## Overview & Goals\n(High-level summary)\n\n" +
+                   "## System Components\n(Each component with responsibilities, interfaces, dependencies, data)\n\n" +
+                   "## Component Interactions\n(Data flow and communication patterns)\n\n" +
+                   "## Data Model\n(Entities, relationships, storage)\n\n" +
+                   "## API Contracts\n(Endpoints, request/response shapes, error handling)\n\n" +
+                   "## Infrastructure Requirements\n(Hosting, networking, storage, CI/CD)\n\n" +
+                   "## Technology Stack Decisions\n(Chosen technologies with justification)\n\n" +
+                   "## Security Considerations\n(Auth, data protection, validation)\n\n" +
+                   "## Scaling Strategy\n(How the system scales)\n\n" +
+                   "## Risks & Mitigations\n(Key risks and how to address them)\n\n" +
+                   "Use these exact section headers. Be thorough and specific. " +
+                   "All decisions must use the mandatory technology stack. " +
+                   "This document will be the single source of truth for the engineering team.";
+            history.AddUserMessage(singlePassUser);
+
+            var singleResponse = await chat.GetChatMessageContentAsync(
+                history, cancellationToken: ct);
+            architectureDoc = singleResponse.Content?.Trim() ?? "";
+            try { if (designStepId is not null) { Core!.TaskTracker!.RecordLlmCall(designStepId); Core!.TaskTracker!.RecordSubStep(designStepId, "Single-pass architecture design"); } } catch { }
+        }
+        else
+        {
+        // Turn 1: Identify key architectural decisions
+        LogActivity("planning", "🤖 AI turn 1/5: Key architectural decisions");
+        AgentCallContext.CurrentCallContext = "Designing architecture (1/5): Key decisions";
+        var turnVars = new Dictionary<string, string>
+        {
+            ["task_title"] = directive.Title,
+            ["task_description"] = directive.Description,
+            ["tech_stack"] = Core!.Config.Project.TechStack,
+            ["pm_spec"] = pmSpec ?? "",
+            ["research"] = research ?? "",
+            ["unanswered_decisions"] = DecisionContextBuilder.BuildUnansweredDecisionsContext(
+                Core!.Config.UnansweredDecisionQuestions, _decisionLog)
+        };
+        var turn1Prompt = await Core!.PromptService!.RenderAsync("architect/multi-turn-decisions", turnVars, ct)
+            ?? $"I need you to design the system architecture for our project.\n\n" +
+               $"**Task:** {directive.Title}\n\n" +
+               $"**Description:** {directive.Description}\n\n" +
+               $"**Technology Stack (mandatory):** {Core!.Config.Project.TechStack}\n\n" +
+               $"## PM Specification (Business Requirements)\n{pmSpec}\n\n" +
+               $"## Research Findings\n{research}\n\n" +
+               "First, identify the key architectural decisions we need to make. " +
+               "For each decision, explain the options, trade-offs, and your recommendation. " +
+               "Ensure the architecture supports all business goals and user stories from the PM Spec. " +
+               "All decisions must use the mandatory technology stack specified above. " +
+               "List them clearly.";
+        history.AddUserMessage(turn1Prompt);
+
+        var decisionsResponse = await chat.GetChatMessageContentAsync(
+            history, cancellationToken: ct);
+        history.AddAssistantMessage(decisionsResponse.Content ?? "");
+        try { if (designStepId is not null) { Core!.TaskTracker!.RecordLlmCall(designStepId); Core!.TaskTracker!.RecordSubStep(designStepId, "Turn 1/5: Key architectural decisions"); } } catch { }
+
+        Logger.LogDebug("Architectural decisions identified for {TaskId}", directive.TaskId);
+        await RememberAsync(MemoryType.Decision,
+            $"Key architectural decisions for '{directive.Title}'",
+            TruncateForMemory(decisionsResponse.Content ?? ""), ct);
+
+        // Turn 2: Design system components and interactions
+        LogActivity("planning", "🤖 AI turn 2/5: Components & interactions");
+        UpdateStatus(AgentStatus.Working, "Designing (2/5): Components & interactions");
+        var turn2Prompt = await Core!.PromptService!.RenderAsync("architect/multi-turn-components",
+            new Dictionary<string, string>(), ct)
+            ?? "Now design the system components based on those decisions. For each component, cover:\n" +
+               "- Name and responsibility (single responsibility principle)\n" +
+               "- Public interfaces / API surface\n" +
+               "- Dependencies on other components\n" +
+               "- Data it owns or manages\n\n" +
+               "Also describe the data flow between components for the primary use cases.";
+        history.AddUserMessage(turn2Prompt);
+
+        var componentsResponse = await chat.GetChatMessageContentAsync(
+            history, cancellationToken: ct);
+        history.AddAssistantMessage(componentsResponse.Content ?? "");
+        try { if (designStepId is not null) { Core!.TaskTracker!.RecordLlmCall(designStepId); Core!.TaskTracker!.RecordSubStep(designStepId, "Turn 2/5: Components & interactions"); } } catch { }
+
+        Logger.LogDebug("System components designed for {TaskId}", directive.TaskId);
+
+        // Turn 3: Data model, API contracts, and infrastructure
+        LogActivity("planning", "🤖 AI turn 3/5: Data model & APIs");
+        UpdateStatus(AgentStatus.Working, "Designing (3/5): Data model & APIs");
+        var turn3Prompt = await Core!.PromptService!.RenderAsync("architect/multi-turn-data-model",
+            new Dictionary<string, string>(), ct)
+            ?? "Now define:\n" +
+               "1. **Data Model** — key entities, their relationships, and storage strategy.\n" +
+               "2. **API Contracts** — endpoints/interfaces, request/response shapes, and error handling.\n" +
+               "3. **Infrastructure Requirements** — hosting, networking, storage, CI/CD, and monitoring needs.\n\n" +
+               "Be specific with types, field names, and configurations where applicable.";
+        history.AddUserMessage(turn3Prompt);
+
+        var contractsResponse = await chat.GetChatMessageContentAsync(
+            history, cancellationToken: ct);
+        history.AddAssistantMessage(contractsResponse.Content ?? "");
+        try { if (designStepId is not null) { Core!.TaskTracker!.RecordLlmCall(designStepId); Core!.TaskTracker!.RecordSubStep(designStepId, "Turn 3/5: Data model & APIs"); } } catch { }
+
+        Logger.LogDebug("Data model and contracts defined for {TaskId}", directive.TaskId);
+
+        // Turn 4: Security, scaling, and risk mitigation
+        LogActivity("planning", "🤖 AI turn 4/5: Security & scaling");
+        UpdateStatus(AgentStatus.Working, "Designing (4/5): Security & scaling");
+        var turn4Prompt = await Core!.PromptService!.RenderAsync("architect/multi-turn-cross-cutting",
+            new Dictionary<string, string>(), ct)
+            ?? "Now address cross-cutting concerns:\n" +
+               "1. **Security Considerations** — authentication, authorization, data protection, input validation.\n" +
+               "2. **Scaling Strategy** — horizontal/vertical scaling, caching, load balancing, bottleneck mitigation.\n" +
+               "3. **Risks & Mitigations** — technical risks, dependency risks, and concrete mitigation strategies.\n\n" +
+               "Be practical and prioritize the highest-impact concerns.";
+        history.AddUserMessage(turn4Prompt);
+
+        var risksResponse = await chat.GetChatMessageContentAsync(
+            history, cancellationToken: ct);
+        history.AddAssistantMessage(risksResponse.Content ?? "");
+        try { if (designStepId is not null) { Core!.TaskTracker!.RecordLlmCall(designStepId); Core!.TaskTracker!.RecordSubStep(designStepId, "Turn 4/5: Security & scaling"); } } catch { }
+
+        Logger.LogDebug("Cross-cutting concerns addressed for {TaskId}", directive.TaskId);
+
+        // Turn 5: Compile into structured Architecture.md
+        LogActivity("planning", "🤖 AI turn 5/5: Compiling Architecture.md");
+        UpdateStatus(AgentStatus.Working, "Designing (5/5): Compiling Architecture.md");
+        var turn5Prompt = await Core!.PromptService!.RenderAsync("architect/multi-turn-compile",
+            new Dictionary<string, string>(), ct)
+            ?? "Now compile everything into a single, structured Architecture.md document with these exact sections:\n\n" +
+               "# Architecture\n\n" +
+               "## Overview & Goals\n" +
+               "(High-level summary of the architecture and what it aims to achieve)\n\n" +
+               "## System Components\n" +
+               "(Each component with its responsibilities)\n\n" +
+               "## Component Interactions\n" +
+               "(Data flow and communication patterns between components)\n\n" +
+               "## Data Model\n" +
+               "(Entities, relationships, storage)\n\n" +
+               "## API Contracts\n" +
+               "(Endpoints, interfaces, request/response shapes)\n\n" +
+               "## Infrastructure Requirements\n" +
+               "(Hosting, networking, storage, CI/CD)\n\n" +
+               "## Technology Stack Decisions\n" +
+               "(Chosen technologies with justification)\n\n" +
+               "## Security Considerations\n" +
+               "(Auth, data protection, validation)\n\n" +
+               "## Scaling Strategy\n" +
+               "(How the system scales)\n\n" +
+               "## Risks & Mitigations\n" +
+               "(Key risks and how to address them)\n\n" +
+               "Use these exact section headers. Be thorough and specific. " +
+               "This document will be the single source of truth for the engineering team.";
+        history.AddUserMessage(turn5Prompt);
+
+        var architectureResponse = await chat.GetChatMessageContentAsync(
+            history, cancellationToken: ct);
+        architectureDoc = architectureResponse.Content?.Trim() ?? "";
+        try { if (designStepId is not null) { Core!.TaskTracker!.RecordLlmCall(designStepId); Core!.TaskTracker!.RecordSubStep(designStepId, "Turn 5/5: Compiling Architecture.md"); } } catch { }
+
+        } // end else (multi-turn)
+
+        // Extract and log any decisions made during architecture design
+        if (!string.IsNullOrEmpty(architectureDoc))
+        {
+            var parsedDecisions = DecisionBlockParser.ExtractDecisions(architectureDoc);
+            if (parsedDecisions.Count > 0)
+            {
+                Logger.LogInformation("Architect extracted {Count} decisions from architecture design", parsedDecisions.Count);
+                foreach (var d in parsedDecisions)
+                {
+                    if (_decisionGate is not null)
+                    {
+                        await _decisionGate.ClassifyAndGateDecisionAsync(
+                            Identity.Id, Identity.DisplayName,
+                            "Architecture", d.Title,
+                            $"Choice: {d.Choice}\nRationale: {d.Rationale}",
+                            category: d.SourceQuestion is not null ? "WizardQuestion" : "ArchitectureDecision",
+                            modelTier: Identity.ModelTier, ct: ct);
+                    }
+                    else
+                    {
+                        _decisionLog?.Log(new AgentDecision
+                        {
+                            Id = Guid.NewGuid().ToString("N")[..12],
+                            AgentId = Identity.Id,
+                            AgentDisplayName = Identity.DisplayName,
+                            Phase = "Architecture",
+                            ImpactLevel = d.Impact,
+                            Title = d.Title,
+                            Rationale = $"Choice: {d.Choice}\nRationale: {d.Rationale}",
+                            SourceQuestion = d.SourceQuestion,
+                            Category = d.SourceQuestion is not null ? "WizardQuestion" : "ArchitectureDecision",
+                            Status = DecisionStatus.AutoApproved,
+                        });
+                    }
+                }
+                // Strip decision blocks from the document content
+                architectureDoc = DecisionBlockParser.StripDecisionBlocks(architectureDoc);
+            }
+        }
+
+        // Self-assessment: assess and refine the architecture document
+        // Dispose agentic scope BEFORE self-assessment — assessment should NOT explore the
+        // codebase or run in DocumentGenerationMode (it just evaluates the document text).
+        _agenticScope?.Dispose();
+        _agenticScope = null;
+
+        UpdateStatus(AgentStatus.Working, "🤖 Running architecture self-assessment");
+        try { if (designStepId is not null) Core!.TaskTracker!.CompleteStep(designStepId); } catch { }
+        string? assessStepId = null;
+        try { assessStepId = Core!.TaskTracker!.BeginStep(Identity.Id, directive.TaskId, "Self-assessment & impact classification", "Assessing and refining architecture output", Identity.ModelTier); }catch { }
+        Core!.ReasoningLog!.Log(new AgentReasoningEvent
+        {
+            AgentId = Identity.Id,
+            AgentDisplayName = Identity.DisplayName,
+            EventType = AgentReasoningEventType.Generating,
+            Phase = "Architecture",
+            Summary = $"Architecture document generated for '{directive.Title}'",
+            Iteration = 0,
+        });
+
+        var criteria = AssessmentCriteria.GetForRole(Identity.Role);
+        VirtualDevTeam.Core.Agents.Reasoning.AssessmentResult? assessmentResult = null;
+        if (criteria is not null)
+        {
+            // Use inline classification to save a separate LLM call
+            var (refinedOutput, assessment) = await Core!.SelfAssessment!.AssessAndRefineWithResultAsync(
+                Identity.Id,
+                Identity.DisplayName,
+                Identity.Role,
+                "Architecture",
+                architectureDoc,
+                criteria,
+                $"Project: {Core!.Config.Project.ResolvedDescription ?? Core!.Config.Project.Description}\nPM Spec and Research available for reference",
+                chat,
+                classifyImpact: _decisionGate is not null,
+                ct);
+            architectureDoc = refinedOutput;
+            assessmentResult = assessment;
+        }
+
+        Logger.LogDebug("Architecture document compiled for {TaskId}", directive.TaskId);
+
+        // Use inline classification from assessment if available, otherwise fall back to separate call
+        if (_decisionGate is not null && architectureDoc is not null)
+        {
+            AgentDecision archDecision;
+            if (assessmentResult?.HasImpactClassification == true)
+            {
+                archDecision = await _decisionGate.ClassifyFromAssessmentAsync(
+                    agentId: Identity.Id,
+                    agentDisplayName: Identity.DisplayName,
+                    phase: "Architecture",
+                    title: $"Architecture design for '{directive.Title}'",
+                    context: $"Architecture document defines system components, data models, technology choices, " +
+                             $"and project structure for the project. Key sections include system components, " +
+                             $"API contracts, and technology stack decisions. " +
+                             $"Document length: {architectureDoc.Length} chars.",
+                    assessment: assessmentResult,
+                    category: "Architecture",
+                    modelTier: Identity.ModelTier,
+                    ct: ct);
+            }
+            else
+            {
+                archDecision = await _decisionGate.ClassifyAndGateDecisionAsync(
+                    agentId: Identity.Id,
+                    agentDisplayName: Identity.DisplayName,
+                    phase: "Architecture",
+                    title: $"Architecture design for '{directive.Title}'",
+                    context: $"Architecture document defines system components, data models, technology choices, " +
+                             $"and project structure for the project. Key sections include system components, " +
+                             $"API contracts, and technology stack decisions. " +
+                             $"Document length: {architectureDoc.Length} chars.",
+                    category: "Architecture",
+                    modelTier: Identity.ModelTier,
+                    ct: ct);
+            }
+
+            if (archDecision.Status == DecisionStatus.Pending)
+            {
+                Logger.LogInformation("Architecture decision gated — waiting for human approval");
+                archDecision = await _decisionGate.WaitForDecisionAsync(archDecision.Id, ct);
+            }
+
+            if (archDecision.Status == DecisionStatus.Rejected)
+            {
+                Logger.LogWarning("Architecture decision REJECTED: {Feedback}", archDecision.HumanFeedback);
+                // Store feedback for potential rework in the gate revision loop below
+                await RememberAsync(MemoryType.Decision,
+                    "Architecture decision rejected",
+                    archDecision.HumanFeedback ?? "No feedback provided", ct);
+            }
+        }
+        try { if (assessStepId is not null) Core!.TaskTracker!.CompleteStep(assessStepId); } catch { }
+
+        } // end else (fresh AI work, not resuming from gate)
+
+        // Commit document to PR so reviewers can see it before the gate
+        if (architectureDoc is not null && !pr.IsMerged)
+        {
+            LogActivity("task", "📝 Committing Architecture.md to PR");
+            UpdateStatus(AgentStatus.Working, "Committing Architecture.md for review");
+            string? commitStepId = null;
+            try { commitStepId = Core!.TaskTracker!.BeginStep(Identity.Id, directive.TaskId, "Commit Architecture.md", "Committing architecture document to PR"); } catch { }
+            await _platform.PrWorkflow.CommitDocumentToPRAsync(
+                pr, archPath, architectureDoc,
+                $"Add system architecture for {directive.Title}", ct);
+            try { if (commitStepId is not null) Core!.TaskTracker!.CompleteStep(commitStepId); } catch { }
+        }
+
+        // === Gate: ArchitectureDesign — human reviews architecture before merge ===
+        if (gateStatus != GateStatus.Approved)
+        {
+            string? gateStepId = null;
+            try { gateStepId = Core!.TaskTracker!.BeginStep(Identity.Id, directive.TaskId, "Human gate review", $"Awaiting human approval on PR #{pr.Number}"); } catch { }
+            try { if (gateStepId is not null) Core!.TaskTracker!.SetStepWaiting(gateStepId); } catch { }
+            var maxRevisions = 3;
+            for (var revision = 0; revision < maxRevisions; revision++)
+            {
+                var gateWait = await WaitForHumanGateAsync(
+                    GateIds.ArchitectureDesign,
+                    "Architecture.md ready for human review before merge",
+                    pr.Number, ct: ct);
+
+                if (!gateWait.WasRejected)
+                    break;
+
+                Logger.LogInformation("Architecture gate rejected on PR #{Number}: {Feedback}", pr.Number, gateWait.Feedback);
+                LogActivity("task", $"📝 Revising architecture based on feedback: {gateWait.Feedback}");
+                UpdateStatus(AgentStatus.Working, $"Revising Architecture.md (attempt {revision + 2})");
+
+                var revised = await ReviseArchitectureAsync(directive, gateWait.Feedback!, ct);
+                if (revised is not null && !pr.IsMerged)
+                {
+                    await _platform.PrWorkflow.CommitDocumentToPRAsync(
+                        pr, archPath, revised,
+                        $"Revise architecture based on reviewer feedback (attempt {revision + 2})", ct);
+                }
+                await ResetGateLabelsAsync(pr.Number, ct);
+                await _platform.ReviewService.AddCommentAsync(pr.Number,
+                    $"📝 **Revised** based on your feedback:\n\n> {gateWait.Feedback}\n\nPlease review the updated Architecture.md.", ct);
+            }
+            try { if (gateStepId is not null) Core!.TaskTracker!.CompleteStep(gateStepId); } catch { }
+        }
+
+        // Merge after gate approval (skip if PR already merged)
+        string? mergeStepId = null;
+        if (!pr.IsMerged)
+        {
+            LogActivity("task", "🔗 Merging Architecture.md PR");
+            UpdateStatus(AgentStatus.Working, "Merging Architecture.md PR");
+            try { mergeStepId = Core!.TaskTracker!.BeginStep(Identity.Id, directive.TaskId, "Merge PR", "Merging Architecture.md PR"); } catch { }
+            await _platform.PrWorkflow.MergeDocumentPRAsync(
+                pr, Identity.DisplayName, archPath, ct);
+            try { if (mergeStepId is not null) Core!.TaskTracker!.CompleteStep(mergeStepId); } catch { }
+        }
+
+        Logger.LogInformation("Architecture.md PR created and merged for task {TaskId}", directive.TaskId);
+        LogActivity("task", $"✅ Architecture.md merged: {directive.Title}");
+        // Doc PR finished — clear so the dashboard stops showing it as active.
+        CurrentPrNumber = null;
+        await RememberAsync(MemoryType.Action,
+            $"Created and merged Architecture.md for '{directive.Title}'",
+            TruncateForMemory(architectureDoc), ct);
+
+        // Explicitly close the related issue
+        if (relatedIssue.HasValue)
+        {
+            try
+            {
+                await _platform.WorkItemService.CloseAsync(relatedIssue.Value, ct);
+                Logger.LogInformation("Closed related issue #{IssueNumber}", relatedIssue.Value);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex, "Failed to close issue #{IssueNumber}", relatedIssue.Value);
+            }
+        }
+
+        // BUG FIX: Removed unnecessary GitHub Issue creation for PE notification.
+        // The Architect was creating an issue titled "Software Engineer: Question from Architect"
+        // to tell the PE that Architecture.md was ready. This was wrong because: (a) it's not a
+        // question, (b) the PE should be notified via message bus not a GitHub Issue, and (c) the
+        // issue was never closed, cluttering the issue tracker. The StatusUpdateMessage broadcast
+        // below (ArchitectureComplete) is the correct notification mechanism.
+
+        // Notify all agents via message bus that architecture is complete
+        await PublishStatusAsync("ArchitectureComplete", AgentStatus.Online,
+            details: "Architecture design complete. Architecture.md is ready for review.",
+            currentTask: directive.TaskId, ct: ct);
+
+        UpdateStatus(AgentStatus.Idle, "Architecture complete, monitoring PRs for alignment");
+    }
+
+    #endregion
+
+    #region PR Review for Architectural Alignment
+
+    private async Task ReviewPRsForArchitectureAsync(CancellationToken ct)
+    {
+        try
+        {
+            // Drain the review queue — only review PRs we've been notified about
+            var prNumbersToReview = new HashSet<int>();
+            while (_reviewQueue.TryDequeue(out var prNumber))
+                prNumbersToReview.Add(prNumber);
+
+            if (prNumbersToReview.Count == 0)
+                return;
+
+            foreach (var prNumber in prNumbersToReview)
+            {
+                if (_reviewedPrNumbers.Contains(prNumber))
+                    continue;
+
+                var platformPr = await _platform.PrService.GetAsync(prNumber, ct);
+                if (platformPr is null)
+                    continue;
+                var pr = platformPr.ToAgentPR();
+
+                // Skip TestEngineer PRs — architecture review not needed for test suites
+                var authorRole = PullRequestWorkflow.DetectAuthorRole(pr.Title);
+                if (authorRole.Contains("TestEngineer", StringComparison.OrdinalIgnoreCase)
+                    || authorRole.Contains("Test Engineer", StringComparison.OrdinalIgnoreCase))
+                {
+                    _reviewedPrNumbers.Add(prNumber);
+                    continue;
+                }
+
+                // Skip PRs already architect-approved (Phase 1 complete)
+                if (pr.Labels.Contains(PullRequestWorkflow.Labels.ArchitectApproved, StringComparer.OrdinalIgnoreCase))
+                {
+                    _reviewedPrNumbers.Add(prNumber);
+                    continue;
+                }
+
+                // Dedup across restarts: check GitHub comments to see if we already reviewed
+                // BUT always process force-approval PRs regardless
+                if (!_forceApprovalPrs.Contains(prNumber) &&
+                    !await _platform.PrWorkflow.NeedsReviewFromAsync(prNumber, "Architect", ct))
+                {
+                    _reviewedPrNumbers.Add(prNumber);
+                    continue;
+                }
+
+                Logger.LogInformation("Reviewing PR #{Number} for architectural alignment: {Title}",
+                    pr.Number, pr.Title);
+
+                // Force-approve after max rework cycles — only if Architect is a required reviewer
+                StructuredReviewResult reviewResult;
+                if (_forceApprovalPrs.Contains(prNumber))
+                {
+                    _forceApprovalPrs.Remove(prNumber);
+                    var requiredReviewers = PullRequestWorkflow.GetRequiredReviewers(authorRole);
+                    if (!requiredReviewers.Any(r => r.Contains("Architect", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        Logger.LogInformation("Architect is not a required reviewer for PR #{Number} — skipping force-approval", prNumber);
+                        _reviewedPrNumbers.Add(prNumber);
+                        continue;
+                    }
+
+                    // SAFETY GATE: refuse to force-approve a PR that has no substantive
+                    // production code changes. This catches the pathological case where
+                    // SE's strategy push failed, the winner was reverted, and the branch
+                    // holds only a task marker + test stubs (no .sln, .csproj, source code).
+                    // Force-approving such a PR ships a broken scaffold and triggers a TE loop.
+                    if (await HasNoSubstantiveProductionCodeAsync(prNumber, ct))
+                    {
+                        Logger.LogWarning(
+                            "PR #{Number} has no substantive production code — refusing force-approval. " +
+                            "Requesting SE resubmit with real scaffolding content.",
+                            prNumber);
+                        await _platform.PrWorkflow.RequestChangesAsync(prNumber, "Architect",
+                            "🛑 **Force-approval refused — PR has no production code.**\n\n" +
+                            "The branch contains only task markers / test stubs / workflow files — no `.sln`, `.csproj`, " +
+                            "source files, or components. This usually indicates a failed code-generation or push. " +
+                            "The SoftwareEngineer must push actual scaffolding (solution, project files, program entry, " +
+                            "models/services/components) before this PR can be reviewed.\n\n" +
+                            "Resetting rework counter — no force-approval will be granted until substantive code lands.",
+                            ct);
+                        _reviewedPrNumbers.Add(prNumber);
+                        continue;
+                    }
+
+                    reviewResult = new StructuredReviewResult
+                    {
+                        Verdict = "APPROVED",
+                        Summary = "Force-approving after maximum rework cycles reached. " +
+                            "The engineer has made best-effort improvements across multiple iterations.",
+                        RiskLevel = ReviewRiskLevel.Low,
+                        Comments = []
+                    };
+                }
+                else
+                {
+                    var hasNewCommits = await _platform.PrWorkflow.HasNewCommitsSinceReviewAsync(prNumber, "Architect", ct);
+                    if (!hasNewCommits)
+                    {
+                        // NO-NEW-COMMITS REFUSAL: do not auto-approve when HEAD hasn't advanced.
+                        // Previously this path approved "to unblock" which enabled broken PRs
+                        // (like the 0-production-file scaffolding failure) to sail through.
+                        Logger.LogWarning("No new commits on PR #{Number} since last Architect review — refusing re-review",
+                            prNumber);
+
+                        // Notify the engineer that rework is needed — don't silently skip
+                        await Core!.MessageBus.PublishAsync(new ChangesRequestedMessage
+                        {
+                            FromAgentId = Identity.Id,
+                            ToAgentId = "*",
+                            MessageType = nameof(ChangesRequestedMessage),
+                            PrNumber = pr.Number,
+                            PrTitle = pr.Title,
+                            ReviewerAgent = Identity.DisplayName,
+                            Feedback = "No new commits since last architecture review — push new commits to trigger re-review."
+                        }, ct);
+
+                        _reviewedPrNumbers.Add(prNumber);
+                        continue;
+                    }
+                    else
+                    {
+                        reviewResult = await EvaluateArchitecturalAlignmentAsync(pr, ct);
+                    }
+                }
+
+                UpdateStatus(AgentStatus.Working, $"✅ Posting architecture review for PR #{pr.Number}");
+                var verdict = reviewResult.Verdict;
+                var reasoning = reviewResult.Summary;
+                var riskSuffix = Core!.Config.Review.EnableRiskAssessment
+                    ? $"\n\n⚠️ **Risk Level**: {reviewResult.RiskLevel.ToString().ToUpperInvariant()}"
+                    : "";
+
+                var isApproved = verdict == "APPROVED" || verdict == "APPROVED_WITH_SUGGESTIONS";
+                var approvedWithSuggestions = verdict == "APPROVED_WITH_SUGGESTIONS";
+
+                // Check human risk gate BEFORE adding phase-transition labels
+                if (isApproved && Core!.Config.Review.MinRiskLevelForHumanReview != ReviewRiskLevel.None
+                    && reviewResult.RiskLevel >= Core!.Config.Review.MinRiskLevelForHumanReview)
+                {
+                    Logger.LogInformation(
+                        "PR #{Number} risk level {Risk} >= gate threshold {Threshold} — adding human-review-required label",
+                        pr.Number, reviewResult.RiskLevel, Core!.Config.Review.MinRiskLevelForHumanReview);
+
+                    await _platform.PrService.AddLabelAsync(pr.Number, PullRequestWorkflow.Labels.HumanReviewRequired, ct);
+                    await _platform.ReviewService.AddCommentAsync(pr.Number,
+                        $"**[Architect] APPROVED** (pending human review)\n\n" +
+                        $"🏗️ Architecture Review: {reasoning}{riskSuffix}\n\n" +
+                        $"⏳ **Human review required** — risk level `{reviewResult.RiskLevel}` meets or exceeds " +
+                        $"the configured threshold `{Core!.Config.Review.MinRiskLevelForHumanReview}`. " +
+                        $"Remove the `{PullRequestWorkflow.Labels.HumanReviewRequired}` label to proceed.", ct);
+
+                    // Submit inline comments as a review even though we're gating
+                    if (reviewResult.Comments.Count > 0 && Core!.Config.Review.EnableInlineComments)
+                    {
+                        await SubmitInlineReviewCommentsAsync(pr.Number, reviewResult, "COMMENT", ct);
+                    }
+
+                    LogActivity("task", $"⏳ PR #{pr.Number} approved but held for human review (risk: {reviewResult.RiskLevel})");
+                    _reviewedPrNumbers.Add(pr.Number);
+                    continue; // Don't add architect-approved label yet
+                }
+
+                if (isApproved)
+                {
+                    // Phase 1 complete: Architect approved → add architect-approved label, do NOT merge.
+                    // The TE will pick up the PR next (Phase 2), then PM reviews last (Phase 3).
+                    var hasSubstantiveReview = !string.IsNullOrWhiteSpace(reasoning);
+                    var approvalHeader = approvedWithSuggestions
+                        ? "**[Architect] APPROVED** _(with non-blocking suggestions below)_"
+                        : "**[Architect] APPROVED**";
+                    var approvalComment = approvedWithSuggestions
+                        ? $"{approvalHeader}\n\n💡 **Suggestions (non-blocking — these do NOT require rework):**\n\n🏗️ {reasoning}"
+                        : hasSubstantiveReview
+                            ? $"{approvalHeader}\n\n🏗️ Architecture Review: {reasoning}"
+                            : $"{approvalHeader} — No blocking architecture concerns found.";
+
+                    // Post ONE consolidated comment: if inline comments exist, combine summary + inline
+                    // into a single review; otherwise post standalone comment.
+                    if (reviewResult.Comments.Count > 0 && Core!.Config.Review.EnableInlineComments)
+                    {
+                        await SubmitInlineReviewCommentsAsync(pr.Number, reviewResult, "COMMENT", ct, approvalComment);
+                    }
+                    else
+                    {
+                        await _platform.ReviewService.AddCommentAsync(pr.Number, approvalComment, ct);
+                    }
+
+                    // Resolve previously-opened inline review threads now that rework is accepted
+                    await ResolveArchitectReviewThreadsAsync(pr.Number, ct);
+
+                    Logger.LogInformation("Architect approved PR #{Number}", pr.Number);
+
+                    // Add architect-approved label, remove ready-for-review
+                    await _platform.PrService.RemoveLabelAsync(pr.Number, PullRequestWorkflow.Labels.ReadyForReview, ct);
+                    await _platform.PrService.AddLabelAsync(pr.Number, PullRequestWorkflow.Labels.ArchitectApproved, ct);
+
+                    LogActivity("task", $"✅ Approved PR #{pr.Number}: {pr.Title} — TE testing next");
+                    await RememberAsync(MemoryType.Decision,
+                        $"Architecture review approved PR #{pr.Number}: {pr.Title}",
+                        TruncateForMemory(reasoning), ct);
+
+                    // Notify TE via bus that PR is ready for testing
+                    await PublishStatusAsync("StatusUpdate", AgentStatus.Working,
+                        details: $"PR #{pr.Number}: {pr.Title} has passed architecture review",
+                        currentTask: $"PR #{pr.Number} architect-approved — ready for TE testing", ct: ct);
+
+                    // Send targeted PrApprovedMessage so TE wakes immediately
+                    await Core!.MessageBus.PublishAsync(new PrApprovedMessage
+                    {
+                        FromAgentId = Identity.Id,
+                        ToAgentId = "*",
+                        MessageType = nameof(PrApprovedMessage),
+                        PrNumber = pr.Number,
+                        PrTitle = pr.Title,
+                        ApproverAgent = Identity.DisplayName
+                    }, ct);
+                }
+                else if (verdict == "REWORK")
+                {
+                    var reworkSummary = $"🏗️ Architecture Review: {reasoning}{riskSuffix}";
+
+                    // Post ONE consolidated comment: if inline comments exist, combine summary + inline
+                    // into a single review; otherwise post standalone changes-requested comment.
+                    if (reviewResult.Comments.Count > 0 && Core!.Config.Review.EnableInlineComments)
+                    {
+                        await SubmitInlineReviewCommentsAsync(pr.Number, reviewResult, "COMMENT", ct,
+                            $"**[Architect] CHANGES REQUESTED**\n\n{reworkSummary}");
+                    }
+                    else
+                    {
+                        await _platform.PrWorkflow.RequestChangesAsync(
+                            pr.Number, "Architect", reworkSummary, ct);
+                    }
+
+                    Logger.LogInformation("Architect requested changes on PR #{Number}", pr.Number);
+                    LogActivity("task", $"❌ Requested changes on PR #{pr.Number}: {pr.Title}");
+                    await RememberAsync(MemoryType.Decision,
+                        $"Architecture review requested changes on PR #{pr.Number}: {pr.Title}",
+                        TruncateForMemory(reasoning), ct);
+
+                    // Notify the PR author via bus so they can start rework
+                    await Core!.MessageBus.PublishAsync(new ChangesRequestedMessage
+                    {
+                        FromAgentId = Identity.Id,
+                        ToAgentId = "*",
+                        MessageType = "ChangesRequested",
+                        PrNumber = pr.Number,
+                        PrTitle = pr.Title,
+                        ReviewerAgent = "Architect",
+                        Feedback = reasoning
+                    }, ct);
+                }
+                else
+                {
+                    // Fallback: post as informational comment if AI didn't produce a clear verdict
+                    await _platform.ReviewService.AddCommentAsync(pr.Number,
+                        $"🏗️ **Architecture Review (Advisory):**\n\n{reasoning}", ct);
+                    Logger.LogWarning("Architect review for PR #{Number} produced unclear verdict: {Verdict}",
+                        pr.Number, verdict);
+                }
+
+                _reviewedPrNumbers.Add(pr.Number);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to review PRs for architectural alignment");
+        }
+    }
+
+    /// <summary>
+    /// Submits inline review comments as a GitHub PR review.
+    /// Falls back gracefully if the GitHub API call fails.
+    /// </summary>
+    private async Task SubmitInlineReviewCommentsAsync(
+        int prNumber, StructuredReviewResult reviewResult, string eventType, CancellationToken ct,
+        string? headerOverride = null)
+    {
+        try
+        {
+            var maxComments = Core!.Config.Review.MaxInlineCommentsPerReview;
+            var platformComments = reviewResult.Comments
+                .Take(maxComments)
+                // Tag each comment with [Architect] so agents know who authored it
+                .Select(c => new PlatformInlineComment
+                {
+                    FilePath = c.FilePath,
+                    Line = c.Line,
+                    Body = $"**[Architect]** {c.Body}"
+                })
+                .ToList();
+
+            if (platformComments.Count == 0) return;
+
+            // Use header override when consolidating summary + inline into one review,
+            // otherwise generate default inline review header
+            var reviewBody = headerOverride is not null
+                ? $"{headerOverride}\n\n_{platformComments.Count} inline comment(s) below_"
+                : $"🏗️ **[Architect] Inline Review** — {reviewResult.Verdict}\n\n" +
+                  $"{reviewResult.Summary}\n\n" +
+                  $"_{platformComments.Count} inline comment(s) below_";
+
+            await _platform.ReviewService.CreateReviewWithInlineCommentsAsync(
+                prNumber, reviewBody, eventType, platformComments, ct: ct);
+
+            Logger.LogInformation(
+                "Submitted {Count} inline review comments on PR #{Number}",
+                platformComments.Count, prNumber);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex,
+                "Failed to submit inline review comments on PR #{Number} — review body was still posted",
+                prNumber);
+        }
+    }
+
+    /// <summary>
+    /// After approving a PR, resolve all open inline review threads that were left by previous reviews.
+    /// Replies with a resolution comment explaining the thread is resolved by the rework.
+    /// </summary>
+    private async Task ResolveArchitectReviewThreadsAsync(int prNumber, CancellationToken ct)
+    {
+        try
+        {
+            var threads = await _platform.ReviewService.GetThreadsAsync(prNumber, ct);
+            // Only resolve threads authored by this agent (identified by [Architect] tag in comment body)
+            var ownThreads = threads
+                .Where(t => !t.IsResolved && t.Body.Contains("[Architect]", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            if (ownThreads.Count == 0)
+            {
+                Logger.LogDebug("No unresolved Architect review threads on PR #{Number}", prNumber);
+                return;
+            }
+
+            Logger.LogInformation("Resolving {Count} Architect review threads on PR #{Number} after approval",
+                ownThreads.Count, prNumber);
+
+            foreach (var thread in ownThreads)
+            {
+                var replyBody = $"✅ **[Architect] Resolved** — Rework addressed this feedback. Approved.";
+                await _platform.ReviewService.ResolveThreadAsync(
+                    prNumber, thread.ThreadId, replyBody, ct);
+            }
+
+            LogActivity("review", $"🔒 Resolved {ownThreads.Count} Architect inline review thread(s) on PR #{prNumber}");
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to resolve review threads on PR #{Number} — approval still proceeds", prNumber);
+        }
+    }
+
+    /// <summary>
+    /// Returns true when a PR has NO substantive production code changes — i.e., every
+    /// changed file falls into an excluded category (task markers, tests, docs/markdown,
+    /// .github workflows, snapshots). Used to refuse force-approval on empty/broken
+    /// scaffolding PRs where the strategy push failed and nothing real was shipped.
+    /// </summary>
+    private async Task<bool> HasNoSubstantiveProductionCodeAsync(int prNumber, CancellationToken ct)
+    {
+        try
+        {
+            // In LDP mode, PR file diffs are inherently stale — captured at PR creation
+            // (tracking stubs only), never updated after code push to worktree/shared-clone.
+            // The CLI review sees the actual code via the worktree. Always skip this check.
+            if (_platform.PrService is Core.DevPlatform.Providers.Local.LocalPullRequestService)
+            {
+                Logger.LogDebug("PR #{Number}: LDP mode — skipping substantive check (diff is stale, code is in worktree)", prNumber);
+                return false; // fail-open for LDP
+            }
+
+            var files = await _platform.PrService.GetFileDiffsAsync(prNumber, ct);
+
+            if (files is null || files.Count == 0) return true;
+
+            foreach (var f in files)
+            {
+                var path = (f.FileName ?? "").Replace('\\', '/');
+                if (string.IsNullOrEmpty(path)) continue;
+                if (IsExcludedFromSubstantiveCheck(path)) continue;
+                // Found at least one non-excluded file → treat as substantive.
+                return false;
+            }
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Could not inspect PR #{Number} files for substantive-code check — treating as substantive", prNumber);
+            return false; // fail-open: don't block approval when GitHub API is flaky
+        }
+    }
+
+    private static bool IsExcludedFromSubstantiveCheck(string path)
+    {
+        // Task/agent metadata (legacy .virtualdevteam/ or tracking markers)
+        if (path.StartsWith(".virtualdevteam/", StringComparison.OrdinalIgnoreCase)) return true;
+        if (path.EndsWith(".task.md", StringComparison.OrdinalIgnoreCase)
+            || path.EndsWith(".tracking.md", StringComparison.OrdinalIgnoreCase)) return true;
+        // CI / workflow files (separate concern)
+        if (path.StartsWith(".github/", StringComparison.OrdinalIgnoreCase)) return true;
+        // Tests folders
+        if (path.StartsWith("tests/", StringComparison.OrdinalIgnoreCase)
+            || path.StartsWith("test/", StringComparison.OrdinalIgnoreCase)
+            || path.Contains("/tests/", StringComparison.OrdinalIgnoreCase)
+            || path.Contains("/test/", StringComparison.OrdinalIgnoreCase)
+            || path.Contains("__tests__", StringComparison.OrdinalIgnoreCase))
+            return true;
+        // Test file naming conventions
+        var name = Path.GetFileName(path);
+        if (name.Contains("Tests.", StringComparison.OrdinalIgnoreCase)
+            || name.EndsWith(".test.ts", StringComparison.OrdinalIgnoreCase)
+            || name.EndsWith(".test.js", StringComparison.OrdinalIgnoreCase)
+            || name.EndsWith(".test.tsx", StringComparison.OrdinalIgnoreCase)
+            || name.EndsWith(".spec.ts", StringComparison.OrdinalIgnoreCase)
+            || name.EndsWith(".spec.js", StringComparison.OrdinalIgnoreCase)
+            || name.EndsWith(".Tests.cs", StringComparison.OrdinalIgnoreCase))
+            return true;
+        // Docs / markdown / assets
+        var ext = Path.GetExtension(path).ToLowerInvariant();
+        if (ext is ".md" or ".txt" or ".png" or ".jpg" or ".jpeg" or ".gif" or ".svg" or ".ico") return true;
+        // Snapshot / baseline artifacts
+        if (path.Contains("__snapshots__", StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
+    private async Task<StructuredReviewResult> EvaluateArchitecturalAlignmentAsync(
+        AgentPullRequest pr, CancellationToken ct)
+    {
+        try
+        {
+            var kernel = Core!.ModelRegistry.GetKernel(Identity.ModelTier, Identity.Id);
+            var chat = kernel.GetRequiredService<IChatCompletionService>();
+
+            LogActivity("review", "📋 Reading architecture doc and PR context");
+            UpdateStatus(AgentStatus.Working, $"📋 Loading architecture reference for PR #{pr.Number} review");
+            var architectureDoc = await Core!.ProjectFiles.GetArchitectureDocAsync(ct);
+            var pmSpec = await Core!.ProjectFiles.GetPMSpecAsync(ct);
+
+            // Read the linked issue for acceptance criteria
+            var issueContext = "";
+            var issueNumber = PullRequestWorkflow.ParseLinkedIssueNumber(pr.Body);
+            if (issueNumber.HasValue)
+            {
+                try
+                {
+                    var issue = await _platform.WorkItemService.GetAsync(issueNumber.Value, ct);
+                    if (issue is not null)
+                        issueContext = $"## Linked Issue #{issue.Number}: {issue.Title}\n{issue.Body}\n\n";
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogDebug(ex, "Could not fetch linked issue #{Number} for architecture review", issueNumber.Value);
+                }
+            }
+
+            // Read actual code files from the PR branch
+            LogActivity("review", "🔍 Reading PR code for architecture review");
+            UpdateStatus(AgentStatus.Working, $"📋 Reading PR #{pr.Number} code for review");
+            var codeContext = await _platform.PrWorkflow.GetPRCodeContextAsync(pr.Number, pr.HeadBranch, ct: ct);
+
+            // Get actual changed file list so LLM only references real paths in inline comments
+            var changedFiles = await _platform.PrService.GetChangedFilesAsync(pr.Number, ct);
+            var fileListContext = changedFiles.Count > 0
+                ? "\n\n## Changed Files in This PR\n" +
+                  "Your inline comment `file` paths MUST exactly match one of these:\n" +
+                  string.Join("\n", changedFiles.Select(f => $"- `{f}`")) + "\n"
+                : "";
+
+            // Get screenshot images for vision-based review
+            var screenshotImages = new List<PullRequestWorkflow.ScreenshotImage>();
+            var screenshotContext = "";
+            try
+            {
+                screenshotImages = await _platform.PrWorkflow.GetPRScreenshotImagesAsync(pr.Number, ct: ct);
+                if (screenshotImages.Count == 0)
+                    screenshotContext = await _platform.PrWorkflow.GetPRScreenshotContextAsync(pr.Number, ct);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "Could not fetch screenshots for PR #{Number}", pr.Number);
+            }
+
+            var hasScreenshots = screenshotImages.Count > 0 || !string.IsNullOrEmpty(screenshotContext);
+
+            // Log AI description of each screenshot for dashboard visibility
+            if (screenshotImages.Count > 0)
+            {
+                try
+                {
+                    var descKernel = Core!.ModelRegistry.GetKernel(Identity.ModelTier, Identity.Id);
+                    var descChat = descKernel.GetRequiredService<Microsoft.SemanticKernel.ChatCompletion.IChatCompletionService>();
+                    foreach (var img in screenshotImages)
+                    {
+                        var desc = await PullRequestWorkflow.DescribeScreenshotAsync(img, descChat, ct);
+                        LogActivity("screenshot", $"🖼️ Architect reviewing screenshot (PR #{pr.Number}): {desc}");
+                        Logger.LogInformation("Architect screenshot description for PR #{PrNumber}: {Description}",
+                            pr.Number, desc);
+                    }
+                }
+                catch (Exception descEx)
+                {
+                    Logger.LogDebug(descEx, "Could not describe screenshots for architect review of PR #{Number}", pr.Number);
+                }
+            }
+
+            var history = CreateChatHistory();
+            var reviewSysVars = new Dictionary<string, string>
+            {
+                ["screenshot_instructions"] = hasScreenshots
+                    ? "ALSO CHECK: Screenshots are provided — you can SEE them embedded in this message. " +
+                      "Verify the app renders correctly without errors.\n" +
+                      "  - Error pages, unhandled exceptions, blank screens visible in screenshots = REWORK.\n" +
+                      "  - The visual output should match what the PR description says it implements.\n" +
+                      "  - EXCEPTION: If the PR explicitly states that data files (e.g., data.json) are NOT part of this task " +
+                      "and will be provided by a separate task, a 'file not found' error for data files is acceptable — " +
+                      "do NOT flag it as REWORK. However, if the PR INCLUDES a data.json file and the screenshot " +
+                      "shows a schema/validation error, that IS a REWORK issue (the file doesn't match the data model).\n"
+                    : ""
+            };
+
+            var useInlineComments = Core!.Config.Review.EnableInlineComments;
+            var useRiskAssessment = Core!.Config.Review.EnableRiskAssessment;
+
+            var reviewSys = await Core!.PromptService!.RenderAsync("architect/pr-review-system", reviewSysVars, ct)
+                ?? "You are a software architect reviewing a PR for architecture alignment.\n\n" +
+                   "SCOPE: This PR is ONE task. Review only the parts it touches against the architecture doc.\n\n" +
+                   "CHECK: component boundaries, folder structure, tech stack compliance, architectural patterns.\n" +
+                   "ALSO CHECK FILE COMPLETENESS: Compare the actual files in the PR against the acceptance criteria " +
+                   "and file plan in the linked issue. If the acceptance criteria list specific files or components " +
+                   "that should be created (e.g., Models, Interfaces, Layouts, CSS, config files) and those files " +
+                   "are MISSING from the PR, this is a REWORK issue. A PR that delivers only 2 of 15 expected files " +
+                   "is incomplete regardless of whether those 2 files are architecturally correct.\n" +
+                   (hasScreenshots
+                       ? "ALSO CHECK: Screenshots are provided — you can SEE them embedded in this message. " +
+                         "Verify the app renders correctly without errors.\n" +
+                         "  - Error pages, unhandled exceptions, blank screens visible in screenshots = REWORK.\n" +
+                         "  - The visual output should match what the PR description says it implements.\n" +
+                         "  - EXCEPTION: If the PR states data files are NOT part of this task, a 'file not found' " +
+                         "error for data files is acceptable. But if the PR INCLUDES data files and the screenshot " +
+                         "shows a schema/validation error, that IS a REWORK issue.\n"
+                       : "") +
+                   "IGNORE: code quality, null checks, naming, tests.\n\n" +
+                   "IMPORTANT: Code may appear truncated in your review context due to length limits — " +
+                   "this is a tooling limitation, NOT a code defect. Do NOT flag truncated code.\n\n" +
+                   "Only request REWORK for real architectural violations (wrong boundaries, wrong tech stack, " +
+                   "wrong patterns), MISSING files/components listed in acceptance criteria, " +
+                   "OR runtime errors visible in screenshots. Minor issues → APPROVE.\n\n" +
+                   "RESPONSE FORMAT — you MUST respond with ONLY a JSON object, nothing else.\n" +
+                   "Do NOT include any text before or after the JSON. Do NOT wrap in markdown fences.\n" +
+                   "The JSON schema is:\n" +
+                   "- \"verdict\": string, one of \"APPROVED\", \"APPROVED_WITH_SUGGESTIONS\", or \"REWORK\". Use APPROVED_WITH_SUGGESTIONS for minor non-blocking improvements (naming preferences, optional optimizations). Use REWORK only for significant issues.\n" +
+                   "- \"summary\": string, brief 1-2 sentence assessment\n" +
+                   (useRiskAssessment ? "- \"riskLevel\": string, either \"LOW\", \"MEDIUM\", or \"HIGH\"\n" : "") +
+                   (useInlineComments
+                       ? "- \"comments\": array of objects with:\n" +
+                         "  - \"file\": string, relative file path (e.g. \"src/Services/MyService.cs\")\n" +
+                         "  - \"line\": integer, line number in the new file where the comment applies\n" +
+                         "  - \"priority\": string, one of \"🔴 Critical\", \"🟠 Important\", \"🟡 Suggestion\", \"🟢 Nit\"\n" +
+                         "  - \"body\": string, description of the issue\n"
+                       : "") +
+                   "\nExample response:\n" +
+                   "{\"verdict\":\"REWORK\",\"summary\":\"CSS class names don't match architecture spec.\"" +
+                   (useRiskAssessment ? ",\"riskLevel\":\"MEDIUM\"" : "") +
+                   (useInlineComments ? ",\"comments\":[{\"file\":\"wwwroot/css/app.css\",\"line\":15,\"priority\":\"🔴 Critical\",\"body\":\"Uses .cur instead of .apr per architecture\"}]" : "") +
+                   "}\n\n" +
+                   "PRIORITY GUIDE: 🔴 Critical = must fix (breaks architecture, missing files, security). " +
+                   "🟠 Important = should fix (wrong patterns, significant gaps). " +
+                   "🟡 Suggestion = worth considering. 🟢 Nit = minor.\n" +
+                   (useRiskAssessment
+                       ? "RISK GUIDE: LOW = cosmetic/minor. MEDIUM = modifies shared models/APIs. HIGH = breaking changes, security, major rework.\n"
+                       : "") +
+                   "\nYour entire response must be parseable as JSON. Start with { and end with }.";
+            history.AddSystemMessage(reviewSys);
+
+            var userMessageText =
+                $"## Architecture Document\n{architectureDoc}\n\n" +
+                $"## PM Specification\n{pmSpec}\n\n" +
+                issueContext +
+                fileListContext +
+                $"## Pull Request #{pr.Number}: {pr.Title}\n{pr.Body}\n\n" +
+                codeContext;
+
+            // Log prompt size for monitoring — large prompts can crash CLI processes
+            var totalPromptSize = userMessageText.Length + (reviewSys?.Length ?? 0);
+            if (totalPromptSize > 100_000)
+                Logger.LogWarning("Architect review prompt for PR #{PrNumber} is {Size:N0} chars — consider CLI review mode for large PRs",
+                    pr.Number, totalPromptSize);
+
+            // Add screenshots as vision content if available
+            if (screenshotImages.Count > 0)
+            {
+                var items = new ChatMessageContentItemCollection();
+                var screenshotIntro = "\n\n## 📸 Application Screenshots\n" +
+                    "LOOK AT EACH IMAGE for errors, blank screens, or broken UI.\n\n";
+                for (var i = 0; i < screenshotImages.Count; i++)
+                    screenshotIntro += $"Screenshot {i + 1}: {screenshotImages[i].Description}\n";
+
+                items.Add(new TextContent(userMessageText + screenshotIntro));
+
+                foreach (var img in screenshotImages)
+                {
+                    items.Add(new ImageContent(img.ImageBytes, img.MimeType)
+                    {
+                        ModelId = $"screenshot: {img.Description}"
+                    });
+                }
+
+                history.AddUserMessage(items);
+            }
+            else
+            {
+                history.AddUserMessage(userMessageText +
+                    (string.IsNullOrEmpty(screenshotContext) ? "" : $"\n\n{screenshotContext}"));
+            }
+
+            LogActivity("review", "🤖 Calling AI for architecture alignment review");
+            UpdateStatus(AgentStatus.Working, $"🤖 Evaluating PR #{pr.Number} architecture alignment");
+            var response = await chat.GetChatMessageContentAsync(
+                history, cancellationToken: ct);
+
+            var text = response.Content?.Trim() ?? "";
+
+            // Try to parse as structured JSON first
+            LogActivity("review", "📌 Parsing architecture review result");
+            var structuredResult = TryParseStructuredReview(text);
+            if (structuredResult != null)
+            {
+                // If AI returned valid JSON but put file:line patterns in summary instead
+                // of populating the comments array, extract them as a fallback.
+                if (structuredResult.Comments.Count == 0)
+                {
+                    var extracted = ExtractInlineCommentsFromText(structuredResult.Summary);
+                    if (extracted.Count > 0)
+                    {
+                        Logger.LogInformation(
+                            "Architect JSON review for PR #{Number} had empty comments array but summary contained {Count} file:line patterns — extracting",
+                            pr.Number, extracted.Count);
+                        structuredResult = structuredResult with { Comments = extracted };
+                    }
+                }
+
+                Logger.LogInformation(
+                    "Architect review of PR #{Number}: {Verdict} (risk={Risk}, {CommentCount} inline comments)",
+                    pr.Number, structuredResult.Verdict, structuredResult.RiskLevel, structuredResult.Comments.Count);
+                return structuredResult;
+            }
+
+            // Fallback: parse as plain text (original format)
+            Logger.LogWarning("Architect AI didn't return valid JSON for PR #{Number}, falling back to text parsing. Raw response (first 500 chars): {RawResponse}",
+                pr.Number, text.Length > 500 ? text[..500] : text);
+
+            // Extract the verdict line BEFORE stripping preamble, because StripReviewPreamble
+            // may remove the verdict token (e.g., "APPROVED_WITH_SUGGESTIONS") if followed by a numbered list.
+            var parts = text.Split('\n', 2);
+            var firstLine = parts[0].Trim();
+            var remainder = parts.Length > 1 ? parts[1].Trim() : "";
+            string verdict;
+            string reasoning;
+
+            if (firstLine.StartsWith("APPROVED_WITH_SUGGESTIONS", StringComparison.OrdinalIgnoreCase))
+            {
+                verdict = "APPROVED_WITH_SUGGESTIONS";
+                reasoning = PullRequestWorkflow.StripReviewPreamble(remainder);
+            }
+            else if (firstLine.StartsWith("APPROVED", StringComparison.OrdinalIgnoreCase))
+            {
+                verdict = "APPROVED";
+                reasoning = PullRequestWorkflow.StripReviewPreamble(remainder);
+            }
+            else if (firstLine.StartsWith("REWORK", StringComparison.OrdinalIgnoreCase))
+            {
+                verdict = "REWORK";
+                reasoning = PullRequestWorkflow.StripReviewPreamble(remainder);
+            }
+            else
+            {
+                // AI didn't follow format — default to REWORK (fail closed)
+                verdict = text.Contains("APPROVED", StringComparison.OrdinalIgnoreCase)
+                    && !text.Contains("REWORK", StringComparison.OrdinalIgnoreCase)
+                    ? "APPROVED" : "REWORK";
+                reasoning = PullRequestWorkflow.StripReviewPreamble(text);
+                Logger.LogWarning("Architect AI didn't start with APPROVED/REWORK, inferred {Verdict}", verdict);
+            }
+
+            // WS2 parser-hardening: extract inline comments from text-format reviews.
+            // Prompt asks LLM to prefix REWORK items with "file:line:" — when present,
+            // synthesize InlineReviewComments so they post on the Files-changed tab.
+            var extractedComments = ExtractInlineCommentsFromText(reasoning);
+            if (extractedComments.Count > 0)
+            {
+                Logger.LogInformation(
+                    "Architect text-parse fallback extracted {Count} inline comments for PR #{Number}",
+                    extractedComments.Count, pr.Number);
+            }
+
+            return new StructuredReviewResult
+            {
+                Verdict = verdict,
+                Summary = reasoning,
+                RiskLevel = ReviewRiskLevel.Medium, // Unknown risk from text fallback
+                Comments = extractedComments
+            };
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to evaluate PR #{Number} for architecture alignment",
+                pr.Number);
+            return new StructuredReviewResult
+            {
+                Verdict = "UNKNOWN",
+                Summary = "Architecture review failed due to an internal error.",
+                RiskLevel = ReviewRiskLevel.Medium,
+                Comments = []
+            };
+        }
+    }
+
+    /// <summary>
+    /// Attempts to parse AI response as structured JSON review result.
+    /// Returns null if parsing fails (caller should fall back to text parsing).
+    /// </summary>
+    private static StructuredReviewResult? TryParseStructuredReview(string text)
+    {
+        try
+        {
+            var json = text.Trim();
+
+            // Strip markdown fences if present (```json ... ``` or ``` ... ```)
+            if (json.Contains("```"))
+            {
+                // Find JSON content between fences
+                var fenceStart = json.IndexOf("```");
+                var afterFence = json.IndexOf('\n', fenceStart);
+                if (afterFence >= 0)
+                {
+                    var fenceEnd = json.IndexOf("```", afterFence);
+                    if (fenceEnd > afterFence)
+                    {
+                        json = json[(afterFence + 1)..fenceEnd].Trim();
+                    }
+                    else
+                    {
+                        json = json[(afterFence + 1)..].Trim();
+                    }
+                }
+            }
+
+            // Try to find JSON object boundaries — handle nested braces properly
+            var startBrace = json.IndexOf('{');
+            if (startBrace < 0) return null;
+
+            // Find matching closing brace (handle nesting)
+            var depth = 0;
+            var endBrace = -1;
+            var inString = false;
+            var escape = false;
+            for (var i = startBrace; i < json.Length; i++)
+            {
+                var c = json[i];
+                if (escape) { escape = false; continue; }
+                if (c == '\\' && inString) { escape = true; continue; }
+                if (c == '"') { inString = !inString; continue; }
+                if (inString) continue;
+                if (c == '{') depth++;
+                else if (c == '}') { depth--; if (depth == 0) { endBrace = i; break; } }
+            }
+            if (endBrace < 0) return null;
+            json = json[startBrace..(endBrace + 1)];
+
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            var root = doc.RootElement;
+
+            var verdict = root.TryGetProperty("verdict", out var v)
+                ? v.GetString()?.Trim().ToUpperInvariant() ?? "REWORK"
+                : "REWORK";
+
+            // Normalize verdict
+            if (verdict != "APPROVED" && verdict != "APPROVED_WITH_SUGGESTIONS" && verdict != "REWORK")
+                verdict = verdict.Contains("APPROV") ? "APPROVED" : "REWORK";
+
+            var summary = root.TryGetProperty("summary", out var s)
+                ? s.GetString()?.Trim() ?? ""
+                : "";
+
+            var riskLevel = ReviewRiskLevel.Medium;
+            if (root.TryGetProperty("riskLevel", out var r))
+            {
+                var riskStr = r.GetString()?.Trim().ToUpperInvariant() ?? "";
+                riskLevel = riskStr switch
+                {
+                    "LOW" => ReviewRiskLevel.Low,
+                    "HIGH" => ReviewRiskLevel.High,
+                    _ => ReviewRiskLevel.Medium
+                };
+            }
+
+            var comments = new List<InlineReviewComment>();
+            if (root.TryGetProperty("comments", out var commentsArr)
+                && commentsArr.ValueKind == System.Text.Json.JsonValueKind.Array)
+            {
+                foreach (var c in commentsArr.EnumerateArray())
+                {
+                    var file = c.TryGetProperty("file", out var f) ? f.GetString() : null;
+                    var line = c.TryGetProperty("line", out var l) ? l.GetInt32() : 0;
+                    var priority = c.TryGetProperty("priority", out var p) ? p.GetString() ?? "" : "";
+                    var body = c.TryGetProperty("body", out var b) ? b.GetString() ?? "" : "";
+
+                    if (!string.IsNullOrEmpty(file) && !string.IsNullOrEmpty(body) && line > 0)
+                    {
+                        comments.Add(new InlineReviewComment
+                        {
+                            FilePath = file,
+                            Line = line,
+                            Body = $"{priority}: {body}".Trim()
+                        });
+                    }
+                }
+            }
+
+            return new StructuredReviewResult
+            {
+                Verdict = verdict,
+                Summary = summary,
+                RiskLevel = riskLevel,
+                Comments = comments
+            };
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string TruncateForMemory(string text, int maxLength = 300)
+    {
+        if (string.IsNullOrEmpty(text)) return "";
+        if (text.Length <= maxLength) return text;
+        var cut = text[..maxLength];
+        var lastPeriod = cut.LastIndexOf('.');
+        return lastPeriod > maxLength / 2 ? cut[..(lastPeriod + 1)] : cut + "…";
+    }
+
+    /// <summary>
+    /// WS2 parser-hardening fallback: extract inline review comments from text-format reviews.
+    /// Matches numbered-list items prefixed with "file.ext:line:" (with optional markdown
+    /// code fences around the file path). Empty list if no matches. Shared pattern:
+    /// also used by SoftwareEngineerAgent (duplicated for locality, intentionally not DRY'd).
+    /// </summary>
+    private static List<InlineReviewComment> ExtractInlineCommentsFromText(string? text)
+    {
+        var results = new List<InlineReviewComment>();
+        if (string.IsNullOrWhiteSpace(text)) return results;
+
+        // Pattern: optional leading "N." item marker, optional markdown-fence/quote around file,
+        // file has an extension, then :line:, then body running to end-of-line or next item.
+        // Example matches:
+        //   1. src/Foo.cs:42: bad thing
+        //   - `wwwroot/app.css`:1: missing rule
+        //   2. "Models\Bar.cs":10: null guard needed
+        var pattern = @"(?m)^\s*(?:[-*]|\d+\.)?\s*[`""']?([\w./\\\-]+\.[a-zA-Z]{1,8})[`""']?:(\d+):\s*(.+?)(?:\r?\n(?=\s*(?:[-*]|\d+\.))|\r?\n\r?\n|\z)";
+        var regex = new System.Text.RegularExpressions.Regex(
+            pattern,
+            System.Text.RegularExpressions.RegexOptions.Singleline);
+
+        foreach (System.Text.RegularExpressions.Match match in regex.Matches(text))
+        {
+            var file = match.Groups[1].Value.Trim();
+            if (!int.TryParse(match.Groups[2].Value, out var line) || line < 1) continue;
+            var body = match.Groups[3].Value.Trim();
+            if (string.IsNullOrWhiteSpace(body)) continue;
+
+            // Normalize path separators to forward slash for GitHub API
+            file = file.Replace('\\', '/');
+
+            results.Add(new InlineReviewComment
+            {
+                FilePath = file,
+                Line = line,
+                Body = body
+            });
+        }
+
+        return results;
+    }
+
+    /// <summary>
+    /// Read visual design reference files from the repository for architecture decisions.
+    /// </summary>
+    private async Task<string?> ReadDesignReferencesAsync(CancellationToken ct)
+    {
+        try
+        {
+            var tree = await _platform.RepoContent.GetRepositoryTreeAsync(EffectiveBranch, ct);
+            var designKeywords = new[] { "design", "mockup", "mock", "wireframe", "prototype", "concept", "reference" };
+
+            var htmlDesignFiles = tree
+                .Where(f =>
+                {
+                    var ext = Path.GetExtension(f).ToLowerInvariant();
+                    var name = Path.GetFileName(f).ToLowerInvariant();
+                    if (ext != ".html" && ext != ".htm") return false;
+                    // HTML in root or with design keywords
+                    return !f.StartsWith("src/", StringComparison.OrdinalIgnoreCase) ||
+                           designKeywords.Any(k => name.Contains(k));
+                })
+                .ToList();
+
+            if (htmlDesignFiles.Count == 0) return null;
+
+            var sb = new System.Text.StringBuilder();
+            foreach (var file in htmlDesignFiles)
+            {
+                var content = await _platform.RepoContent.GetFileContentAsync(file, EffectiveBranch, ct);
+                if (string.IsNullOrWhiteSpace(content)) continue;
+
+                sb.AppendLine($"### Design File: `{file}`");
+                sb.AppendLine();
+                sb.AppendLine("```html");
+                sb.AppendLine(content.Length > 6000 ? content[..6000] + "\n<!-- truncated -->" : content);
+                sb.AppendLine("```");
+                sb.AppendLine();
+            }
+
+            return sb.Length > 0 ? sb.ToString().TrimEnd() : null;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to read design reference files for architecture");
+            return null;
+        }
+    }
+
+    #endregion
+}
+
+internal record ArchitectureDirective
+{
+    public string TaskId { get; init; } = "";
+    public string Title { get; init; } = "";
+    public string Description { get; init; } = "";
+}

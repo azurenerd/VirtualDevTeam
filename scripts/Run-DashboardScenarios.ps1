@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Runs the AgentSquad Dashboard Playwright scenario tests in a loop until all pass.
+    Runs the VirtualDevTeam Dashboard Playwright scenario tests in a loop until all pass.
 .DESCRIPTION
     Ensures the dashboard and runner are running, then runs all 11 scenario tests.
     Retries up to 3 times on failure, regenerates Scenarios.md screenshots on success.
@@ -16,7 +16,7 @@ param(
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 
-Write-Host "=== AgentSquad Dashboard Scenario Test Runner ===" -ForegroundColor Cyan
+Write-Host "=== VirtualDevTeam Dashboard Scenario Test Runner ===" -ForegroundColor Cyan
 
 # Check dashboard is running
 Write-Host "Checking dashboard at $DashboardUrl..." -NoNewline
@@ -25,7 +25,7 @@ try {
     Write-Host " OK" -ForegroundColor Green
 } catch {
     Write-Host " NOT RUNNING" -ForegroundColor Red
-    Write-Host "Please start the dashboard first: dotnet run --project src/AgentSquad.Dashboard"
+    Write-Host "Please start the dashboard first: dotnet run --project src/VirtualDevTeam.Dashboard"
     exit 1
 }
 
@@ -45,7 +45,7 @@ while ($attempt -lt $MaxRetries -and -not $allPassed) {
     $attempt++
     Write-Host "`n--- Attempt $attempt of $MaxRetries ---" -ForegroundColor Yellow
 
-    $result = & dotnet test "$repoRoot\tests\AgentSquad.Dashboard.Tests" --no-build 2>&1
+    $result = & dotnet test "$repoRoot\tests\VirtualDevTeam.Dashboard.Tests" --no-build 2>&1
     $exitCode = $LASTEXITCODE
 
     if ($exitCode -eq 0) {
@@ -64,7 +64,7 @@ while ($attempt -lt $MaxRetries -and -not $allPassed) {
 
 # Copy screenshots to docs
 if ($allPassed) {
-    $screenshotSrc = "$repoRoot\tests\AgentSquad.Dashboard.Tests\bin\Debug\net8.0\test-results\scenarios\screenshots"
+    $screenshotSrc = "$repoRoot\tests\VirtualDevTeam.Dashboard.Tests\bin\Debug\net8.0\test-results\scenarios\screenshots"
     $screenshotDst = "$repoRoot\docs\scenario-screenshots"
 
     if (Test-Path $screenshotSrc) {

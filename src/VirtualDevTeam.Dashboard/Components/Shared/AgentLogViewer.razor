@@ -1,0 +1,356 @@
+@using VirtualDevTeam.Core.AI
+@using Microsoft.AspNetCore.SignalR.Client
+@inject IServiceProvider ServiceProvider
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+@if (IsVisible)
+{
+<div class="agent-log-overlay" @onclick="Close" @onclick:stopPropagation="false">
+    <div class="agent-log-modal" @onclick:stopPropagation="true">
+        <div class="agent-log-header">
+            <div class="agent-log-title">
+                <span>📋</span>
+                <span>CLI Log —</span>
+                <span class="agent-name">@AgentDisplayName</span>
+            </div>
+
+            <div class="log-verbosity-selector">
+                <button class="log-verbosity-btn @(Verbosity == LogVerbosity.Low ? "active" : "")"
+                        @onclick="() => SetVerbosity(LogVerbosity.Low)">🟣 AI Only</button>
+                <button class="log-verbosity-btn @(Verbosity == LogVerbosity.Medium ? "active" : "")"
+                        @onclick="() => SetVerbosity(LogVerbosity.Medium)">⚙️ Activity</button>
+                <button class="log-verbosity-btn @(Verbosity == LogVerbosity.High ? "active" : "")"
+                        @onclick="() => SetVerbosity(LogVerbosity.High)">📋 Full</button>
+            </div>
+
+            <button class="agent-log-close" @onclick="Close" title="Close">✕</button>
+        </div>
+
+        <div class="agent-log-content" @ref="_scrollContainer">
+            @if (_entries.Count == 0)
+            {
+                <div class="agent-log-empty">No CLI output yet — waiting for agent activity…</div>
+            }
+            else
+            {
+                @foreach (var entry in _filteredEntries)
+                {
+                    @if (entry.Classification == LogLineClassification.CallBoundary)
+                    {
+                        <div class="log-call-boundary">
+                            <hr class="log-boundary-line" />
+                            <span class="log-boundary-label">@entry.Text</span>
+                        </div>
+                    }
+                    else
+                    {
+                        var isLong = entry.Text.Length > 600;
+                        var entryId = $"log-{entry.Sequence}";
+                        var bulletClass = GetBulletClass(entry.Classification);
+                        <div class="log-entry-row @GetEntryClass(entry.Classification)" id="@entryId">
+                            <div class="log-gutter">
+                                <span class="log-bullet @bulletClass">●</span>
+                                <span class="log-timestamp">@entry.TimestampUtc.ToLocalTime().ToString("HH:mm:ss")</span>
+                            </div>
+                            <div class="log-body">
+                                @if (entry.Classification == LogLineClassification.ToolStart)
+                                {
+                                    <div class="log-tool-label">@((MarkupString)FormatLogText(entry.Text))</div>
+                                }
+                                else if (entry.Classification == LogLineClassification.ToolComplete)
+                                {
+                                    <div class="log-tool-label">
+                                        <span class="log-tool-icon @(entry.ToolSuccess == false ? "log-tool-fail" : "log-tool-ok")">
+                                            @(entry.ToolSuccess == false ? "✗" : "✓")
+                                        </span>
+                                        <span>@(entry.ToolName ?? entry.Text)</span>
+                                    </div>
+                                    @if (!string.IsNullOrEmpty(entry.ToolOutput))
+                                    {
+                                        <details class="log-tool-details">
+                                            <summary>Show output</summary>
+                                            <pre class="log-tool-output">@entry.ToolOutput</pre>
+                                        </details>
+                                    }
+                                }
+                                else
+                                {
+                                    <div class="log-text @(isLong && !_expandedEntries.Contains(entry.Sequence) ? "log-text-collapsed" : "")">
+                                        @((MarkupString)FormatLogText(entry.Text))
+                                    </div>
+                                    @if (isLong)
+                                    {
+                                        <button class="log-expand-btn" @onclick="() => ToggleExpand(entry.Sequence)">
+                                            @(_expandedEntries.Contains(entry.Sequence) ? "▲ Collapse" : "▼ Show more")
+                                        </button>
+                                    }
+                                }
+                            </div>
+                        </div>
+                    }
+                }
+            }
+        </div>
+
+        <div class="agent-log-footer">
+            <span>@_entries.Count entries · seq @_latestSequence</span>
+            <label class="log-auto-scroll-toggle @(_autoScroll ? "active" : "")"
+                   @onclick="ToggleAutoScroll">
+                ↓ Auto-scroll @(_autoScroll ? "ON" : "OFF")
+            </label>
+        </div>
+    </div>
+</div>
+}
+
+@code {
+    [Parameter] public string? AgentId { get; set; }
+    [Parameter] public string? AgentDisplayName { get; set; }
+    [Parameter] public bool IsVisible { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    private HubConnection? _hub;
+    private AgentCliLogService? _logService;
+    private readonly List<AgentCliLogEntry> _entries = new();
+    private List<AgentCliLogEntry> _filteredEntries = new();
+    private LogVerbosity Verbosity { get; set; } = LogVerbosity.Medium;
+    private long _latestSequence = -1;
+    private bool _autoScroll = true;
+    private bool _needsScrollToBottom;
+    private ElementReference _scrollContainer;
+    private bool _disposed;
+    private readonly HashSet<long> _expandedEntries = new();
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (IsVisible && AgentId is not null)
+        {
+            await ConnectAsync();
+            await LoadInitialEntries();
+            _needsScrollToBottom = true;
+        }
+        else if (!IsVisible)
+        {
+            await DisconnectAsync();
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_needsScrollToBottom && IsVisible)
+        {
+            _needsScrollToBottom = false;
+            // Small delay to let the DOM populate before scrolling
+            await Task.Delay(50);
+            await ScrollToBottom();
+        }
+    }
+
+    private async Task ConnectAsync()
+    {
+        if (_hub is not null) return;
+
+        // Try in-process service first (embedded Dashboard mode)
+        _logService = ServiceProvider.GetService<AgentCliLogService>();
+
+        // Build SignalR connection
+        var hubUrl = Navigation.ToAbsoluteUri("/hubs/agentlog");
+        _hub = new HubConnectionBuilder()
+            .WithUrl(hubUrl)
+            .WithAutomaticReconnect()
+            .Build();
+
+        _hub.On<object>("ReceiveLogEntry", OnReceiveLogEntry);
+
+        try
+        {
+            await _hub.StartAsync();
+            if (AgentId is not null)
+                await _hub.InvokeAsync("SubscribeToAgent", AgentId);
+        }
+        catch (Exception)
+        {
+            // SignalR may not be available in standalone mode — fall back to polling
+        }
+    }
+
+    private async Task DisconnectAsync()
+    {
+        if (_hub is not null)
+        {
+            try
+            {
+                if (AgentId is not null)
+                    await _hub.InvokeAsync("UnsubscribeFromAgent", AgentId);
+                await _hub.DisposeAsync();
+            }
+            catch { }
+            _hub = null;
+        }
+    }
+
+    private Task LoadInitialEntries()
+    {
+        if (_logService is null || AgentId is null) return Task.CompletedTask;
+
+        var entries = _logService.GetRecent(AgentId, LogVerbosity.High);
+        _entries.Clear();
+        _entries.AddRange(entries);
+        if (entries.Count > 0)
+            _latestSequence = entries[^1].Sequence;
+        ApplyVerbosityFilter();
+        return Task.CompletedTask;
+    }
+
+    private void OnReceiveLogEntry(object entryData)
+    {
+        try
+        {
+            // Parse the dynamic object sent from SignalR
+            var json = System.Text.Json.JsonSerializer.Serialize(entryData);
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            var root = doc.RootElement;
+
+            var sequence = root.GetProperty("sequence").GetInt64();
+            var text = root.GetProperty("text").GetString() ?? "";
+            var classStr = root.GetProperty("classification").GetString() ?? "Raw";
+            var callId = root.TryGetProperty("callId", out var cid) ? cid.GetString() : null;
+            var timestamp = root.TryGetProperty("timestamp", out var ts)
+                ? DateTime.Parse(ts.GetString()!) : DateTime.UtcNow;
+            var agentId = root.TryGetProperty("agentId", out var aid) ? aid.GetString() : null;
+
+            if (agentId != AgentId) return;
+
+            if (!Enum.TryParse<LogLineClassification>(classStr, out var classification))
+                classification = LogLineClassification.Raw;
+
+            var entry = new AgentCliLogEntry(sequence, timestamp, text, classification, callId);
+
+            // Check if this is a merged delta update (same sequence as last entry)
+            if (_entries.Count > 0 && _entries[^1].Sequence == sequence)
+            {
+                _entries[^1] = entry; // Replace with merged version
+                // Also update in filtered list
+                if (_filteredEntries.Count > 0 && _filteredEntries[^1].Sequence == sequence)
+                    _filteredEntries[^1] = entry;
+            }
+            else
+            {
+                _entries.Add(entry);
+                _latestSequence = sequence;
+
+                if (CliLineClassifier.IsVisibleAtVerbosity(classification, Verbosity))
+                    _filteredEntries.Add(entry);
+            }
+
+            InvokeAsync(async () =>
+            {
+                StateHasChanged();
+                if (_autoScroll)
+                    await ScrollToBottom();
+            });
+        }
+        catch { /* best-effort parse */ }
+    }
+
+    private void SetVerbosity(LogVerbosity verbosity)
+    {
+        Verbosity = verbosity;
+        ApplyVerbosityFilter();
+    }
+
+    private void ApplyVerbosityFilter()
+    {
+        _filteredEntries = _entries
+            .Where(e => CliLineClassifier.IsVisibleAtVerbosity(e.Classification, Verbosity))
+            .ToList();
+    }
+
+    private async Task Close()
+    {
+        await OnClose.InvokeAsync();
+    }
+
+    private void ToggleAutoScroll()
+    {
+        _autoScroll = !_autoScroll;
+    }
+
+    private void ToggleExpand(long sequence)
+    {
+        if (!_expandedEntries.Remove(sequence))
+            _expandedEntries.Add(sequence);
+    }
+
+    private async Task ScrollToBottom()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("eval",
+                "var el = document.querySelector('.agent-log-content'); if(el) el.scrollTop = el.scrollHeight;");
+        }
+        catch { }
+    }
+
+    private static string GetEntryClass(LogLineClassification classification) => classification switch
+    {
+        LogLineClassification.Assistant => "log-entry-assistant",
+        LogLineClassification.ToolStart => "log-entry-tool-start",
+        LogLineClassification.ToolComplete => "log-entry-tool-complete",
+        LogLineClassification.System => "log-entry-system",
+        LogLineClassification.Lifecycle => "log-entry-lifecycle",
+        LogLineClassification.Error => "log-entry-error",
+        LogLineClassification.Raw => "log-entry-raw",
+        _ => "log-entry-raw"
+    };
+
+    private static string GetBulletClass(LogLineClassification classification) => classification switch
+    {
+        LogLineClassification.Assistant => "log-bullet--magenta",
+        LogLineClassification.ToolStart => "log-bullet--amber",
+        LogLineClassification.ToolComplete => "log-bullet--green",
+        LogLineClassification.System => "log-bullet--blue",
+        LogLineClassification.Lifecycle => "log-bullet--cyan",
+        LogLineClassification.Error => "log-bullet--red",
+        _ => "log-bullet--gray"
+    };
+
+    /// <summary>
+    /// Format log text for HTML display:
+    /// - HTML-encode to prevent injection
+    /// - Convert paragraph breaks (double newlines) into spaced paragraphs
+    /// - Convert single newlines into line breaks
+    /// - Preserve indentation
+    /// </summary>
+    private static string FormatLogText(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return "";
+
+        // HTML-encode first to prevent injection
+        var encoded = System.Net.WebUtility.HtmlEncode(text);
+
+        // Normalize literal \n from JSON to real newlines, then normalize line endings
+        encoded = encoded.Replace("\\n", "\n");
+        encoded = encoded.Replace("\r\n", "\n");
+
+        // Paragraph breaks: double-newline → paragraph gap
+        encoded = encoded.Replace("\n\n", "</p><p class=\"log-para\">");
+
+        // Remaining single newlines → <br>
+        encoded = encoded.Replace("\n", "<br>");
+
+        // Wrap in paragraph tag
+        encoded = "<p class=\"log-para\">" + encoded + "</p>";
+
+        return encoded;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        await DisconnectAsync();
+    }
+}

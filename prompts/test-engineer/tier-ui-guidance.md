@@ -10,6 +10,80 @@ tags:
 ---
 ## Test Tier: UI/E2E TESTS (Playwright)
 Focus on testing user-facing behavior through browser automation.
+
+## Quiet-page assertions are mandatory
+
+Every UI test must assert that the page produced no UNEXPECTED runtime noise — not just that the expected DOM is visible. A page that renders the right markup while throwing 500s or unhandled JS errors in the background is broken, even if the visible assertions read green.
+
+Wire two passive collectors at the start of each test and check them before the test ends:
+
+```csharp
+var consoleErrors = new List<string>();
+var failedResponses = new List<string>();
+page.Console += (_, m) => { if (m.Type == "error") consoleErrors.Add(m.Text); };
+page.Response += (_, r) => { if ((int)r.Status >= 500) failedResponses.Add($"{(int)r.Status} {r.Url}"); };
+// ... drive the page, perform interactions, run your DOM assertions ...
+Assert.Empty(consoleErrors);     // surfaces silent JS errors
+Assert.Empty(failedResponses);   // surfaces silent 5xx responses
+```
+
+When asserting visible content, prefer accessible queries (`GetByRoleAsync`, `GetByLabelAsync`, `GetByTextAsync`) over raw CSS selectors. Accessibility regressions then show up as test failures rather than passing silently.
+
+## MANDATORY: Navigation Smoke Test
+
+Every UI test suite MUST include a navigation smoke test that validates ALL navigation links
+in the application render real pages. This is the single most important UI test — it catches
+broken routes, missing pages, and 404s that pass HTTP status checks in SPAs.
+
+**CRITICAL: Use DOM assertions, NOT HTTP status codes.** Single Page Applications (SPAs like
+Blazor, React, Vue) return HTTP 200 for ALL routes including broken ones. The test MUST:
+
+1. Load the app root
+2. Find all navigation links (sidebar, top nav, hamburger menu)
+3. Click each link
+4. Assert the resulting page has meaningful content (not just the shell):
+   - Page body does NOT contain "404", "Not Found", "Page not found"
+   - No error boundary visible (e.g., no `blazor-error-ui`, no React error overlay)
+   - At least one route-specific element exists (heading, data container, form)
+5. Skip links to external domains or links with dynamic route parameters (`{`, `:`)
+
+Example implementation:
+```csharp
+[Fact]
+public async Task AllNavLinks_LoadRealPages()
+{
+    var page = await _fixture.NewPageAsync();
+    await page.GotoAsync(_fixture.BaseUrl);
+    await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
+
+    // Collect all nav links
+    var navLinks = await page.Locator("nav a[href]").AllAsync();
+
+    foreach (var link in navLinks)
+    {
+        var href = await link.GetAttributeAsync("href");
+        if (string.IsNullOrEmpty(href) || href.StartsWith("http") || href.Contains("{"))
+            continue;
+
+        await link.ClickAsync();
+        await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
+
+        // DOM assertions — NOT HTTP status
+        var bodyText = await page.Locator("body").InnerTextAsync();
+        Assert.DoesNotContain("404", bodyText);
+        Assert.DoesNotContain("Not Found", bodyText);
+
+        // Verify meaningful content rendered (not just app shell)
+        var mainContent = page.Locator("main, [role='main'], .page-content, .content");
+        await Assertions.Expect(mainContent.First).ToBeVisibleAsync();
+
+        // Navigate back for next link
+        await page.GotoAsync(_fixture.BaseUrl);
+        await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
+    }
+}
+```
+
 Guidelines:
 - Use Microsoft.Playwright for browser automation
 - Use the Page Object Model pattern: create a page object class for each page/component

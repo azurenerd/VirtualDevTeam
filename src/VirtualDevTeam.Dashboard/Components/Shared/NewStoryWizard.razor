@@ -1,0 +1,461 @@
+@using System.Text.RegularExpressions
+@inject IServiceProvider ServiceProvider
+@inject NavigationManager Navigation
+
+<div class="modal-overlay" @onclick="CancelAsync">
+    <div class="modal-dialog new-story-modal" @onclick:stopPropagation="true" data-testid="new-story-wizard">
+        <div class="modal-header">
+            <div>
+                <h3 class="modal-title new-story-title">New Story · @NormalizedWave</h3>
+                <div class="config-hint">Create a new story directly in @NormalizedWave without leaving the timeline.</div>
+            </div>
+            <button class="modal-close" @onclick="CancelAsync" disabled="@_creating" aria-label="Close new story wizard">✕</button>
+        </div>
+
+        <div class="modal-body">
+            <div class="wizard-steps new-story-steps">
+                @for (var step = 1; step <= 3; step++)
+                {
+                    var state = GetStepState(step);
+                    <div class="wizard-step @state">
+                        <div class="wizard-step-circle">@step</div>
+                        <span class="wizard-step-label">@GetStepLabel(step)</span>
+                    </div>
+                    @if (step < 3)
+                    {
+                        <div class="wizard-step-line @(step < _step ? "completed" : string.Empty)"></div>
+                    }
+                }
+            </div>
+
+            @if (!string.IsNullOrWhiteSpace(_error))
+            {
+                <div class="config-pat-result config-pat-error">
+                    <span>@_error</span>
+                </div>
+            }
+
+            <div class="wizard-body">
+                @if (_step == 1)
+                {
+                    <div class="new-story-grid">
+                        <div class="config-field">
+                            <label for="new-story-title">Story title</label>
+                            <input id="new-story-title" class="config-input" placeholder="Add keyboard shortcut to timeline filters"
+                                   @bind="_draft.Title" @bind:event="oninput" />
+                        </div>
+
+                        <div class="config-field-row">
+                            <div class="config-field">
+                                <label for="new-story-wave">Wave</label>
+                                <input id="new-story-wave" class="config-input" value="@NormalizedWave" readonly />
+                            </div>
+                            <div class="config-field">
+                                <label for="new-story-complexity">Complexity</label>
+                                <select id="new-story-complexity" class="config-input" @bind="_draft.Complexity">
+                                    <option value="Low">Low</option>
+                                    <option value="Medium">Medium</option>
+                                    <option value="High">High</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="config-field">
+                            <label for="new-story-description">Story details</label>
+                            <textarea id="new-story-description" class="config-textarea" rows="7"
+                                      placeholder="Describe the user need, expected workflow, and any constraints or UI expectations."
+                                      @bind="_draft.Description" @bind:event="oninput"></textarea>
+                            <div class="config-hint">Include enough detail for the engineers to implement the work without re-discovering the requirements.</div>
+                        </div>
+
+                        <div class="config-field">
+                            <label for="new-story-acceptance">Acceptance criteria</label>
+                            <textarea id="new-story-acceptance" class="config-textarea" rows="5"
+                                      placeholder="- User can ...&#10;- System should ...&#10;- Error state should ..."
+                                      @bind="_draft.AcceptanceCriteria" @bind:event="oninput"></textarea>
+                        </div>
+
+                        <div class="config-field">
+                            <label for="new-story-dependencies">Depends on existing issues (optional)</label>
+                            <input id="new-story-dependencies" class="config-input" placeholder="#123, #124"
+                                   @bind="_draft.DependsOnText" @bind:event="oninput" />
+                            <div class="config-hint">Reference existing issue numbers if this story should wait for them.</div>
+                        </div>
+                    </div>
+                }
+                else if (_step == 2)
+                {
+                    <div class="new-story-step-copy">
+                        <h4>Clarifying questions</h4>
+                        <p>Review the proposed answers, edit them if needed, or leave them blank to skip a question.</p>
+                    </div>
+
+                    @if (_clarifyLoading)
+                    {
+                        <div class="new-story-loading">
+                            <span class="config-spinner"></span>
+                            <span>Generating clarifying questions…</span>
+                        </div>
+                    }
+                    else if (_questions.Count == 0)
+                    {
+                        <div class="clarify-empty-state">
+                            <h4>No additional questions required</h4>
+                            <p>The current story details are already specific enough to continue.</p>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="new-story-inline-actions">
+                            <span class="config-hint">@_questions.Count question@(_questions.Count == 1 ? string.Empty : "s") generated for this story.</span>
+                            <button type="button" class="config-btn-secondary" @onclick="GenerateClarifyingQuestionsAsync" disabled="@_clarifyLoading">Regenerate</button>
+                        </div>
+
+                        <div class="new-story-question-list">
+                            @for (var i = 0; i < _questions.Count; i++)
+                            {
+                                var question = _questions[i];
+                                <div class="new-story-question-card">
+                                    <div class="new-story-question-header">Question @(@i + 1)</div>
+                                    <div class="new-story-question-body">@question.Question</div>
+                                    @if (!string.IsNullOrWhiteSpace(question.ProposedAnswer))
+                                    {
+                                        <div class="new-story-proposed-answer">
+                                            <strong>Suggested answer:</strong> @question.ProposedAnswer
+                                        </div>
+                                    }
+                                    <textarea class="config-textarea" rows="3" placeholder="Leave blank to skip this clarification."
+                                              @bind="question.Answer" @bind:event="oninput"></textarea>
+                                </div>
+                            }
+                        </div>
+                    }
+                }
+                else
+                {
+                    <div class="new-story-step-copy">
+                        <h4>Review before creating</h4>
+                        <p>Confirm the story details that will be written into the work item.</p>
+                    </div>
+
+                    <div class="new-story-summary">
+                        <div class="new-story-summary-row">
+                            <span class="new-story-summary-label">Title</span>
+                            <span>@_draft.Title</span>
+                        </div>
+                        <div class="new-story-summary-row">
+                            <span class="new-story-summary-label">Wave</span>
+                            <span class="new-story-wave-pill">@NormalizedWave</span>
+                        </div>
+                        <div class="new-story-summary-row">
+                            <span class="new-story-summary-label">Complexity</span>
+                            <span>@_draft.Complexity</span>
+                        </div>
+                        <div class="new-story-summary-row">
+                            <span class="new-story-summary-label">Dependencies</span>
+                            <span>@(ParsedDependencies.Count == 0 ? "None" : string.Join(", ", ParsedDependencies.Select(n => $"#{n}")))</span>
+                        </div>
+                        <div class="new-story-summary-row">
+                            <span class="new-story-summary-label">Clarifications</span>
+                            <span>@AnsweredClarificationsCount answer@(AnsweredClarificationsCount == 1 ? string.Empty : "s")</span>
+                        </div>
+                    </div>
+
+                    <div class="new-story-review-block">
+                        <h5>Description</h5>
+                        <pre>@_draft.Description</pre>
+                    </div>
+
+                    @if (!string.IsNullOrWhiteSpace(_draft.AcceptanceCriteria))
+                    {
+                        <div class="new-story-review-block">
+                            <h5>Acceptance criteria</h5>
+                            <pre>@_draft.AcceptanceCriteria</pre>
+                        </div>
+                    }
+
+                    @if (AnsweredClarificationsCount > 0)
+                    {
+                        <div class="new-story-review-block">
+                            <h5>Clarifying decisions</h5>
+                            <ul>
+                                @foreach (var question in _questions.Where(q => !string.IsNullOrWhiteSpace(q.Answer)))
+                                {
+                                    <li><strong>@question.Question</strong><br />@question.Answer</li>
+                                }
+                            </ul>
+                        </div>
+                    }
+                }
+            </div>
+
+            <div class="wizard-actions new-story-actions">
+                <button type="button" class="config-btn-secondary" @onclick="CancelAsync" disabled="@_creating">Cancel</button>
+                <div class="new-story-actions-right">
+                    @if (_step > 1)
+                    {
+                        <button type="button" class="config-btn-secondary" @onclick="GoBack" disabled="@_creating || _clarifyLoading">Back</button>
+                    }
+                    @if (_step < 3)
+                    {
+                        <button type="button" class="config-btn-primary" @onclick="GoNextAsync"
+                            disabled="@IsNextDisabled"
+                            title="@GetNextDisabledReason()">@GetNextButtonLabel()</button>
+                    }
+                    else
+                    {
+                        <button type="button" class="config-btn-primary" @onclick="CreateStoryAsync" disabled="@_creating">
+                            @if (_creating)
+                            {
+                                <span class="config-spinner-sm"></span>
+                                <span>Creating…</span>
+                            }
+                            else
+                            {
+                                <span>Create story</span>
+                            }
+                        </button>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Wave { get; set; } = string.Empty;
+    [Parameter] public EventCallback OnCancel { get; set; }
+    [Parameter] public EventCallback<string> OnCreated { get; set; }
+
+    private readonly StoryDraft _draft = new();
+    private readonly List<ClarifyingQuestionState> _questions = [];
+    private HttpClient _http = default!;
+    private int _step = 1;
+    private bool _clarifyLoading;
+    private bool _creating;
+    private string? _error;
+
+    private string NormalizedWave => NormalizeWave(Wave);
+    private IReadOnlyList<int> ParsedDependencies => ParseDependencies(_draft.DependsOnText);
+    private int AnsweredClarificationsCount => _questions.Count(q => !string.IsNullOrWhiteSpace(q.Answer));
+    private bool IsNextDisabled => _clarifyLoading || _creating || (_step == 1 && (!HasRequiredDetails || !IsWaveValid));
+    private bool HasRequiredDetails => !string.IsNullOrWhiteSpace(_draft.Title) && !string.IsNullOrWhiteSpace(_draft.Description);
+    private bool IsWaveValid => Regex.IsMatch(NormalizedWave, @"^W\d+$", RegexOptions.IgnoreCase);
+
+    protected override void OnInitialized()
+    {
+        var factory = ServiceProvider.GetService<IHttpClientFactory>();
+        _http = factory?.CreateClient("RunnerApi") ?? new HttpClient { BaseAddress = new Uri(Navigation.BaseUri) };
+    }
+
+    private async Task CancelAsync()
+    {
+        if (_creating)
+            return;
+
+        if (OnCancel.HasDelegate)
+            await OnCancel.InvokeAsync();
+    }
+
+    private async Task GoNextAsync()
+    {
+        _error = null;
+        if (_step == 1)
+        {
+            await GenerateClarifyingQuestionsAsync();
+            _step = 2;
+            return;
+        }
+
+        if (_step < 3)
+            _step++;
+    }
+
+    private void GoBack()
+    {
+        _error = null;
+        if (_step > 1)
+            _step--;
+    }
+
+    private async Task GenerateClarifyingQuestionsAsync()
+    {
+        _clarifyLoading = true;
+        _error = null;
+        _questions.Clear();
+        StateHasChanged();
+
+        try
+        {
+            var response = await _http.PostAsJsonAsync("/api/pipeline/stories/clarify", new StoryClarifyRequest(
+                _draft.Title.Trim(),
+                _draft.Description.Trim(),
+                NormalizeMultiline(_draft.AcceptanceCriteria),
+                NormalizedWave,
+                _draft.Complexity,
+                ParsedDependencies));
+
+            if (!response.IsSuccessStatusCode)
+            {
+                _error = await ReadErrorMessageAsync(response, "Failed to generate clarifying questions.");
+                return;
+            }
+
+            var result = await response.Content.ReadFromJsonAsync<StoryClarifyResponse>();
+            if (result?.Questions is null)
+                return;
+
+            _questions.AddRange(result.Questions.Select(q => new ClarifyingQuestionState
+            {
+                Question = q.Question,
+                ProposedAnswer = q.ProposedAnswer,
+                Answer = q.ProposedAnswer
+            }));
+        }
+        catch (Exception ex)
+        {
+            _error = $"Failed to generate clarifying questions. {ex.Message}";
+        }
+        finally
+        {
+            _clarifyLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task CreateStoryAsync()
+    {
+        _creating = true;
+        _error = null;
+        StateHasChanged();
+
+        try
+        {
+            var response = await _http.PostAsJsonAsync("/api/pipeline/stories", new CreateStoryRequest(
+                _draft.Title.Trim(),
+                _draft.Description.Trim(),
+                NormalizeMultiline(_draft.AcceptanceCriteria),
+                NormalizedWave,
+                _draft.Complexity,
+                ParsedDependencies,
+                _questions.Select(q => new StoryClarification(q.Question, NormalizeMultiline(q.Answer), q.ProposedAnswer)).ToList()));
+
+            if (!response.IsSuccessStatusCode)
+            {
+                _error = await ReadErrorMessageAsync(response, "Failed to create story.");
+                return;
+            }
+
+            var created = await response.Content.ReadFromJsonAsync<CreateStoryResponse>();
+            var successMessage = created is null
+                ? $"Created a new story in {NormalizedWave}."
+                : $"Created story #{created.Number}: {created.Title} in {created.Wave}.";
+
+            if (OnCreated.HasDelegate)
+                await OnCreated.InvokeAsync(successMessage);
+            else
+                await CancelAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = $"Failed to create story. {ex.Message}";
+        }
+        finally
+        {
+            _creating = false;
+            StateHasChanged();
+        }
+    }
+
+    private string GetStepState(int step) => step == _step ? "active" : step < _step ? "completed" : string.Empty;
+
+    private static string GetStepLabel(int step) => step switch
+    {
+        1 => "Details",
+        2 => "Clarify",
+        3 => "Review",
+        _ => step.ToString()
+    };
+
+    private string GetNextButtonLabel() => _step switch
+    {
+        1 => _clarifyLoading ? "Generating…" : "Next · Clarify",
+        2 => "Next · Review",
+        _ => "Next"
+    };
+
+    private string GetNextDisabledReason()
+    {
+        if (!IsNextDisabled) return GetNextButtonLabel();
+        if (_clarifyLoading) return "Generating clarifying questions…";
+        if (_creating) return "Creating story…";
+        if (_step == 1 && !HasRequiredDetails) return "Enter a title and description before continuing";
+        if (_step == 1 && !IsWaveValid) return "Enter a valid wave (e.g., W1, W2) before continuing";
+        return "Complete required fields before continuing";
+    }
+
+    private static string NormalizeWave(string? wave)
+    {
+        var normalized = (wave ?? string.Empty).Trim().ToUpperInvariant();
+        if (string.IsNullOrWhiteSpace(normalized))
+            return string.Empty;
+
+        return normalized.StartsWith('W') ? normalized : $"W{normalized}";
+    }
+
+    private static IReadOnlyList<int> ParseDependencies(string? input)
+    {
+        if (string.IsNullOrWhiteSpace(input))
+            return [];
+
+        return Regex.Matches(input, @"#?(\d+)")
+            .Select(match => int.Parse(match.Groups[1].Value))
+            .Distinct()
+            .ToList();
+    }
+
+    private static string? NormalizeMultiline(string? value)
+        => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static async Task<string> ReadErrorMessageAsync(HttpResponseMessage response, string fallback)
+    {
+        try
+        {
+            var content = await response.Content.ReadAsStringAsync();
+            if (string.IsNullOrWhiteSpace(content))
+                return fallback;
+
+            if (content.Length > 280)
+                content = content[..280] + "…";
+
+            return $"{fallback} {content}";
+        }
+        catch
+        {
+            return fallback;
+        }
+    }
+
+    private sealed class StoryDraft
+    {
+        public string Title { get; set; } = string.Empty;
+        public string Description { get; set; } = string.Empty;
+        public string? AcceptanceCriteria { get; set; }
+        public string Complexity { get; set; } = "Medium";
+        public string? DependsOnText { get; set; }
+    }
+
+    private sealed class ClarifyingQuestionState
+    {
+        public string Question { get; set; } = string.Empty;
+        public string? ProposedAnswer { get; set; }
+        public string? Answer { get; set; }
+    }
+
+    private sealed record StoryClarifyRequest(string Title, string Description, string? AcceptanceCriteria, string Wave, string? Complexity, IReadOnlyList<int> DependsOnIssueNumbers);
+    private sealed record StoryClarifyQuestion(string Question, string? ProposedAnswer);
+    private sealed record StoryClarifyResponse(IReadOnlyList<StoryClarifyQuestion> Questions);
+    private sealed record StoryClarification(string Question, string? Answer, string? ProposedAnswer);
+    private sealed record CreateStoryRequest(string Title, string Description, string? AcceptanceCriteria, string Wave, string? Complexity, IReadOnlyList<int> DependsOnIssueNumbers, IReadOnlyList<StoryClarification> Clarifications);
+    private sealed record CreateStoryResponse(int Number, long PlatformId, string Title, string Url, string Wave, IReadOnlyList<string> Labels, string WorkItemType);
+}
