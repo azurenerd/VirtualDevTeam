@@ -28,7 +28,7 @@ Use the `manage_schedule` tool to create a recurring monitoring prompt instead o
 manage_schedule:
   action: create
   interval: "2m"
-  prompt: "Monitor VirtualDevTeam pipeline at http://localhost:5050. Compact format: only show working/blocked/error agents. Approve any pending PrePRClarification gates. If agents stuck >30min, investigate. If runner crashed, restart. Also commit and push pending changes to behumphr if any exist."
+  prompt: "Monitor VirtualDevTeam pipeline at http://localhost:5050. Compact format: only show working/blocked/error agents. Approve any pending PrePRClarification gates. If agents stuck >30min, investigate. If runner crashed, restart. Also commit and push pending changes to the working branch if any exist."
 ```
 
 **Why this is better than `Task.Delay` loops:**

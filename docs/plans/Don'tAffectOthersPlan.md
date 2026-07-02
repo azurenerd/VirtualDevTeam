@@ -114,7 +114,7 @@ Both are Node.js `--report-on-fatalerror` OOM crash reports containing the devel
 src/ReportingDashboard/wwwroot/data/data.json*.pid
 ```
 
-Pattern `data.json*.pid` matches `data.json.pid` (nothing useful), NOT `data.json`. Intent (per comment + existing `data.template.json`) is to ignore `data.json`. Meanwhile `src/ReportingDashboard/wwwroot/data/dashboard-data.json` is present and contains internal project references (`dev.azure.com/contoso/VirtualDevTeam/_backlogs`, `CSE Garage · Agent Squad Workstream · FY25-Q3 / Q4`).
+Pattern `data.json*.pid` matches `data.json.pid` (nothing useful), NOT `data.json`. Intent (per comment + existing `data.template.json`) is to ignore `data.json`. Meanwhile `src/ReportingDashboard/wwwroot/data/dashboard-data.json` is present and contains project-specific data.
 
 **Why it leaks:** Malformed pattern fails to ignore what it claims. A developer who populates `data.json` accidentally commits internal milestone data.
 

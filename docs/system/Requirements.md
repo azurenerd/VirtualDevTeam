@@ -3518,7 +3518,7 @@ Persist candidate patches and execution metadata to SQLite after all candidates 
 ### REQ-UI-042: Overview Header Shows Repo + Branch Flow
 
 - **REQ-UI-042a**: The Overview page header MUST display the repository name as a bold title (e.g., **my-app**) sourced from the active project configuration.
-- **REQ-UI-042b**: Below the repo name, display branch flow in muted text: `🔀 main → {workingBranch}` where `workingBranch` is the current agent working branch (e.g., `behumphr`).
+- **REQ-UI-042b**: Below the repo name, display branch flow in muted text: `🔀 main → {workingBranch}` where `workingBranch` is the current agent working branch (e.g., `dev`).
 - **REQ-UI-042c**: Replaces the static "Greenfield Project" label that provided no project-specific context.
 
 ### REQ-UI-043: Timeline Phase Arrows

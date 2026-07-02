@@ -15,7 +15,7 @@
 | **Phase 2: Emergency Winner** | ✅ Done | `SelectEmergencyWinner` in CandidateEvaluator + catch block in StrategyOrchestrator with checkpoint/event |
 | **Phase 3: FlowMonitor** | ✅ Done | `StrategyEvaluationStuckDetector`, `PromoteStrategyWinnerAction`, `MergeEscalationAction`, Tier 2 in `UnmergedApprovedPrDetector`, 4 DI registrations |
 | **Phase 4: Tests** | ✅ Done | 20 unit tests in `StrategyStuckEscalationTests.cs` — all passing |
-| **Git commit** | ✅ Done | Committed as `43d8763` on `behumphr` branch |
+| **Git commit** | ✅ Done | Committed as `43d8763` on the working branch |
 
 ### Files Created
 - `src/VirtualDevTeam.Orchestrator/StrategyEvaluationStuckDetector.cs` (~215 lines)
@@ -34,7 +34,7 @@
 ### Next Session: Remaining Work
 1. **Write tests** → Create `tests/VirtualDevTeam.Core.Tests/StrategyStuckEscalationTests.cs` covering: SelectEmergencyWinner (5 cases), StrategyEvaluationStuckDetector (5 cases), PromoteStrategyWinnerAction (3 cases), MergeEscalationAction (3 cases). All constructor signatures, mock patterns, and type details captured in session checkpoint 072.
 2. **Run tests** → `dotnet test tests\VirtualDevTeam.Core.Tests --filter "FullyQualifiedName~StrategyStuckEscalation"`
-3. **Git commit** → Stage all files, commit on `behumphr` branch.
+3. **Git commit** → Stage all files, commit on the working branch.
 
 ### Bugs Found & Fixed During Implementation (9 total)
 1. `CandidateScore.VisualsFeedback` not `VisualsScoreReason`

@@ -112,7 +112,7 @@ gates:
     level: L3          # Require approval
     timeout: 4h        # Auto-approve after 4 hours if no response
     notify: [teams, browser, email]
-    assignee: "@behumphr"
+    assignee: "@operator"
     fallback: approve   # What happens on timeout: approve | block | escalate
   G-09:  # PR Code Complete
     level: L0          # Full autonomy — agent decides
@@ -531,7 +531,7 @@ Tech Stack: [Blazor Server, .NET 8, SQL Server]
 **Step 2: Team Composition**
 ```
 Humans on this project:
-  @behumphr — Director (manages all agents)
+  @operator — Director (manages all agents)
   
 Agent Team:
   ✅ PM Agent (premium tier)
