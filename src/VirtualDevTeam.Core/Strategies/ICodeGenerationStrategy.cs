@@ -101,7 +101,7 @@ public record StrategyInvocation
     public string? BaseSha { get; init; }
 
     /// <summary>
-    /// When true, the strategy should bypass the wrapper command (e.g., "agency") and call
+    /// When true, the strategy should bypass the wrapper command and call
     /// copilot directly. Used by the stuck-candidate retry escalation (rung 2) to work around
     /// wrapper-related startup hangs. Per-call, not global.
     /// </summary>

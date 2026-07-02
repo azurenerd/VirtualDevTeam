@@ -661,7 +661,7 @@ Configuration lives in `src/VirtualDevTeam.Runner/appsettings.json` under the `V
 |---------|-------------|
 | `Project` | Project name/description, executive username |
 | `DevPlatform` | Platform selection (GitHub, AzureDevOps, or Local), per-platform auth and repo settings |
-| `CopilotCli` | Enable/disable Copilot CLI provider, max concurrent requests, reasoning effort (`high` default), fast-mode model (`claude-haiku-4.5` default), optional `WrapperCommand` (e.g., `agency`) |
+| `CopilotCli` | Enable/disable Copilot CLI provider, max concurrent requests, reasoning effort (`high` default), fast-mode model (`claude-haiku-4.5` default), optional `WrapperCommand` to prepend a custom CLI wrapper |
 | `Models` | Model tier definitions — provider, model name, API key, endpoint, temperature, max tokens |
 | `Agents` | Per-role model tier assignments, MCP servers, knowledge links, custom prompts |
 | `McpServers` | Global MCP server definitions (name, command, transport, capabilities) |

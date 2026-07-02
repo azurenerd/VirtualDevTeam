@@ -115,7 +115,7 @@ public sealed class CliAppPlaytester : IAppPlaytester
 
         var prompt = BuildVerificationPrompt(scenario, handle);
 
-        // Agency-plugin and other complex apps can take many minutes (45+) to verify. We deliberately
+        // Some complex apps can take many minutes (45+) to verify. We deliberately
         // remove the hard wall-clock cap (WallClockTimeoutSeconds=0 => Infinite) and rely solely on the
         // stall watchdog: the session is only killed if it produces NO meaningful log output for
         // StuckSeconds (default 5 min), which is the real "something is stuck" signal.

@@ -207,8 +207,8 @@ public class CliOutputParserTests
         // Simulates the 61 MB PMSpec.md bug: CLI returned only MCP session events, no assistant content.
         var jsonl = """
             {"type":"session.mcp_server_status_changed","data":{"serverName":"security-context","status":"failed"},"id":"1","timestamp":"2026-05-20T01:46:18.004Z","parentId":"5d16875d","ephemeral":true}
-            {"type":"session.mcp_server_status_changed","data":{"serverName":"enghub","status":"connected"},"id":"2","timestamp":"2026-05-20T01:46:18.038Z","parentId":"5d16875d","ephemeral":true}
-            {"type":"session.mcp_servers_loaded","data":{"servers":[{"name":"enghub","status":"connected"}]},"id":"3","timestamp":"2026-05-20T01:46:26.142Z","parentId":"5d16875d","ephemeral":true}
+            {"type":"session.mcp_server_status_changed","data":{"serverName":"docs-mcp","status":"connected"},"id":"2","timestamp":"2026-05-20T01:46:18.038Z","parentId":"5d16875d","ephemeral":true}
+            {"type":"session.mcp_servers_loaded","data":{"servers":[{"name":"docs-mcp","status":"connected"}]},"id":"3","timestamp":"2026-05-20T01:46:26.142Z","parentId":"5d16875d","ephemeral":true}
             {"type":"result","timestamp":"2026-05-20T01:47:00.000Z","exitCode":0}
             """;
 

@@ -497,32 +497,6 @@
             });
             await Task.WhenAll(tasks);
 
-            // Auto-configure CLI wrapper based on agency availability.
-            // If agency is found, ensure WrapperCommand is "agency".
-            // If not found, clear it so the appsettings default doesn't break this user.
-            var agencyTool = _tools.FirstOrDefault(t => t.Definition.Name == "Agency CLI");
-            if (agencyTool is not null)
-            {
-                var settings = await DevelopSettingsService.LoadAsync(_cts.Token);
-                if (agencyTool.Status == CheckStatus.Found)
-                {
-                    if (string.IsNullOrWhiteSpace(settings.WrapperCommand))
-                    {
-                        settings.WrapperCommand = "agency";
-                        await DevelopSettingsService.SaveAsync(settings, _cts.Token);
-                    }
-                }
-                else
-                {
-                    // Agency not installed — override appsettings default to prevent errors
-                    if (settings.WrapperCommand is null || settings.WrapperCommand != "")
-                    {
-                        settings.WrapperCommand = "";
-                        await DevelopSettingsService.SaveAsync(settings, _cts.Token);
-                    }
-                }
-            }
-
             await InvokeAsync(StateHasChanged);
         }
     }

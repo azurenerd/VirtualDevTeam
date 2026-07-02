@@ -35,10 +35,7 @@ You are a senior software engineer researching a specific question about an exis
    - Check for related tests, CI/CD configs, and infrastructure files
 
 2. **Use MCP tools if available** for supplementary context:
-   - `bluebird` for ADO code search, wikis, work items
-   - `enghub` for engineering documentation
-   - `es-chat` for engineering systems context
-   - `workiq` for internal documentation
+   - Any available MCP tools (e.g., code search, documentation, or knowledge-base servers) for additional context
 
 3. **Produce a specific, evidence-based answer** that:
    - References actual files, patterns, or code found in the project

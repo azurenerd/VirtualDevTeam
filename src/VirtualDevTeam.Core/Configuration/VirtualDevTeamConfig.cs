@@ -76,7 +76,7 @@ public class VirtualDevTeamConfig
     /// <summary>
     /// Live scenario verification (AppPlaytester) timeout/stall behavior. By default there is NO
     /// hard wall-clock cap — agentic UI verification of a complex app can legitimately take many
-    /// minutes (the agency plugin can run 45+ minutes). Instead, a stall watchdog only intervenes
+    /// minutes (some CLI wrappers can run 45+ minutes). Instead, a stall watchdog only intervenes
     /// when the session produces no log output for <see cref="ScenarioVerificationConfig.StuckSeconds"/>,
     /// which is the real "something is stuck" signal. See <see cref="ScenarioVerificationConfig"/>.
     /// </summary>
@@ -603,7 +603,7 @@ public class CopilotCliConfig
     /// <summary>
     /// Optional wrapper command to prepend to all Copilot CLI invocations.
     /// When set, all CLI calls spawn the wrapper with "copilot" as the first argument.
-    /// Example: set to "agency" for MSFT Entra auth, or any custom CLI wrapper.
+    /// Example: set to a custom CLI wrapper command to prepend; leave empty to call copilot directly.
     /// Leave empty to call copilot directly (default).
     /// </summary>
     public string? WrapperCommand { get; set; }

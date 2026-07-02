@@ -66,7 +66,7 @@ foreach ($d in $pending) {
 ### 🚨 Process Safety Rules
 
 - **NEVER** use `Stop-Process -Name` or `Get-Process -Name` for broad kills.
-- **NEVER** kill `node`, `dotnet`, `agency`, or `copilot` by name.
+- **NEVER** kill `node`, `dotnet`, or `copilot` by name.
 - **ALWAYS** use `scripts/kill-orphan-runner-procs.ps1` for orphan cleanup.
 - **ALWAYS** stop the runner by PID: `Get-NetTCPConnection -LocalPort 5050 -State Listen` → `Stop-Process -Id <PID>`.
 

@@ -83,10 +83,7 @@ You are a senior technical analyst. Your job is to deeply explore this project's
     - `.env.example` or `.env.template` (NOT `.env` — never read actual secrets files)
 
 13. **If available, use MCP tools for supplementary context** about the project:
-    - `bluebird` tools to search ADO code/wikis/work items related to this project
-    - `enghub` tools to find engineering documentation
-    - `es-chat` for engineering systems context
-    - `workiq` for internal documentation (SharePoint, Teams, etc.)
+    - Any available MCP tools (code search, documentation, or knowledge-base servers) to find context related to this project
     Only use these if they return useful results — don't force them if the project isn't in these systems.
 
 ## Output Format

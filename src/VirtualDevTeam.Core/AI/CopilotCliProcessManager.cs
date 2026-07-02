@@ -41,7 +41,7 @@ public sealed class CopilotCliProcessManager : IHostedService, IDisposable
     private readonly StrategyConcurrencyGate _globalGate;
     private readonly CliInteractiveWatchdog _watchdog;
     /// <summary>
-    /// Circuit breaker for the wrapper command (e.g., "agency"). After consecutive
+    /// Circuit breaker for the wrapper command. After consecutive
     /// startup failures (session never produced output), the wrapper is bypassed and
     /// copilot is called directly. Auto-recovers via half-open probe after cooldown.
     /// </summary>
@@ -531,7 +531,7 @@ public sealed class CopilotCliProcessManager : IHostedService, IDisposable
             psi.ArgumentList.Add(a);
 
         // Resolve PATH from Windows registry so tools installed at runtime (e.g.,
-        // agency via winget) are found without restarting the Runner (Lesson #36).
+        // gh or copilot via winget) are found without restarting the Runner (Lesson #36).
         FreshPathResolver.ApplyFreshPath(psi);
 
         // Per-invocation CWD override (e.g. a candidate worktree root) takes precedence
@@ -1767,7 +1767,7 @@ public sealed class CopilotCliProcessManager : IHostedService, IDisposable
     }
 
     /// <summary>
-    /// Lightweight circuit breaker for the wrapper command (e.g., "agency").
+    /// Lightweight circuit breaker for the wrapper command.
     /// Tracks consecutive startup failures (sessions that never produced output)
     /// and bypasses the wrapper after a threshold. Uses half-open probe for recovery:
     /// after cooldown, allows ONE wrapped call; re-trips on failure, resets on success.

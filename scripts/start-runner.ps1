@@ -17,7 +17,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# Ensure PowerShell 7+ — agency wrapper freezes under PS 5.1 due to environment differences
+# Ensure PowerShell 7+ — some CLI wrappers freeze under PS 5.1 due to environment differences
 if ($PSVersionTable.PSVersion.Major -lt 7) {
     Write-Host "ERROR: PowerShell 7+ required (current: $($PSVersionTable.PSVersion)). Run from pwsh, not powershell." -ForegroundColor Red
     Write-Host "  Install: winget install Microsoft.PowerShell" -ForegroundColor Yellow

@@ -168,7 +168,7 @@ public class DevelopSettings
     public int FlowMonitorAutoApprovalMinutes { get; set; } = 30;
 
     /// <summary>
-    /// CLI wrapper command to prepend to all Copilot CLI invocations (e.g., "agency").
+    /// CLI wrapper command to prepend to all Copilot CLI invocations (optional; leave empty to call copilot directly).
     /// Null = use appsettings.json default. Empty string = explicitly disable wrapper.
     /// Per-user override so appsettings.json default doesn't break users without the wrapper.
     /// </summary>

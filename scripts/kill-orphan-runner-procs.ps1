@@ -72,16 +72,14 @@ Write-Host ""
 # `--additional-mcp-config` flag).
 
 # Patterns for node.exe / dotnet.exe (MCP servers, Squad framework, Blazor, etc.)
-# MCP-server patterns (playwright, modelcontextprotocol, enghub) can false-positive on
+# MCP-server patterns (playwright, modelcontextprotocol) can false-positive on
 # the interactive Copilot CLI session's own MCP servers. These are separated into
 # $mpcServerPatterns and REQUIRE a working-directory match (inside .agents/ or .candidates/)
 # to avoid killing the user's Copilot CLI session's Playwright/MCP tools.
 $mpcServerPatterns = @(
     '@playwright/mcp',
     '@modelcontextprotocol/server-',
-    '@modelcontextprotocol\\server-',
-    'enghub-mcp',
-    '@azure-core[/\\]enghub'
+    '@modelcontextprotocol\\server-'
 )
 
 # Non-MCP patterns that are unambiguously runner-spawned (safe to kill on cmdline match alone)

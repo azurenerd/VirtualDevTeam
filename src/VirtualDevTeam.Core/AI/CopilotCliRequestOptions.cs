@@ -116,7 +116,7 @@ public sealed record CopilotCliRequestOptions
     public Action<System.Diagnostics.Process>? OnProcessCreated { get; init; }
 
     /// <summary>
-    /// When true, bypasses the configured wrapper command (e.g., "agency") for THIS call only.
+    /// When true, bypasses the configured wrapper command for THIS call only.
     /// Used by the strategy reset escalation ladder (rung 2) to retry without the wrapper
     /// after a startup hang. Does not affect the global circuit breaker state.
     /// </summary>

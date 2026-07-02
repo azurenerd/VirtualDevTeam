@@ -1059,10 +1059,10 @@ if (_gateCheck.RequiresHuman("pm_spec_review"))
 
 ## 43. MCP Server Auth Changes Require Process Restart
 
-**Lesson:** Running `enghub-mcp auth` (or equivalent) successfully does **not** make a running MCP server pick up the new credentials. The server continues returning "No cached credentials" until it's restarted.
+**Lesson:** Running `cli-mcp auth` (or equivalent) successfully does **not** make a running MCP server pick up the new credentials. The server continues returning "No cached credentials" until it's restarted.
 
 **What happened:**
-- `enghub-mcp auth` completed successfully, user confirmed token stored.
+- `cli-mcp auth` completed successfully, user confirmed token stored.
 - All subsequent MCP calls returned `No cached credentials` errors.
 - Wasted ~20 minutes debugging before the restart hypothesis was tested.
 
@@ -2135,14 +2135,14 @@ No persistence layer existed for strategy/framework results. The `AgentStateStor
 
 ---
 
-## 97. Stale `enghub-mcp` Orphan Processes Hold Workspace Directory Handles, Hang Reset Scripts
+## 97. Stale `cli-mcp` Orphan Processes Hold Workspace Directory Handles, Hang Reset Scripts
 
-**Lesson:** GitHub Copilot CLI sessions spawn `node @azure-core/enghub-mcp/dist/cli.js start` MCP servers as children. When the parent CLI session dies (window close, crash), these MCP servers can leak — accumulating across sessions. They hold open file handles on whatever directory was the parent's CWD.
+**Lesson:** GitHub Copilot CLI sessions spawn `node <copilot-cli-mcp>/dist/cli.js start` MCP servers as children. When the parent CLI session dies (window close, crash), these MCP servers can leak — accumulating across sessions. They hold open file handles on whatever directory was the parent's CWD.
 
 ### What happened:
 - During the minimal-reset before the May 2026 run, `robocopy /MIR` got stuck deleting `.agents/<agent-id>/<repo>/Compliance` for ~10 minutes
-- Investigation: 117 stale `enghub-mcp` node processes from prior Copilot CLI sessions, ages 30+ hours, holding handles on the workspace dirs
-- The `kill-orphan-runner-procs.ps1` script's surgical filter does NOT match `enghub-mcp` (only `@playwright/mcp`, `@modelcontextprotocol/server-`, `blazor-devserver`, `--agent squad`) because enghub-mcp is a Copilot CLI MCP, not a runner-spawned MCP — killing them might affect the user's interactive Copilot sessions
+- Investigation: 117 stale `cli-mcp` node processes from prior Copilot CLI sessions, ages 30+ hours, holding handles on the workspace dirs
+- The `kill-orphan-runner-procs.ps1` script's surgical filter does NOT match `cli-mcp` (only `@playwright/mcp`, `@modelcontextprotocol/server-`, `blazor-devserver`, `--agent squad`) because cli-mcp is a Copilot CLI MCP, not a runner-spawned MCP — killing them might affect the user's interactive Copilot sessions
 - Mitigation: target ONLY orphans older than 6 hours (this Copilot CLI session was <14h old). Killing 117 processes >6h freed the directory locks instantly
 
 ### Why this matters going forward:
@@ -2150,10 +2150,10 @@ No persistence layer existed for strategy/framework results. The `AgentStateStor
 - Each interactive Copilot CLI window leaks its own MCPs when closed/crashed
 - Manual cleanup is required periodically; automation must NOT use blanket "kill all node" because the user's active Copilot CLI is also `node`
 
-**Rule:** When designing a cleanup script, age + cmdline pattern is the safest filter. >6h with `enghub-mcp` in cmdline is a near-certain orphan. Always log what you're going to kill before killing it; provide a `-WhatIf` mode.
+**Rule:** When designing a cleanup script, age + cmdline pattern is the safest filter. >6h with `cli-mcp` in cmdline is a near-certain orphan. Always log what you're going to kill before killing it; provide a `-WhatIf` mode.
 
 ### Future automation:
-- `scripts/kill-orphan-runner-procs.ps1` could grow a `-IncludeEnghubMcp` switch (default off) with the age safety check
+- `scripts/kill-orphan-runner-procs.ps1` could grow a `-IncludeStaleMcps` switch (default off) with the age safety check
 - Or a separate `scripts/clean-stale-mcps.ps1` script focused on this specific class
 
 ### Key files:
@@ -3028,11 +3028,11 @@ Use `GetService` (not `GetRequiredService`) for optional parameters so the runne
 
 **Lesson:** A local platform provider must match the resilience behavior of the hosted provider, not just its basic merge API. If the remote implementation already has conflict recovery, the local implementation needs a comparable fallback or it will look dramatically less reliable under the same workload.
 
-## 149. Agency Wrapper Freezes Under PowerShell 5.1 — Always Start Runner from PowerShell 7+
+## 149. CLI Wrapper Freezes Under PowerShell 5.1 — Always Start Runner from PowerShell 7+
 
 **Date:** 2026-05-21
 
-**What happened:** When the runner was launched from Windows PowerShell 5.1 with `CopilotCli.WrapperCommand` set (for example `agency`), the wrapper process could start successfully but never spawn `copilot.exe`. The new wrapper liveness watchdog consistently observed an empty child-process tree under PS 5.1, while the same setup launched from PowerShell 7 (`pwsh`) spawned the child CLI within roughly 3 seconds.
+**What happened:** When the runner was launched from Windows PowerShell 5.1 with `CopilotCli.WrapperCommand` set, the wrapper process could start successfully but never spawn `copilot.exe`. The new wrapper liveness watchdog consistently observed an empty child-process tree under PS 5.1, while the same setup launched from PowerShell 7 (`pwsh`) spawned the child CLI within roughly 3 seconds.
 
 **Fix:** `scripts/start-runner.ps1` now hard-fails on PowerShell versions below 7 with a clear "run from pwsh" error. The wrapper liveness watchdog was also updated to probe with `pwsh` first (falling back to `powershell` only if `pwsh` is unavailable) and to log startup plus each empty-child check at Information level so the failure is visible in production logs.
 
